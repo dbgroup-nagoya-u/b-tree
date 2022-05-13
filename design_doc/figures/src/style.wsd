@@ -1,0 +1,8 @@
+@startuml MyStyle
+
+skinparam shadowing false
+skinparam DefaultFontName Consolas
+skinparam DefaultFontSize 14
+skinparam ArrowThickness 1.5
+
+@enduml

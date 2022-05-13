@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" contentScriptType="application/ecmascript" contentStyleType="text/css" height="280px" preserveAspectRatio="none" style="width:353px;height:280px;background:#FFFFFF;" version="1.1" viewBox="0 0 353 280" width="353px" zoomAndPan="magnify"><defs/><g><!--MD5=[7c014904a223f73b41070b51bc30a5fb]
+class entity_1--><rect codeLine="7" fill="#FEFECE" height="94.8906" id="entity_1" style="stroke:#A80036;stroke-width:1.5;" width="152" x="7" y="7"/><ellipse cx="52" cy="22" fill="#ADD1B2" rx="10" ry="10" style="stroke:#A80036;stroke-width:1.0;"/><path d="M55,27 L48.6563,27 L48.6563,16.7969 L55,16.7969 L55,18.5781 L50.6719,18.5781 L50.6719,20.7656 L54.5938,20.7656 L54.5938,22.5469 L50.6719,22.5469 L50.6719,25.2188 L55,25.2188 L55,27 Z " fill="#000000"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="54" x="71" y="26.8467">entity_1</text><line style="stroke:#A80036;stroke-width:1.5;" x1="8" x2="158" y1="37" y2="37"/><ellipse cx="18" cy="48" fill="#000000" rx="3" ry="3" style="stroke:#000000;stroke-width:1.0;"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="127" x="26" y="53.9951">entity_1_id: serial4</text><line style="stroke:#A80036;stroke-width:1.0;" x1="8" x2="158" y1="61.2969" y2="61.2969"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="121" x="13" y="78.292">attribute_1: float4</text><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="119" x="13" y="94.5889">note: varchar(32)</text><!--MD5=[8acf2364f2de99e24746537d3e03c204]
+class entity_2--><rect codeLine="14" fill="#FEFECE" height="94.8906" id="entity_2" style="stroke:#A80036;stroke-width:1.5;" width="152" x="194" y="7"/><ellipse cx="239" cy="22" fill="#ADD1B2" rx="10" ry="10" style="stroke:#A80036;stroke-width:1.0;"/><path d="M242,27 L235.6563,27 L235.6563,16.7969 L242,16.7969 L242,18.5781 L237.6719,18.5781 L237.6719,20.7656 L241.5938,20.7656 L241.5938,22.5469 L237.6719,22.5469 L237.6719,25.2188 L242,25.2188 L242,27 Z " fill="#000000"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="54" x="258" y="26.8467">entity_2</text><line style="stroke:#A80036;stroke-width:1.5;" x1="195" x2="345" y1="37" y2="37"/><ellipse cx="205" cy="48" fill="#000000" rx="3" ry="3" style="stroke:#000000;stroke-width:1.0;"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="127" x="213" y="53.9951">entity_2_id: serial4</text><line style="stroke:#A80036;stroke-width:1.0;" x1="195" x2="345" y1="61.2969" y2="61.2969"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="109" x="200" y="78.292">attribute_2: int8</text><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="119" x="200" y="94.5889">note: varchar(32)</text><!--MD5=[840b89850123548437c01c2b109d021d]
+class entity_3--><rect codeLine="21" fill="#FEFECE" height="111.1875" id="entity_3" style="stroke:#A80036;stroke-width:1.5;" width="172" x="90" y="162"/><ellipse cx="145" cy="177" fill="#ADD1B2" rx="10" ry="10" style="stroke:#A80036;stroke-width:1.0;"/><path d="M148,182 L141.6563,182 L141.6563,171.7969 L148,171.7969 L148,173.5781 L143.6719,173.5781 L143.6719,175.7656 L147.5938,175.7656 L147.5938,177.5469 L143.6719,177.5469 L143.6719,180.2188 L148,180.2188 L148,182 Z " fill="#000000"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="54" x="164" y="181.8467">entity_3</text><line style="stroke:#A80036;stroke-width:1.5;" x1="91" x2="261" y1="192" y2="192"/><ellipse cx="101" cy="203" fill="#000000" rx="3" ry="3" style="stroke:#000000;stroke-width:1.0;"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="127" x="109" y="208.9951">entity_3_id: serial4</text><line style="stroke:#A80036;stroke-width:1.0;" x1="91" x2="261" y1="216.2969" y2="216.2969"/><ellipse cx="101" cy="227.2969" fill="#000000" rx="3" ry="3" style="stroke:#000000;stroke-width:1.0;"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="147" x="109" y="233.292">entity_1_id: int4 «FK»</text><ellipse cx="101" cy="243.5938" fill="#000000" rx="3" ry="3" style="stroke:#000000;stroke-width:1.0;"/><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="147" x="109" y="249.5889">entity_2_id: int4 «FK»</text><text fill="#000000" font-family="Consolas" font-size="14" lengthAdjust="spacing" textLength="121" x="109" y="265.8857">attribute_3: float8</text><!--MD5=[dc9f1bccf5b273933f901f8218d4d96b]
+link entity_1 to entity_3--><path codeLine="33" d="M114.02,109.2 C122.41,123.73 131.57,139.58 140.21,154.53 " fill="none" id="entity_1-entity_3" style="stroke:#A80036;stroke-width:1.5;"/><line style="stroke:#A80036;stroke-width:1.5;" x1="140.4002" x2="149.5962" y1="154.8617" y2="158.7901"/><line style="stroke:#A80036;stroke-width:1.5;" x1="140.4002" x2="139.2038" y1="154.8617" y2="164.7899"/><line style="stroke:#A80036;stroke-width:1.5;" x1="140.4002" x2="144.4" y1="154.8617" y2="161.79"/><ellipse cx="137.4003" cy="149.6655" rx="4" ry="4" style="stroke:#A80036;stroke-width:1.5;fill:none;"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="108.4442" x2="115.3663" y1="107.5363" y2="103.5258"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="109.9482" x2="116.8703" y1="110.1321" y2="106.1216"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="113.9105" x2="109.9" y1="108.9921" y2="102.07"/><!--MD5=[b6ea13ccadf47121bde2441a88c5f34d]
+link entity_2 to entity_3--><path codeLine="34" d="M238.65,109.2 C230.16,123.73 220.91,139.58 212.18,154.53 " fill="none" id="entity_2-entity_3" style="stroke:#A80036;stroke-width:1.5;"/><line style="stroke:#A80036;stroke-width:1.5;" x1="211.9736" x2="213.1215" y1="154.8813" y2="164.8152"/><line style="stroke:#A80036;stroke-width:1.5;" x1="211.9736" x2="202.7585" y1="154.8813" y2="158.7648"/><line style="stroke:#A80036;stroke-width:1.5;" x1="211.9736" x2="207.94" y1="154.8813" y2="161.79"/><ellipse cx="214.9989" cy="149.6998" rx="4" ry="4" style="stroke:#A80036;stroke-width:1.5;fill:none;"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="237.3379" x2="244.244" y1="103.504" y2="107.5421"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="235.8237" x2="242.7297" y1="106.0938" y2="110.1319"/><line style="stroke:#A80036;stroke-width:1.5;fill:none;" x1="238.7719" x2="242.81" y1="108.9761" y2="102.07"/><!--MD5=[dbda6e0c50f4273868f31c5df3d8a0e9]
+@startuml entity-relationship
+!include style.wsd
+
+'- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -'
+' entities
+'- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -'
+
+entity entity_1 {
+  * entity_1_id: serial4
+  - -
+  attribute_1: float4
+  note: varchar(32)
+}
+
+entity entity_2 {
+  * entity_2_id: serial4
+  - -
+  attribute_2: int8
+  note: varchar(32)
+}
+
+entity entity_3 {
+  * entity_3_id: serial4
+  - -
+  * entity_1_id: int4 <<FK>>
+  * entity_2_id: int4 <<FK>>
+  attribute_3: float8
+}
+
+'- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -'
+' relations
+'- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -'
+
+entity_1 ||- -o{ entity_3
+entity_2 ||- -o{ entity_3
+
+@enduml
+
+@startuml entity-relationship
+
+skinparam shadowing false
+skinparam DefaultFontName Consolas
+skinparam DefaultFontSize 14
+skinparam ArrowThickness 1.5
+
+
+
+entity entity_1 {
+  * entity_1_id: serial4
+  - -
+  attribute_1: float4
+  note: varchar(32)
+}
+
+entity entity_2 {
+  * entity_2_id: serial4
+  - -
+  attribute_2: int8
+  note: varchar(32)
+}
+
+entity entity_3 {
+  * entity_3_id: serial4
+  - -
+  * entity_1_id: int4 <<FK>>
+  * entity_2_id: int4 <<FK>>
+  attribute_3: float8
+}
+
+
+entity_1 ||- -o{ entity_3
+entity_2 ||- -o{ entity_3
+
+@enduml
+
+PlantUML version 1.2021.14(Sat Nov 13 01:46:50 JST 2021)
+(GPL source distribution)
+Java Runtime: OpenJDK Runtime Environment
+JVM: OpenJDK 64-Bit Server VM
+Default Encoding: UTF-8
+Language: en
+Country: null
+--></g></svg>

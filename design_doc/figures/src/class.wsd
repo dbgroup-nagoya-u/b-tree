@@ -1,0 +1,84 @@
+@startuml
+
+class BplusTree{
+  -root_ : Node_t
+--
+.. Utility Functions ..
+  -SearchLearfNode() : NodeStack_t
+  -Split() : void
+  -Merge() : void
+.. APIs ..
+  +Read() : pair<key, value>
+  +Scan() : RecordIterator
+  +Begin() : RecordIterator
+  +Write() : ReturnCode
+  +Insert() : ReturnCode
+  +Update() : ReturnCode
+  +Delete() : ReturnCode
+}
+
+class Node{
+  -node_type_ : uint16_t
+  -record_count_ : uint16_t
+  -next_node_ : Node_t*
+  -meta_array_ : Metadata[]
+--
+.. Getters ..
+  +IsLeaf() : bool
+  +GetRecordCount() : size_t
+  +GetNextNode() : Node_t*
+  +GetMetaData() : Metadata
+  +GetPayload() : payload
+  -CopyPayload() : void
+.. Setters ..
+  -SetKey() : void
+  -SetPayload() : void
+.. Utility Functions ..
+  -HasSpace() : bool
+  -CopyRecordFrom() : void
+.. APIs ..
+  +SearchRecord() : pair<ReturnCode, size_t>
+  +Split() : void
+  +Merge() : void
+  +Read() : ReturnCode
+  +Write() : ReturnCode
+  +Insert() : ReturnCode
+  +Update() : ReturnCode
+  +Delete() : ReturnCode
+}
+
+class Metadata{
+  -offset_ : uint32_t
+  -key_length_: uint32_t
+  -total_length_: uint32_t
+--
+.. Getters ..
+  +GetOffset() : size_t
+  +GetKeyLength() : size_t
+  +GetTotalLength() : size_t
+  +GetPayloadLength() : size_t
+.. Setters ..
+  +SetOffset() : void
+  +SetTotalLength(): void
+}
+
+class RecordIterator{
+  -node_ : Node_t*
+  -record_count_ : size_t
+  -current_idx_ : size_t
+--
+.. operators ..
+  + *() : pair<key, payload>
+  + ++() : void
+.. Getters ..
+  +HasNext() : bool
+  +GetKey() : key
+  +GetPayload() : payload
+}
+
+BplusTree "1" -> "1" Node
+Node "1" -> "1" Metadata
+Node "1" -> "0.." Node
+RecordIterator "1" -> "1" Node
+
+@enduml
