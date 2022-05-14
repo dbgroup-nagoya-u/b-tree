@@ -1,16 +1,17 @@
 @startuml
 
 class BplusTree{
-  -root_ : Node_t
+  -root_ : Node_t*
+  -kExpectedTreeHeight : size_t
 --
 .. Utility Functions ..
   -SearchLearfNode() : NodeStack_t
+  -SearchLeftmostLeaf() : Node_t *
   -Split() : void
   -Merge() : void
 .. APIs ..
-  +Read() : pair<key, value>
+  +Read() : payload
   +Scan() : RecordIterator
-  +Begin() : RecordIterator
   +Write() : ReturnCode
   +Insert() : ReturnCode
   +Update() : ReturnCode
@@ -18,33 +19,52 @@ class BplusTree{
 }
 
 class Node{
-  -node_type_ : uint16_t
+  -is_leaf_ : uint16_t
   -record_count_ : uint16_t
-  -next_node_ : Node_t*
+  -block_size_ : uint16_t
+  -deleted_size_ : uint16_t
+  -next_ : Node_t*
+  -high_meta_ : Metadata
   -meta_array_ : Metadata[]
 --
 .. Getters ..
+  +IsRangeInclude() : bool
+  +CanMerge() : bool
   +IsLeaf() : bool
   +GetRecordCount() : size_t
   +GetNextNode() : Node_t*
   +GetMetaData() : Metadata
+  +GetKey() : key
+  +GetHighKey() : key
   +GetPayload() : payload
-  -CopyPayload() : void
+  +GetRecord() : pair<key, payload>
 .. Setters ..
   -SetKey() : void
   -SetPayload() : void
 .. Utility Functions ..
-  -HasSpace() : bool
+  -GetKeyAddr() : void *
+  -GetPayloadAddr() : void *
+  -IsRightmostOf() : bool
+  -SetData() : size_t
+  -GetSpaceStatus() : ReturnCode
+  -CopyKeyFrom() : size_t
+  -CopyHighKeyFrom() : size_t
   -CopyRecordFrom() : void
+  -CopyRecordsFrom() : size_t
 .. APIs ..
   +SearchRecord() : pair<ReturnCode, size_t>
-  +Split() : void
-  +Merge() : void
+  +SearchChild() : size_t
+  +SearchEndPositionFor() : pair<bool, size_t>
   +Read() : ReturnCode
   +Write() : ReturnCode
   +Insert() : ReturnCode
   +Update() : ReturnCode
   +Delete() : ReturnCode
+  +InsertChild() : ReturnCode
+  +DeleteChild() : ReturnCode
+  +Consolidate() : void
+  +Split() : void
+  +Merge() : void
 }
 
 class Metadata{
@@ -59,13 +79,16 @@ class Metadata{
   +GetPayloadLength() : size_t
 .. Setters ..
   +SetOffset() : void
+  +SetKeyLength() : void
   +SetTotalLength(): void
 }
 
 class RecordIterator{
   -node_ : Node_t*
   -record_count_ : size_t
-  -current_idx_ : size_t
+  -current_pos_ : size_t
+  -end_key_ : pair<key, bool>
+  -is_end_ : bool
 --
 .. operators ..
   + *() : pair<key, payload>
