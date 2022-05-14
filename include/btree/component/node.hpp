@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef BPLUSTREE_COMPONENT_NODE_HPP
-#define BPLUSTREE_COMPONENT_NODE_HPP
+#ifndef BTREE_COMPONENT_NODE_HPP
+#define BTREE_COMPONENT_NODE_HPP
 
 #include <optional>
 #include <utility>
@@ -24,11 +24,11 @@
 #include "common.hpp"
 #include "metadata.hpp"
 
-namespace dbgroup::index::bplustree::component
+namespace dbgroup::index::btree::component
 {
 
 /**
- * @brief A class to represent nodes in Bplustree.
+ * @brief A class to represent nodes in Btree.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
@@ -985,6 +985,6 @@ class Node
   static inline std::unique_ptr<Node> temp_node_ = std::make_unique<Node>(0);
 };
 
-}  // namespace dbgroup::index::bplustree::component
+}  // namespace dbgroup::index::btree::component
 
 #endif

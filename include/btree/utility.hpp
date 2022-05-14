@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-#ifndef BPLUSTREE_UTILITY_HPP
-#define BPLUSTREE_UTILITY_HPP
+#ifndef BTREE_UTILITY_HPP
+#define BTREE_UTILITY_HPP
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
-namespace dbgroup::index::bplustree
+namespace dbgroup::index::btree
 {
 /*######################################################################################
  * Global constants
@@ -40,7 +40,7 @@ constexpr size_t kHeaderLength = 64;
  *####################################################################################*/
 
 /**
- * @brief Return codes for BPLUSTREE.
+ * @brief Return codes for BTREE.
  *
  */
 enum ReturnCode {
@@ -79,28 +79,28 @@ IsVariableLengthData()  //
 }
 
 /*######################################################################################
- * Tuning parameters for BPLUS-tree
+ * Tuning parameters for B-tree
  *####################################################################################*/
 
 /// The default page size of each node
-constexpr size_t kPageSize = BPLUSTREE_PAGE_SIZE;
+constexpr size_t kPageSize = BTREE_PAGE_SIZE;
 
 /// The maximum size of deleted space size for invoking split
-constexpr size_t kMaxDeletedSpaceSize = BPLUSTREE_MAX_DELETED_SPACE_SIZE;
+constexpr size_t kMaxDeletedSpaceSize = BTREE_MAX_DELETED_SPACE_SIZE;
 
 /// The minimum size of free space size for invoking split
-constexpr size_t kMinFreeSpaceSize = BPLUSTREE_MIN_FREE_SPACE_SIZE;
+constexpr size_t kMinFreeSpaceSize = BTREE_MIN_FREE_SPACE_SIZE;
 
 /// The minimum size of used space size for invoking merge
-constexpr size_t kMinUsedSpaceSize = BPLUSTREE_MIN_USED_SPACE_SIZE;
+constexpr size_t kMinUsedSpaceSize = BTREE_MIN_USED_SPACE_SIZE;
 
 /// The maximum size of variable-length data
-constexpr size_t kMaxVarDataSize = BPLUSTREE_MAX_VARIABLE_DATA_SIZE;
+constexpr size_t kMaxVarDataSize = BTREE_MAX_VARIABLE_DATA_SIZE;
 
 // Check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
 static_assert(kMaxVarDataSize * 2 < kPageSize);
 
-}  // namespace dbgroup::index::bplustree
+}  // namespace dbgroup::index::btree
 
 #endif

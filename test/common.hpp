@@ -18,7 +18,7 @@
 
 #include <functional>
 
-#include "bplustree/utility.hpp"
+#include "btree/utility.hpp"
 
 /*######################################################################################
  * Classes for testing
@@ -68,7 +68,7 @@ constexpr size_t kRandomSeed = 10;
  * Global utilities
  *####################################################################################*/
 
-namespace dbgroup::index::bplustree
+namespace dbgroup::index::btree
 {
 /**
  * @brief Use CString as variable-length data in tests.
@@ -135,7 +135,7 @@ ReleaseTestData(  //
   }
 }
 
-}  // namespace dbgroup::index::bplustree
+}  // namespace dbgroup::index::btree
 
 /*######################################################################################
  * Type definitions for templated tests
@@ -172,7 +172,7 @@ struct Ptr {
 
 struct Var {
   using Data = char *;
-  using Comp = dbgroup::index::bplustree::CompareAsCString;
+  using Comp = dbgroup::index::btree::CompareAsCString;
 };
 
 struct Original {

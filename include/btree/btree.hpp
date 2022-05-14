@@ -14,18 +14,18 @@
  * limitations under the License.
  */
 
-#ifndef BPLUSTREE_BPLUSTREE_HPP
-#define BPLUSTREE_BPLUSTREE_HPP
+#ifndef BTREE_BTREE_HPP
+#define BTREE_BTREE_HPP
 
 #include <optional>
 #include <vector>
 
 #include "component/node.hpp"
 
-namespace dbgroup::index::bplustree
+namespace dbgroup::index::btree
 {
 /**
- * @brief A class for representing Bplustree with variable-length keys.
+ * @brief A class for representing Btree with variable-length keys.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
@@ -34,7 +34,7 @@ namespace dbgroup::index::bplustree
  * @tparam Comp a class for ordering keys.
  */
 template <class Key, class Payload, class Comp = ::std::less<Key>>
-class BplusTree
+class BTree
 {
  public:
   /*####################################################################################
@@ -165,10 +165,10 @@ class BplusTree
    *##################################################################################*/
 
   /**
-   * @brief Construct a new BplusTree object.
+   * @brief Construct a new BTree object.
    *
    */
-  explicit BplusTree()
+  explicit BTree()
   {
     if constexpr (IsVariableLengthData<Key>()) {
       static_assert(sizeof(component::Metadata) + kMaxVarDataSize + sizeof(Payload)
@@ -178,21 +178,21 @@ class BplusTree
     }
   };
 
-  BplusTree(const BplusTree &) = delete;
-  BplusTree(BplusTree &&) = delete;
+  BTree(const BTree &) = delete;
+  BTree(BTree &&) = delete;
 
-  BplusTree &operator=(const BplusTree &) = delete;
-  BplusTree &operator=(BplusTree &&) = delete;
+  BTree &operator=(const BTree &) = delete;
+  BTree &operator=(BTree &&) = delete;
 
   /*####################################################################################
    * Public destructors
    *##################################################################################*/
 
   /**
-   * @brief Destroy the BplusTree object.
+   * @brief Destroy the BTree object.
    *
    */
-  ~BplusTree() = default;
+  ~BTree() = default;
 
   /*####################################################################################
    * Public read APIs
@@ -535,6 +535,6 @@ class BplusTree
   // root node of B+tree
   Node_t *root_ = new Node_t{true};
 };
-}  // namespace dbgroup::index::bplustree
+}  // namespace dbgroup::index::btree
 
-#endif  // BPLUSTREE_BPLUSTREE_HPP
+#endif  // BTREE_BTREE_HPP

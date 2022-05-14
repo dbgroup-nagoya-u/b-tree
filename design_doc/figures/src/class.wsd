@@ -1,6 +1,6 @@
 @startuml
 
-class BplusTree{
+class BTree{
   -root_ : Node_t*
   -kExpectedTreeHeight : size_t
 --
@@ -99,7 +99,7 @@ class RecordIterator{
   +GetPayload() : payload
 }
 
-BplusTree "1" -> "1" Node
+BTree "1" -> "1" Node
 Node "1" -> "1" Metadata
 Node "1" -> "0.." Node
 RecordIterator "1" -> "1" Node
