@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#ifndef BTREE_BTREE_HPP
-#define BTREE_BTREE_HPP
+#ifndef B_TREE_B_TREE_HPP
+#define B_TREE_B_TREE_HPP
 
 #include <optional>
 #include <vector>
 
 #include "component/node.hpp"
 
-namespace dbgroup::index::btree
+namespace dbgroup::index::b_tree
 {
 /**
  * @brief A class for representing Btree with variable-length keys.
@@ -535,6 +535,6 @@ class BTree
   // root node of B+tree
   Node_t *root_ = new Node_t{true};
 };
-}  // namespace dbgroup::index::btree
+}  // namespace dbgroup::index::b_tree
 
-#endif  // BTREE_BTREE_HPP
+#endif  // B_TREE_B_TREE_HPP

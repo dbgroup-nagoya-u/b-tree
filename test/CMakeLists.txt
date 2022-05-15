@@ -32,28 +32,28 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 
 # define function to add unit tests in the same format
 
-function(ADD_BTREE_TEST BTREE_TEST_TARGET)
-  add_executable(${BTREE_TEST_TARGET}
-    "${CMAKE_CURRENT_SOURCE_DIR}/${BTREE_TEST_TARGET}.cpp"
+function(ADD_B_TREE_TEST B_TREE_TEST_TARGET)
+  add_executable(${B_TREE_TEST_TARGET}
+    "${CMAKE_CURRENT_SOURCE_DIR}/${B_TREE_TEST_TARGET}.cpp"
   )
-  target_compile_features(${BTREE_TEST_TARGET} PRIVATE
+  target_compile_features(${B_TREE_TEST_TARGET} PRIVATE
     "cxx_std_17"
   )
-  target_compile_options(${BTREE_TEST_TARGET} PRIVATE
+  target_compile_options(${B_TREE_TEST_TARGET} PRIVATE
     -Wall
     -Wextra
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Release">:"-O2 -march=native">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"RelWithDebInfo">:"-g3 -Og -pg">
     $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
   )
-  target_link_libraries(${BTREE_TEST_TARGET} PRIVATE
-    btree
+  target_link_libraries(${B_TREE_TEST_TARGET} PRIVATE
+    b_tree
     gtest_main
   )
-  add_test(NAME ${BTREE_TEST_TARGET} COMMAND $<TARGET_FILE:${BTREE_TEST_TARGET}>)
+  add_test(NAME ${B_TREE_TEST_TARGET} COMMAND $<TARGET_FILE:${B_TREE_TEST_TARGET}>)
 endfunction()
 
 # add unit tests to build targets
-ADD_BTREE_TEST("metadata_test")
-ADD_BTREE_TEST("node_test")
-ADD_BTREE_TEST("btree_test")
+ADD_B_TREE_TEST("metadata_test")
+ADD_B_TREE_TEST("node_test")
+ADD_B_TREE_TEST("b_tree_test")

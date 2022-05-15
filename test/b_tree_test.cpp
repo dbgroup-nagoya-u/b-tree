@@ -1,11 +1,10 @@
-#include "btree/btree.hpp"
-
 #include <random>
 
+#include "b_tree/b_tree.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::btree::component
+namespace dbgroup::index::b_tree::component
 {
 /*######################################################################################
  * Global constants
@@ -67,7 +66,7 @@ class BTreeFixture : public testing::Test  // NOLINT
     PrepareTestData(keys_, kKeyNumForTest);      // NOLINT
     PrepareTestData(payloads_, kKeyNumForTest);  // NOLINT
 
-    btree_ = std::make_unique<BTree_t>();
+    b_tree_ = std::make_unique<BTree_t>();
   }
 
   void
@@ -87,7 +86,7 @@ class BTreeFixture : public testing::Test  // NOLINT
       const size_t payload_id)  //
       -> ReturnCode
   {
-    return btree_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
+    return b_tree_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
   }
 
   /*####################################################################################
@@ -125,7 +124,7 @@ class BTreeFixture : public testing::Test  // NOLINT
       const size_t expected_id,
       const bool expect_success)
   {
-    const auto read_val = btree_->Read(keys_[key_id]);
+    const auto read_val = b_tree_->Read(keys_[key_id]);
     if (expect_success) {
       EXPECT_TRUE(read_val);
 
@@ -158,7 +157,7 @@ class BTreeFixture : public testing::Test  // NOLINT
       end_pos = (end_closed) ? end_id + 1 : end_id;
     }
 
-    auto iter = btree_->Scan(begin_key, end_key);
+    auto iter = b_tree_->Scan(begin_key, end_key);
 
     for (; iter.HasNext(); ++iter, ++begin_pos) {
       auto [key, payload] = *iter;
@@ -177,7 +176,7 @@ class BTreeFixture : public testing::Test  // NOLINT
       const size_t key_id,
       const size_t pay_id)
   {
-    auto rc = btree_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
+    auto rc = b_tree_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
 
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
@@ -188,8 +187,8 @@ class BTreeFixture : public testing::Test  // NOLINT
       const size_t payload_id,
       const bool expect_success)
   {
-    ReturnCode expected_rc = btree::kSuccess;
-    expected_rc = (expect_success) ? expected_rc : btree::kKeyExist;
+    ReturnCode expected_rc = b_tree::kSuccess;
+    expected_rc = (expect_success) ? expected_rc : b_tree::kKeyExist;
     auto rc = Insert(key_id, payload_id);
     EXPECT_EQ(expected_rc, rc);
   }
@@ -202,7 +201,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = btree_->Update(keys_[key_id], payloads_[payload_id]);
+    auto rc = b_tree_->Update(keys_[key_id], payloads_[payload_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -213,7 +212,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = btree_->Delete(keys_[key_id]);
+    auto rc = b_tree_->Delete(keys_[key_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -344,7 +343,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   Key keys_[kKeyNumForTest]{};
   Payload payloads_[kKeyNumForTest]{};
 
-  std::unique_ptr<BTree_t> btree_{nullptr};
+  std::unique_ptr<BTree_t> b_tree_{nullptr};
 };
 
 /*######################################################################################
@@ -557,4 +556,4 @@ TYPED_TEST(BTreeFixture, RandomDeleteWithDeletedKeysFail)
   TestFixture::VerifyDeletesWith(kWithWrite, kWithDelete, kShuffled);
 }
 
-}  // namespace dbgroup::index::btree::component
+}  // namespace dbgroup::index::b_tree::component

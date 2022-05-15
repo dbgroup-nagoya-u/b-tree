@@ -34,7 +34,7 @@ jobs:
     - name: Configure CMake
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBTREE_PAGE_SIZE=${{matrix.page-size}} -DBUILD_TESTS=on
+      run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DB_TREE_PAGE_SIZE=${{matrix.page-size}} -DBUILD_TESTS=on
 
     - name: Build
       shell: bash

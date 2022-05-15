@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-#ifndef BTREE_COMPONENT_COMMON_HPP
-#define BTREE_COMPONENT_COMMON_HPP
+#ifndef B_TREE_COMPONENT_COMMON_HPP
+#define B_TREE_COMPONENT_COMMON_HPP
 
 #include <cstring>
 #include <memory>
 
 #include "../utility.hpp"
 
-namespace dbgroup::index::btree::component
+namespace dbgroup::index::b_tree::component
 {
 
 /*######################################################################################
@@ -99,6 +99,6 @@ ShiftAddr(  //
 
 constexpr uintptr_t kNullPtr = 0;
 
-}  // namespace dbgroup::index::btree::component
+}  // namespace dbgroup::index::b_tree::component
 
 #endif

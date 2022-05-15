@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef BTREE_COMPONENT_NODE_HPP
-#define BTREE_COMPONENT_NODE_HPP
+#ifndef B_TREE_COMPONENT_NODE_HPP
+#define B_TREE_COMPONENT_NODE_HPP
 
 #include <optional>
 #include <utility>
@@ -24,7 +24,7 @@
 #include "common.hpp"
 #include "metadata.hpp"
 
-namespace dbgroup::index::btree::component
+namespace dbgroup::index::b_tree::component
 {
 
 /**
@@ -985,6 +985,6 @@ class Node
   static inline std::unique_ptr<Node> temp_node_ = std::make_unique<Node>(0);
 };
 
-}  // namespace dbgroup::index::btree::component
+}  // namespace dbgroup::index::b_tree::component
 
 #endif

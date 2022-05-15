@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-#ifndef BTREE_COMPONENT_METADATA_HPP
-#define BTREE_COMPONENT_METADATA_HPP
+#ifndef B_TREE_COMPONENT_METADATA_HPP
+#define B_TREE_COMPONENT_METADATA_HPP
 
 #include "common.hpp"
 
-namespace dbgroup::index::btree::component
+namespace dbgroup::index::b_tree::component
 {
 /**
  * @brief A class to represent record metadata.
@@ -162,6 +162,6 @@ class Metadata
   uint32_t total_length_{};
 };
 
-}  // namespace dbgroup::index::btree::component
+}  // namespace dbgroup::index::b_tree::component
 
 #endif
