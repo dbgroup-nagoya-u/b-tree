@@ -67,7 +67,7 @@ class Node{
 }
 
 class Metadata{
-  -offset_ : uint32_t
+  -offset_ : uint16_t
   -key_length_: uint16_t
   -total_length_: uint16_t
 --
