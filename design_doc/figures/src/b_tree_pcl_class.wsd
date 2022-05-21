@@ -1,8 +1,7 @@
 @startuml
 
-class BTree{
+class BTreePCL{
   -root_ : Node_t*
-  -kExpectedTreeHeight : size_t
 --
 .. Utility Functions ..
   -SearchLearfNode() : NodeStack_t
@@ -23,6 +22,7 @@ class Node{
   -record_count_ : uint16_t
   -block_size_ : uint16_t
   -deleted_size_ : uint16_t
+  -mutex_ : mutex
   -next_ : Node_t*
   -high_meta_ : Metadata
   -meta_array_ : Metadata[]
@@ -45,7 +45,6 @@ class Node{
   -GetKeyAddr() : void *
   -GetPayloadAddr() : void *
   -IsRightmostOf() : bool
-  -SetData() : size_t
   -GetSpaceStatus() : ReturnCode
   -CopyKeyFrom() : size_t
   -CopyHighKeyFrom() : size_t
@@ -99,7 +98,7 @@ class RecordIterator{
   +GetPayload() : payload
 }
 
-BTree "1" -> "1" Node
+BTreePCL "1" -> "1" Node
 Node "1" -> "1" Metadata
 Node "1" -> "0.." Node
 RecordIterator "1" -> "1" Node
