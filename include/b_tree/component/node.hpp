@@ -783,12 +783,11 @@ class Node
   }
 
   /**
-   * @brief Set a target data directly
+   * @brief Set a target key directly
    *
-   * @tparam Data a class of data
-   * @param offset an offset to set a target data
-   * @param data a target data to be set
-   * @param data_len a target payload to be set
+   * @param offset an offset to set a target key
+   * @param key a target key to be set
+   * @param key_len a target key length to be set
    */
   auto
   SetKey(  //
@@ -809,12 +808,12 @@ class Node
   }
 
   /**
-   * @brief Set a target data directly
+   * @brief Set a target payload directly
    *
-   * @tparam Data a class of data
-   * @param offset an offset to set a target data
-   * @param data a target data to be set
-   * @param data_len a target payload to be set
+   * @tparam Payload a class of payload
+   * @param offset an offset to set a target payload
+   * @param payload a target payload to be set
+   * @param pay_len a target payload length to be set
    */
   template <class Payload>
   auto
