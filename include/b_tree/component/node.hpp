@@ -113,7 +113,7 @@ class Node
    * @return false otherwise
    */
   auto
-  IsRangeInclude(const Key &key)  //
+  IncludeKey(const Key &key)  //
       -> bool
   {
     const auto &high_key = GetHighKey();

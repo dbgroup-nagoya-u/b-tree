@@ -28,7 +28,7 @@ class Node{
   -meta_array_ : Metadata[]
 --
 .. Getters ..
-  +IsRangeInclude() : bool
+  +IncludeKey() : bool
   +CanMerge() : bool
   +IsLeaf() : bool
   +GetRecordCount() : size_t

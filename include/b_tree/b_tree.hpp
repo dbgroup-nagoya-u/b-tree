@@ -282,7 +282,7 @@ class BTree
           return kSuccess;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IsRangeInclude(key)) {
+          if (!node->IncludeKey(key)) {
             node = node->GetNextNode();
             stack.back().first = node;
           }
@@ -329,7 +329,7 @@ class BTree
           return kKeyExist;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IsRangeInclude(key)) {
+          if (!node->IncludeKey(key)) {
             node = node->GetNextNode();
             stack.back().first = node;
           }
