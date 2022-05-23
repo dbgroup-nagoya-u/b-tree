@@ -39,8 +39,8 @@ class Node{
   +GetPayload() : payload
   +GetRecord() : pair<key, payload>
 .. Setters ..
-  -SetKey() : void
-  -SetPayload() : void
+  -SetKey() : size_t
+  -SetPayload() : size_t
 .. Utility Functions ..
   -GetKeyAddr() : void *
   -GetPayloadAddr() : void *
