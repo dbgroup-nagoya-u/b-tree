@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "bplustree/component/metadata.hpp"
+#include "b_tree/component/metadata.hpp"
 
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bplustree::component::test
+namespace dbgroup::index::b_tree::component::test
 {
 class MetadataFixture : public testing::Test
 {
@@ -126,4 +126,4 @@ TEST_F(MetadataFixture, NEQWithDifferentMetadatasReturnTrue)
   EXPECT_TRUE(meta_a != meta_b);
 }
 
-}  // namespace dbgroup::index::bplustree::component::test
+}  // namespace dbgroup::index::b_tree::component::test

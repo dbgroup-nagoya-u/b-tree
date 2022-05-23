@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "bplustree/component/node.hpp"
+#include "b_tree/component/node.hpp"
 
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bplustree::component::test
+namespace dbgroup::index::b_tree::component::test
 {
 /*######################################################################################
  * Global constants
@@ -540,4 +540,4 @@ TYPED_TEST(NodeFixture, ConsolidateNode)
   TestFixture::VerifyConsolidation();
 }
 
-}  // namespace dbgroup::index::bplustree::component::test
+}  // namespace dbgroup::index::b_tree::component::test

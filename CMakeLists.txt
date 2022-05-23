@@ -14,35 +14,35 @@ project(
 )
 
 # define source directories
-set(BPLUSTREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(B_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 #--------------------------------------------------------------------------------------#
 # Bw-tree's configurations
 #--------------------------------------------------------------------------------------#
 
-set(BPLUSTREE_PAGE_SIZE "1024" CACHE STRING "Page size in bytes.")
-set(BPLUSTREE_MAX_DELETED_SPACE_SIZE "(kPageSize * 15 / 16)" CACHE STRING "Invoking a split-operation if the deleted space size of a node exceeds this threshold.")
-set(BPLUSTREE_MIN_FREE_SPACE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking a split-operation if the free space size of a node becomes lower than this threshold.")
-set(BPLUSTREE_MIN_USED_SPACE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking merge-operation if if the used space size of a node becomes lower than this threshold.")
-set(BPLUSTREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING "The expected maximum size of a variable-length data.")
+set(B_TREE_PAGE_SIZE "1024" CACHE STRING "Page size in bytes.")
+set(B_TREE_MAX_DELETED_SPACE_SIZE "(kPageSize * 15 / 16)" CACHE STRING "Invoking a split-operation if the deleted space size of a node exceeds this threshold.")
+set(B_TREE_MIN_FREE_SPACE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking a split-operation if the free space size of a node becomes lower than this threshold.")
+set(B_TREE_MIN_USED_SPACE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking merge-operation if if the used space size of a node becomes lower than this threshold.")
+set(B_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING "The expected maximum size of a variable-length data.")
 
 #--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
-add_library(bplustree INTERFACE)
-target_compile_features(bplustree INTERFACE
+add_library(b_tree INTERFACE)
+target_compile_features(b_tree INTERFACE
   "cxx_std_17"
 )
-target_compile_definitions(bplustree INTERFACE
-  BPLUSTREE_PAGE_SIZE=${BPLUSTREE_PAGE_SIZE}
-  BPLUSTREE_MAX_DELETED_SPACE_SIZE=${BPLUSTREE_MAX_DELETED_SPACE_SIZE}
-  BPLUSTREE_MIN_FREE_SPACE_SIZE=${BPLUSTREE_MIN_FREE_SPACE_SIZE}
-  BPLUSTREE_MIN_USED_SPACE_SIZE=${BPLUSTREE_MIN_USED_SPACE_SIZE}
-  BPLUSTREE_MAX_VARIABLE_DATA_SIZE=${BPLUSTREE_MAX_VARIABLE_DATA_SIZE}
+target_compile_definitions(b_tree INTERFACE
+  B_TREE_PAGE_SIZE=${B_TREE_PAGE_SIZE}
+  B_TREE_MAX_DELETED_SPACE_SIZE=${B_TREE_MAX_DELETED_SPACE_SIZE}
+  B_TREE_MIN_FREE_SPACE_SIZE=${B_TREE_MIN_FREE_SPACE_SIZE}
+  B_TREE_MIN_USED_SPACE_SIZE=${B_TREE_MIN_USED_SPACE_SIZE}
+  B_TREE_MAX_VARIABLE_DATA_SIZE=${B_TREE_MAX_VARIABLE_DATA_SIZE}
 )
 target_compile_options(
-  bplustree INTERFACE
+  b_tree INTERFACE
   -Wall
   -Wextra
   $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Release">:"-O2 -march=native">
@@ -50,8 +50,8 @@ target_compile_options(
   $<$<STREQUAL:${CMAKE_BUILD_TYPE},"Debug">:"-g3 -O0 -pg">
 )
 target_include_directories(
-  bplustree INTERFACE
-  "${BPLUSTREE_SOURCE_DIR}/include"
+  b_tree INTERFACE
+  "${B_TREE_SOURCE_DIR}/include"
 )
 
 #--------------------------------------------------------------------------------------#

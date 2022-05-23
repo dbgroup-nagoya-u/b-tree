@@ -1,11 +1,10 @@
-#include "bplustree/bplustree.hpp"
-
 #include <random>
 
+#include "b_tree/b_tree.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::bplustree::component
+namespace dbgroup::index::b_tree::component
 {
 /*######################################################################################
  * Global constants
@@ -29,7 +28,7 @@ struct KeyPayload {
 };
 
 template <class KeyPayload>
-class BplusTreeFixture : public testing::Test  // NOLINT
+class BTreeFixture : public testing::Test  // NOLINT
 {
   // extract key-payload types
   using Key = typename KeyPayload::Key::Data;
@@ -42,7 +41,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
   using Node_t = component::Node<Key, KeyComp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-  using BplusTree_t = BplusTree<Key, Payload, KeyComp>;
+  using BTree_t = BTree<Key, Payload, KeyComp>;
 
  protected:
   /*################################################################################################
@@ -67,7 +66,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
     PrepareTestData(keys_, kKeyNumForTest);      // NOLINT
     PrepareTestData(payloads_, kKeyNumForTest);  // NOLINT
 
-    bplustree_ = std::make_unique<BplusTree_t>();
+    b_tree_ = std::make_unique<BTree_t>();
   }
 
   void
@@ -87,7 +86,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
       const size_t payload_id)  //
       -> ReturnCode
   {
-    return bplustree_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
+    return b_tree_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
   }
 
   /*####################################################################################
@@ -125,7 +124,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
       const size_t expected_id,
       const bool expect_success)
   {
-    const auto read_val = bplustree_->Read(keys_[key_id]);
+    const auto read_val = b_tree_->Read(keys_[key_id]);
     if (expect_success) {
       EXPECT_TRUE(read_val);
 
@@ -158,7 +157,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
       end_pos = (end_closed) ? end_id + 1 : end_id;
     }
 
-    auto iter = bplustree_->Scan(begin_key, end_key);
+    auto iter = b_tree_->Scan(begin_key, end_key);
 
     for (; iter.HasNext(); ++iter, ++begin_pos) {
       auto [key, payload] = *iter;
@@ -177,7 +176,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
       const size_t key_id,
       const size_t pay_id)
   {
-    auto rc = bplustree_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
+    auto rc = b_tree_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
 
     EXPECT_EQ(ReturnCode::kSuccess, rc);
   }
@@ -188,8 +187,8 @@ class BplusTreeFixture : public testing::Test  // NOLINT
       const size_t payload_id,
       const bool expect_success)
   {
-    ReturnCode expected_rc = bplustree::kSuccess;
-    expected_rc = (expect_success) ? expected_rc : bplustree::kKeyExist;
+    ReturnCode expected_rc = b_tree::kSuccess;
+    expected_rc = (expect_success) ? expected_rc : b_tree::kKeyExist;
     auto rc = Insert(key_id, payload_id);
     EXPECT_EQ(expected_rc, rc);
   }
@@ -202,7 +201,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = bplustree_->Update(keys_[key_id], payloads_[payload_id]);
+    auto rc = b_tree_->Update(keys_[key_id], payloads_[payload_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -213,7 +212,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
   {
     ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
-    auto rc = bplustree_->Delete(keys_[key_id]);
+    auto rc = b_tree_->Delete(keys_[key_id]);
     EXPECT_EQ(expected_rc, rc);
   }
 
@@ -344,7 +343,7 @@ class BplusTreeFixture : public testing::Test  // NOLINT
   Key keys_[kKeyNumForTest]{};
   Payload payloads_[kKeyNumForTest]{};
 
-  std::unique_ptr<BplusTree_t> bplustree_{nullptr};
+  std::unique_ptr<BTree_t> b_tree_{nullptr};
 };
 
 /*######################################################################################
@@ -360,7 +359,7 @@ using TestTargets = ::testing::Types<  //
     KeyPayload<Ptr, Ptr>,              // pointer keys/payloads
     KeyPayload<Original, Original>     // original class payloads
     >;
-TYPED_TEST_SUITE(BplusTreeFixture, TestTargets);
+TYPED_TEST_SUITE(BTreeFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
@@ -370,25 +369,25 @@ TYPED_TEST_SUITE(BplusTreeFixture, TestTargets);
  * Structure modification operations
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, WriteWithConsolidationReadWrittenValues)
+TYPED_TEST(BTreeFixture, WriteWithConsolidationReadWrittenValues)
 {
   const size_t rec_num = TestFixture::kRecNumInNode;
   TestFixture::VerifyWritesWith(!kWriteTwice, !kShuffled, rec_num);
 }
 
-TYPED_TEST(BplusTreeFixture, WriteWithRootLeafSplitReadWrittenValues)
+TYPED_TEST(BTreeFixture, WriteWithRootLeafSplitReadWrittenValues)
 {
   const size_t rec_num = TestFixture::kRecNumInNode * 1.5;
   TestFixture::VerifyWritesWith(!kWriteTwice, !kShuffled, rec_num);
 }
 
-TYPED_TEST(BplusTreeFixture, WriteWithRootInternalSplitReadWrittenValues)
+TYPED_TEST(BTreeFixture, WriteWithRootInternalSplitReadWrittenValues)
 {
   const size_t rec_num = TestFixture::kRecNumInNode * TestFixture::kRecNumInNode;
   TestFixture::VerifyWritesWith(!kWriteTwice, !kShuffled, rec_num);
 }
 
-TYPED_TEST(BplusTreeFixture, WriteWithInternalSplitReadWrittenValues)
+TYPED_TEST(BTreeFixture, WriteWithInternalSplitReadWrittenValues)
 {
   TestFixture::VerifyWritesWith(!kWriteTwice, !kShuffled);
 }
@@ -397,7 +396,7 @@ TYPED_TEST(BplusTreeFixture, WriteWithInternalSplitReadWrittenValues)
  * Read operation tests
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, ReadWithEmptyIndexFail)
+TYPED_TEST(BTreeFixture, ReadWithEmptyIndexFail)
 {  //
   TestFixture::VerifyRead(0, 0, kExpectFailed);
 }
@@ -406,7 +405,7 @@ TYPED_TEST(BplusTreeFixture, ReadWithEmptyIndexFail)
  * Scan operation
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, ScanWithoutKeysPerformFullScan)
+TYPED_TEST(BTreeFixture, ScanWithoutKeysPerformFullScan)
 {
   const size_t rec_num = TestFixture::kMaxRecNumForTest;
 
@@ -417,7 +416,7 @@ TYPED_TEST(BplusTreeFixture, ScanWithoutKeysPerformFullScan)
   TestFixture::VerifyScan(std::nullopt, std::nullopt);
 }
 
-TYPED_TEST(BplusTreeFixture, ScanWithClosedRangeIncludeLeftRightEnd)
+TYPED_TEST(BTreeFixture, ScanWithClosedRangeIncludeLeftRightEnd)
 {
   const size_t rec_num = TestFixture::kMaxRecNumForTest;
 
@@ -429,7 +428,7 @@ TYPED_TEST(BplusTreeFixture, ScanWithClosedRangeIncludeLeftRightEnd)
                           std::make_pair(rec_num - 1, kRangeClosed));
 }
 
-TYPED_TEST(BplusTreeFixture, ScanWithOpenedRangeExcludeLeftRightEnd)
+TYPED_TEST(BTreeFixture, ScanWithOpenedRangeExcludeLeftRightEnd)
 {
   const size_t rec_num = TestFixture::kMaxRecNumForTest;
 
@@ -445,12 +444,12 @@ TYPED_TEST(BplusTreeFixture, ScanWithOpenedRangeExcludeLeftRightEnd)
  * Write operation
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, WriteWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, WriteWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyWritesWith(kWriteTwice, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomWriteWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, RandomWriteWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyWritesWith(kWriteTwice, kShuffled);
 }
@@ -459,32 +458,32 @@ TYPED_TEST(BplusTreeFixture, RandomWriteWithDuplicateKeysSucceed)
  * Insert operation
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, InsertWithUniqueKeysReadInsertedValues)
+TYPED_TEST(BTreeFixture, InsertWithUniqueKeysReadInsertedValues)
 {
   TestFixture::VerifyInsertsWith(!kWriteTwice, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, InsertWithDuplicateKeysFail)
+TYPED_TEST(BTreeFixture, InsertWithDuplicateKeysFail)
 {
   TestFixture::VerifyInsertsWith(kWriteTwice, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, InsertWithDeletedKeysSucceed)
+TYPED_TEST(BTreeFixture, InsertWithDeletedKeysSucceed)
 {
   TestFixture::VerifyInsertsWith(kWriteTwice, kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomInsertWithUniqueKeysReadInsertedValues)
+TYPED_TEST(BTreeFixture, RandomInsertWithUniqueKeysReadInsertedValues)
 {
   TestFixture::VerifyInsertsWith(!kWriteTwice, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomInsertWithDuplicateKeysFail)
+TYPED_TEST(BTreeFixture, RandomInsertWithDuplicateKeysFail)
 {
   TestFixture::VerifyInsertsWith(kWriteTwice, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomInsertWithDeletedKeysSucceed)
+TYPED_TEST(BTreeFixture, RandomInsertWithDeletedKeysSucceed)
 {
   TestFixture::VerifyInsertsWith(kWriteTwice, kWithDelete, kShuffled);
 }
@@ -493,32 +492,32 @@ TYPED_TEST(BplusTreeFixture, RandomInsertWithDeletedKeysSucceed)
  * Update operation
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, UpdateWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, UpdateWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyUpdatesWith(kWithWrite, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, UpdateWithNotInsertedKeysFail)
+TYPED_TEST(BTreeFixture, UpdateWithNotInsertedKeysFail)
 {
   TestFixture::VerifyUpdatesWith(!kWithWrite, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, UpdateWithDeletedKeysFail)
+TYPED_TEST(BTreeFixture, UpdateWithDeletedKeysFail)
 {
   TestFixture::VerifyUpdatesWith(kWithWrite, kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomUpdateWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, RandomUpdateWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyUpdatesWith(kWithWrite, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomUpdateWithNotInsertedKeysFail)
+TYPED_TEST(BTreeFixture, RandomUpdateWithNotInsertedKeysFail)
 {
   TestFixture::VerifyUpdatesWith(!kWithWrite, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomUpdateWithDeletedKeysFail)
+TYPED_TEST(BTreeFixture, RandomUpdateWithDeletedKeysFail)
 {
   TestFixture::VerifyUpdatesWith(kWithWrite, kWithDelete, kShuffled);
 }
@@ -527,34 +526,34 @@ TYPED_TEST(BplusTreeFixture, RandomUpdateWithDeletedKeysFail)
  * Delete operation
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BplusTreeFixture, DeleteWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, DeleteWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyDeletesWith(kWithWrite, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, DeleteWithNotInsertedKeysFail)
+TYPED_TEST(BTreeFixture, DeleteWithNotInsertedKeysFail)
 {
   TestFixture::VerifyDeletesWith(!kWithWrite, !kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, DeleteWithDeletedKeysFail)
+TYPED_TEST(BTreeFixture, DeleteWithDeletedKeysFail)
 {
   TestFixture::VerifyDeletesWith(kWithWrite, kWithDelete, !kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomDeleteWithDuplicateKeysSucceed)
+TYPED_TEST(BTreeFixture, RandomDeleteWithDuplicateKeysSucceed)
 {
   TestFixture::VerifyDeletesWith(kWithWrite, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomDeleteWithNotInsertedKeysFail)
+TYPED_TEST(BTreeFixture, RandomDeleteWithNotInsertedKeysFail)
 {
   TestFixture::VerifyDeletesWith(!kWithWrite, !kWithDelete, kShuffled);
 }
 
-TYPED_TEST(BplusTreeFixture, RandomDeleteWithDeletedKeysFail)
+TYPED_TEST(BTreeFixture, RandomDeleteWithDeletedKeysFail)
 {
   TestFixture::VerifyDeletesWith(kWithWrite, kWithDelete, kShuffled);
 }
 
-}  // namespace dbgroup::index::bplustree::component
+}  // namespace dbgroup::index::b_tree::component

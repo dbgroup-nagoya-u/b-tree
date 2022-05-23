@@ -49,7 +49,7 @@
   // local dictionary
   "cSpell.words": [
     "alignas",
-    "BPLUSTREE",
+    "B_TREE",
     "ctest",
     "DBUILD",
     "DCMAKE",
