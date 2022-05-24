@@ -68,12 +68,12 @@ class Node
     const auto l_high_meta = l_node->high_meta_;
     const auto l_key_len = l_high_meta.GetKeyLength();
     const auto l_rec_len = l_key_len + kPayLen;
-    auto offset = SetData(kPageSize, l_node, kPayLen);
+    auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
     meta_array_[0] = Metadata{offset, l_key_len, l_rec_len};
 
     // insert r_node
-    offset = SetData(offset, r_node, kPayLen);
+    offset = SetPayload(offset, r_node);
     meta_array_[1] = Metadata{offset, 0, kPayLen};
 
     block_size_ += l_rec_len + kPayLen;
@@ -423,8 +423,8 @@ class Node
     if (rc == kKeyNotInserted) {
       // insert
       auto offset = kPageSize - block_size_;
-      offset = SetData(offset, payload, sizeof(Payload));
-      offset = SetData(offset, key, key_length);
+      offset = SetPayload(offset, payload);
+      offset = SetKey(offset, key, key_length);
       block_size_ += total_length;
 
       memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]),
@@ -477,8 +477,8 @@ class Node
 
     // insert record
     auto offset = kPageSize - block_size_;
-    offset = SetData(offset, payload, sizeof(Payload));
-    offset = SetData(offset, key, key_length);
+    offset = SetPayload(offset, payload);
+    offset = SetKey(offset, key, key_length);
 
     block_size_ += total_length;
 
@@ -587,7 +587,7 @@ class Node
 
     // insert a left child
     const auto l_high_meta = l_node->high_meta_;
-    auto offset = SetData(kPageSize - block_size_, l_node, kPayLen);
+    auto offset = SetPayload(kPageSize - block_size_, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
     // add metadata for a left child
@@ -783,30 +783,47 @@ class Node
   }
 
   /**
-   * @brief Set a target data directly
+   * @brief Set a target key directly
    *
-   * @tparam Data a class of data
-   * @param offset an offset to set a target data
-   * @param data a target data to be set
-   * @param data_len a target payload to be set
+   * @param offset an offset to set a target key
+   * @param key a target key to be set
+   * @param key_len a target key length to be set
    */
-  template <class Data>
   auto
-  SetData(  //
+  SetKey(  //
       size_t offset,
-      const Data &data,
-      [[maybe_unused]] const size_t data_len)  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
-    if constexpr (IsVariableLengthData<Data>()) {
-      offset -= data_len;
-      memcpy(ShiftAddr(this, offset), data, data_len);
+    if constexpr (IsVariableLengthData<Key>()) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), key, key_len);
     } else {
-      // offset -= sizeof(Data);
-      offset -= data_len;
-      memcpy(ShiftAddr(this, offset), &data, sizeof(Data));
+      offset -= sizeof(Key);
+      memcpy(ShiftAddr(this, offset), &key, sizeof(Key));
     }
 
+    return offset;
+  }
+
+  /**
+   * @brief Set a target payload directly
+   *
+   * @tparam Payload a class of payload
+   * @param offset an offset to set a target payload
+   * @param payload a target payload to be set
+   * @param pay_len a target payload length to be set
+   */
+  template <class Payload>
+  auto
+  SetPayload(  //
+      size_t offset,
+      const Payload &payload)  //
+      -> size_t
+  {
+    offset -= sizeof(Payload);
+    memcpy(ShiftAddr(this, offset), &payload, sizeof(Payload));
     return offset;
   }
 
