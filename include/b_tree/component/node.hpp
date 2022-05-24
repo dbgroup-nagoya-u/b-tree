@@ -66,7 +66,7 @@ class Node
 
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
-    const auto l_key_len = l_high_meta.GetKeyLength();
+    const auto l_key_len = l_high_meta.key_length_;
     const auto l_rec_len = l_key_len + kPayLen;
     auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
@@ -218,7 +218,7 @@ class Node
   GetHighKey() const  //
       -> std::optional<Key>
   {
-    if (high_meta_.GetKeyLength() == 0) return std::nullopt;
+    if (high_meta_.key_length_ == 0) return std::nullopt;
     return GetKey(high_meta_);
   }
 
@@ -554,7 +554,7 @@ class Node
             sizeof(Metadata) * (record_count_ - pos - 1));
 
     // update a header
-    deleted_size_ += meta_array_[pos].GetTotalLength();
+    deleted_size_ += meta_array_[pos].total_length_;
     record_count_ -= 1;
 
     const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
@@ -591,7 +591,7 @@ class Node
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
     // add metadata for a left child
-    const auto key_len = l_high_meta.GetKeyLength();
+    const auto key_len = l_high_meta.key_length_;
     const auto rec_len = key_len + kPayLen;
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
     meta_array_[pos] = Metadata{offset, key_len, rec_len};
@@ -629,7 +629,7 @@ class Node
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPayLen);
 
-    const auto key_len = meta_array_[pos - 1].GetKeyLength();
+    const auto key_len = meta_array_[pos - 1].key_length_;
 
     // delete metadata
     memmove(&(meta_array_[pos - 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
@@ -689,7 +689,7 @@ class Node
       const auto target_meta = meta_array_[l_count];
       offset = temp_node_->template CopyRecordFrom<Payload>(this, target_meta, l_count++, offset);
     }
-    const auto sep_key_len = meta_array_[l_count - 1].GetKeyLength();
+    const auto sep_key_len = meta_array_[l_count - 1].key_length_;
     temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
 
     // copy right half records to a right node
@@ -754,7 +754,7 @@ class Node
   GetKeyAddr(const Metadata meta) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.GetOffset());
+    return ShiftAddr(this, meta.offset_);
   }
 
   /**
@@ -765,7 +765,7 @@ class Node
   GetPayloadAddr(const Metadata meta) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.GetOffset() + meta.GetKeyLength());
+    return ShiftAddr(this, meta.offset_ + meta.key_length_);
   }
 
   /**
@@ -777,8 +777,8 @@ class Node
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
   {
-    if (high_meta_.GetKeyLength() == 0) return true;  // the rightmost node
-    if (!end_key) return false;                       // perform full scan
+    if (high_meta_.key_length_ == 0) return true;  // the rightmost node
+    if (!end_key) return false;                    // perform full scan
     return !Comp{}(GetKey(high_meta_), end_key->first);
   }
 
@@ -871,7 +871,7 @@ class Node
   {
     // copy a record from the given node
     if constexpr (IsVariableLengthData<Key>()) {
-      const auto key_len = meta.GetKeyLength();
+      const auto key_len = meta.key_length_;
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
     } else {
@@ -898,7 +898,7 @@ class Node
   {
     const auto offset = CopyKeyFrom(orig_node, target_meta, kPageSize);
     high_meta_ = target_meta;
-    high_meta_.SetOffset(offset);
+    high_meta_.offset_ = offset;
 
     return offset;
   }
@@ -924,7 +924,7 @@ class Node
   {
     // copy a record from the given node
     if constexpr (IsVariableLengthData<Key>()) {
-      const auto rec_len = meta.GetTotalLength();
+      const auto rec_len = meta.total_length_;
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
     } else {
@@ -935,7 +935,7 @@ class Node
 
     // set new metadata
     meta_array_[rec_count] = meta;
-    meta_array_[rec_count].SetOffset(offset);
+    meta_array_[rec_count].offset_ = offset;
 
     return offset;
   }

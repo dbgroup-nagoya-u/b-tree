@@ -23,16 +23,10 @@
 namespace dbgroup::index::b_tree::component
 {
 /**
- * @brief A class to represent record metadata.
+ * @brief A struct to represent record metadata.
  *
  */
-class Metadata
-{
- public:
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
-
+struct Metadata {
   constexpr Metadata() = default;
 
   /**
@@ -44,8 +38,8 @@ class Metadata
       const size_t key_length,
       const size_t total_length)
       : offset_{static_cast<uint32_t>(offset)},
-        key_length_{static_cast<uint32_t>(key_length)},
-        total_length_{static_cast<uint32_t>(total_length)}
+        key_length_{static_cast<uint16_t>(key_length)},
+        total_length_{static_cast<uint16_t>(total_length)}
   {
   }
 
@@ -55,10 +49,6 @@ class Metadata
   constexpr auto operator=(const Metadata &) -> Metadata & = default;
   constexpr Metadata(Metadata &&) = default;
   constexpr auto operator=(Metadata &&) -> Metadata & = default;
-
-  /*################################################################################################
-   * Public operators
-   *##############################################################################################*/
 
   constexpr auto
   operator==(const Metadata &comp) const  //
@@ -76,90 +66,14 @@ class Metadata
     return !(*this == comp);
   }
 
-  /*################################################################################################
-   * Public getters/setters
-   *##############################################################################################*/
-
-  /**
-   * @return an offset to a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetOffset() const  //
-      -> size_t
-  {
-    return offset_;
-  }
-
-  /**
-   * @return the length of a key in a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetKeyLength() const  //
-      -> size_t
-  {
-    return key_length_;
-  }
-
-  /**
-   * @return the total length of a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetTotalLength() const  //
-      -> size_t
-  {
-    return total_length_;
-  }
-
-  /**
-   * @return the length of a payload in a corresponding record.
-   */
-  [[nodiscard]] constexpr auto
-  GetPayloadLength() const  //
-      -> size_t
-  {
-    return total_length_ - key_length_;
-  }
-
-  /**
-   * @param offset the offset to a corresponding record to be set.
-   */
-  constexpr void
-  SetOffset(const size_t offset)
-  {
-    offset_ = offset;
-  }
-
-  /**
-   * @param key_length the key length to a corresponding record to be set.
-   */
-  constexpr void
-  SetKeyLength(const size_t key_length)
-  {
-    key_length_ = key_length;
-  }
-
-  /**
-   * @param total_length the total length of a corresponding record to be set.
-   */
-  constexpr void
-  SetTotalLength(const size_t total_length)
-  {
-    total_length_ = total_length;
-  }
-
- private:
-  /*################################################################################################
-   * Internal member variables
-   *##############################################################################################*/
-
   /// an offset to a corresponding record.
   uint32_t offset_{};
 
   /// the length of a key in a corresponding record.
-  uint32_t key_length_{};
+  uint16_t key_length_{};
 
   /// the total length of a corresponding record.
-  uint32_t total_length_{};
+  uint16_t total_length_{};
 };
 
 }  // namespace dbgroup::index::b_tree::component

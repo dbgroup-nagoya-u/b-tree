@@ -60,9 +60,9 @@ class MetadataFixture : public testing::Test
 
 TEST_F(MetadataFixture, ConstructDefaultMetadataCorrectlyInitialized)
 {
-  EXPECT_EQ(kExpectedOffset, meta_.GetOffset());
-  EXPECT_EQ(kExpectedKeyLength, meta_.GetKeyLength());
-  EXPECT_EQ(kExpectedTotalLength, meta_.GetTotalLength());
+  EXPECT_EQ(kExpectedOffset, meta_.offset_);
+  EXPECT_EQ(kExpectedKeyLength, meta_.key_length_);
+  EXPECT_EQ(kExpectedTotalLength, meta_.total_length_);
 }
 
 /*--------------------------------------------------------------------------------------------------
@@ -71,23 +71,23 @@ TEST_F(MetadataFixture, ConstructDefaultMetadataCorrectlyInitialized)
 
 TEST_F(MetadataFixture, GetPayloadLengthDefaultMetadataReturnCorrectPayloadLength)
 {
-  EXPECT_EQ(kExpectedTotalLength - kExpectedKeyLength, meta_.GetPayloadLength());
+  EXPECT_EQ(kExpectedTotalLength - kExpectedKeyLength, meta_.total_length_ - meta_.key_length_);
 }
 
 TEST_F(MetadataFixture, SetOffsetDefaultMetadataGetUpdatedOffset)
 {
   const size_t updated_offset = kExpectedOffset / 2;
 
-  meta_.SetOffset(updated_offset);
-  EXPECT_EQ(updated_offset, meta_.GetOffset());
+  meta_.offset_ = updated_offset;
+  EXPECT_EQ(updated_offset, meta_.offset_);
 }
 
 TEST_F(MetadataFixture, SetTotalLengthDefaultMetadataGetUpdatedTotalLength)
 {
   const size_t updated_total_length = kExpectedTotalLength / 2;
 
-  meta_.SetTotalLength(updated_total_length);
-  EXPECT_EQ(updated_total_length, meta_.GetTotalLength());
+  meta_.total_length_ = updated_total_length;
+  EXPECT_EQ(updated_total_length, meta_.total_length_);
 }
 
 /*--------------------------------------------------------------------------------------------------
