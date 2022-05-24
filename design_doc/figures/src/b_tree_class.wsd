@@ -66,19 +66,10 @@ class Node{
 }
 
 class Metadata{
-  -offset_ : uint32_t
-  -key_length_: uint32_t
-  -total_length_: uint32_t
+  +offset : uint32_t
+  +key_length: uint16_t
+  +total_length: uint16_t
 --
-.. Getters ..
-  +GetOffset() : size_t
-  +GetKeyLength() : size_t
-  +GetTotalLength() : size_t
-  +GetPayloadLength() : size_t
-.. Setters ..
-  +SetOffset() : void
-  +SetKeyLength() : void
-  +SetTotalLength(): void
 }
 
 class RecordIterator{
