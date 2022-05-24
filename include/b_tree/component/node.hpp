@@ -68,12 +68,12 @@ class Node
     const auto l_high_meta = l_node->high_meta_;
     const auto l_key_len = l_high_meta.GetKeyLength();
     const auto l_rec_len = l_key_len + kPayLen;
-    auto offset = SetPayload(kPageSize, l_node, kPayLen);
+    auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
     meta_array_[0] = Metadata{offset, l_key_len, l_rec_len};
 
     // insert r_node
-    offset = SetPayload(offset, r_node, kPayLen);
+    offset = SetPayload(offset, r_node);
     meta_array_[1] = Metadata{offset, 0, kPayLen};
 
     block_size_ += l_rec_len + kPayLen;
@@ -423,7 +423,7 @@ class Node
     if (rc == kKeyNotInserted) {
       // insert
       auto offset = kPageSize - block_size_;
-      offset = SetPayload(offset, payload, sizeof(Payload));
+      offset = SetPayload(offset, payload);
       offset = SetKey(offset, key, key_length);
       block_size_ += total_length;
 
@@ -477,7 +477,7 @@ class Node
 
     // insert record
     auto offset = kPageSize - block_size_;
-    offset = SetPayload(offset, payload, sizeof(Payload));
+    offset = SetPayload(offset, payload);
     offset = SetKey(offset, key, key_length);
 
     block_size_ += total_length;
@@ -587,7 +587,7 @@ class Node
 
     // insert a left child
     const auto l_high_meta = l_node->high_meta_;
-    auto offset = SetPayload(kPageSize - block_size_, l_node, kPayLen);
+    auto offset = SetPayload(kPageSize - block_size_, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
     // add metadata for a left child
@@ -819,18 +819,11 @@ class Node
   auto
   SetPayload(  //
       size_t offset,
-      const Payload &payload,
-      [[maybe_unused]] const size_t pay_len)  //
+      const Payload &payload)  //
       -> size_t
   {
-    if constexpr (IsVariableLengthData<Payload>()) {
-      offset -= pay_len;
-      memcpy(ShiftAddr(this, offset), payload, pay_len);
-    } else {
-      offset -= sizeof(Payload);
-      memcpy(ShiftAddr(this, offset), &payload, sizeof(Payload));
-    }
-
+    offset -= sizeof(Payload);
+    memcpy(ShiftAddr(this, offset), &payload, sizeof(Payload));
     return offset;
   }
 
