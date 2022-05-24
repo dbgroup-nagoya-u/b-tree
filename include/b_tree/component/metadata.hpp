@@ -27,6 +27,9 @@ namespace dbgroup::index::b_tree::component
  *
  */
 struct Metadata {
+  /*################################################################################################
+   * Public constructors/destructors
+   *##############################################################################################*/
   constexpr Metadata() = default;
 
   /**
@@ -37,9 +40,9 @@ struct Metadata {
       const size_t offset,
       const size_t key_length,
       const size_t total_length)
-      : offset_{static_cast<uint32_t>(offset)},
-        key_length_{static_cast<uint16_t>(key_length)},
-        total_length_{static_cast<uint16_t>(total_length)}
+      : offset{static_cast<uint32_t>(offset)},
+        key_length{static_cast<uint16_t>(key_length)},
+        total_length{static_cast<uint16_t>(total_length)}
   {
   }
 
@@ -50,13 +53,17 @@ struct Metadata {
   constexpr Metadata(Metadata &&) = default;
   constexpr auto operator=(Metadata &&) -> Metadata & = default;
 
+  /*################################################################################################
+   * Public operators
+   *##############################################################################################*/
+
   constexpr auto
   operator==(const Metadata &comp) const  //
       -> bool
   {
-    return offset_ == comp.offset_             //
-           && key_length_ == comp.key_length_  //
-           && total_length_ == comp.total_length_;
+    return offset == comp.offset             //
+           && key_length == comp.key_length  //
+           && total_length == comp.total_length;
   }
 
   constexpr auto
@@ -66,14 +73,18 @@ struct Metadata {
     return !(*this == comp);
   }
 
+  /*################################################################################################
+   * Internal member variables
+   *##############################################################################################*/
+
   /// an offset to a corresponding record.
-  uint32_t offset_{};
+  uint32_t offset{};
 
   /// the length of a key in a corresponding record.
-  uint16_t key_length_{};
+  uint16_t key_length{};
 
   /// the total length of a corresponding record.
-  uint16_t total_length_{};
+  uint16_t total_length{};
 };
 
 }  // namespace dbgroup::index::b_tree::component
