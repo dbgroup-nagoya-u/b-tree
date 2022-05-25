@@ -17,7 +17,7 @@ project(
 set(B_TREE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 #--------------------------------------------------------------------------------------#
-# Bw-tree's configurations
+# B-tree's configurations
 #--------------------------------------------------------------------------------------#
 
 set(B_TREE_PAGE_SIZE "1024" CACHE STRING "Page size in bytes.")

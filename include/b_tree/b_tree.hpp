@@ -512,7 +512,7 @@ class BTree
     auto *parent = stack.back().first;
 
     // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) return;
+    if (pos >= parent->GetRecordCount() - 2) return;
 
     // check the right-sibling node has enough capacity for merging
     auto *right_node = parent->template GetPayload<Node_t *>(pos + 1);
