@@ -1,4 +1,6 @@
 #include <random>
+#include <thread>
+#include <vector>
 
 #include "b_tree_pcl/b_tree_pcl.hpp"
 #include "common.hpp"
@@ -74,6 +76,7 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   {
     ReleaseTestData(keys_, kKeyNumForTest);      // NOLINT
     ReleaseTestData(payloads_, kKeyNumForTest);  // NOLINT
+    b_tree_pcl_.reset(nullptr);
   }
 
   /*####################################################################################
@@ -159,147 +162,35 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   }
 
   void
-  VerifyUpdate(  //
-      const size_t key_id,
-      const size_t payload_id,
-      const bool expect_success)
-  {
-    ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
-
-    auto rc = b_tree_pcl_->Update(keys_[key_id], payloads_[payload_id]);
-    EXPECT_EQ(expected_rc, rc);
-  }
-
-  void
-  VerifyDelete(  //
-      const size_t key_id,
-      const bool expect_success)
-  {
-    ReturnCode expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
-
-    auto rc = b_tree_pcl_->Delete(keys_[key_id]);
-    EXPECT_EQ(expected_rc, rc);
-  }
-
-  void
-  VerifyWritesWith(  //
-      const bool write_twice,
-      const bool is_shuffled,
-      const size_t ops_num = kMaxRecNumForTest)
-  {
-    const auto &target_ids = CreateTargetIDs(ops_num, is_shuffled);
-
-    for (size_t i = 0; i < ops_num; ++i) {
-      const auto id = target_ids.at(i);
-      VerifyWrite(id, id);
-    }
-    if (write_twice) {
-      for (size_t i = 0; i < ops_num; ++i) {
-        const auto id = target_ids.at(i);
-        VerifyWrite(id, id + 1);
-      }
-    }
-    for (size_t i = 0; i < ops_num; ++i) {
-      const auto key_id = target_ids.at(i);
-      const auto val_id = (write_twice) ? key_id + 1 : key_id;
-      VerifyRead(key_id, val_id, kExpectSuccess);
-    }
-  }
-
-  void
-  VerifyInsertsWith(  //
-      const bool write_twice,
-      const bool with_delete,
+  VerifyReadMultiThreads(  //
       const bool is_shuffled)
   {
     const auto &target_ids = CreateTargetIDs(kMaxRecNumForTest, is_shuffled);
-
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
+    // Insert key with single thread
+    for (size_t i = 0; i < kMaxRecNumForTest; i++) {
       const auto id = target_ids.at(i);
       VerifyInsert(id, id, kExpectSuccess);
     }
-    if (with_delete) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
+
+    // Read payload with multi-threads
+    std::vector<std::thread> threads{};
+    threads.reserve(kThreadNum);
+
+    auto f = [&]() {
+      for (size_t i = 0; i < kMaxRecNumForTest; i++) {
         const auto id = target_ids.at(i);
-        VerifyDelete(id, kExpectSuccess);
+        VerifyRead(id, id, kExpectSuccess);
       }
+    };
+
+    for (size_t i = 0; i < kThreadNum; ++i) {
+      threads.emplace_back(f);
     }
-    if (write_twice) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-        const auto key_id = target_ids.at(i);
-        VerifyInsert(key_id, key_id + 1, with_delete);
-      }
-    }
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-      const auto key_id = target_ids.at(i);
-      const auto val_id = (write_twice && with_delete) ? key_id + 1 : key_id;
-      VerifyRead(key_id, val_id, kExpectSuccess);
+
+    for (auto &&t : threads) {
+      t.join();
     }
   }
-
-  void
-  VerifyUpdatesWith(  //
-      const bool with_write,
-      const bool with_delete,
-      const bool is_shuffled)
-  {
-    const auto &target_ids = CreateTargetIDs(kMaxRecNumForTest, is_shuffled);
-    const auto expect_update = with_write && !with_delete;
-
-    if (with_write) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-        const auto id = target_ids.at(i);
-        VerifyWrite(id, id);
-      }
-    }
-    if (with_delete) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-        const auto id = target_ids.at(i);
-        VerifyDelete(id, kExpectSuccess);
-      }
-    }
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-      const auto key_id = target_ids.at(i);
-      VerifyUpdate(key_id, key_id + 1, expect_update);
-    }
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-      const auto key_id = target_ids.at(i);
-      const auto val_id = (expect_update) ? key_id + 1 : key_id;
-      VerifyRead(key_id, val_id, expect_update);
-    }
-  }
-
-  void
-  VerifyDeletesWith(  //
-      const bool with_write,
-      const bool with_delete,
-      const bool is_shuffled)
-  {
-    const auto &target_ids = CreateTargetIDs(kMaxRecNumForTest, is_shuffled);
-    const auto expect_delete = with_write && !with_delete;
-
-    if (with_write) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-        const auto id = target_ids.at(i);
-        VerifyWrite(id, id);
-      }
-    }
-    if (with_delete) {
-      for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-        const auto id = target_ids.at(i);
-        VerifyDelete(id, kExpectSuccess);
-      }
-    }
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-      const auto key_id = target_ids.at(i);
-      VerifyDelete(key_id, expect_delete);
-    }
-    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
-      const auto key_id = target_ids.at(i);
-      VerifyRead(key_id, key_id, kExpectFailed);
-    }
-  }
-
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
@@ -337,6 +228,11 @@ TYPED_TEST_SUITE(BTreePCLFixture, TestTargets);
 TYPED_TEST(BTreePCLFixture, ReadWithEmptyIndexFail)
 {  //
   TestFixture::VerifyRead(0, 0, kExpectFailed);
+}
+
+TYPED_TEST(BTreePCLFixture, ReadWithMultiThreadSuccess)
+{  //
+  TestFixture::VerifyReadMultiThreads(true);
 }
 
 }  // namespace dbgroup::index::b_tree::component

@@ -541,18 +541,19 @@ class BTreePCL
       return;
     }
 
-    // check there is a left-sibling node
-    if (pos == 0) return;
-
-    // check the left-sibling node has enough capacity for merging
     auto *parent = stack.back().first;
-    auto *left_node = parent->template GetPayload<Node_t *>(pos - 1);
-    if (!left_node->CanMerge(node)) return;
+
+    // check there is a right-sibling node
+    if (pos == parent->GetRecordCount() - 1) return;
+
+    // check the right-sibling node has enough capacity for merging
+    auto *right_node = parent->template GetPayload<Node_t *>(pos + 1);
+    if (!node->CanMerge(right_node)) return;
 
     // perform merging
-    left_node->template Merge<Value>(node);
-    const auto rc = parent->DeleteChild(left_node, pos);
-    delete node;
+    node->template Merge<Value>(right_node);
+    const auto rc = parent->DeleteChild(node, pos + 1);
+    delete right_node;
 
     if (rc == NodeRC::kNeedMerge) {
       // perform merging recursively

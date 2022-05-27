@@ -134,8 +134,8 @@ class Node
         (sizeof(Metadata) * (record_count_)) + block_size_ - deleted_size_;
     const auto r_consolidated_size =
         (sizeof(Metadata) * r_node->record_count_) + r_node->block_size_ - r_node->deleted_size_;
-    return kPageSize - kHeaderLength - l_consolidated_size - r_consolidated_size
-           > kMinFreeSpaceSize;
+    return kPageSize - (kHeaderLength + kMinFreeSpaceSize)
+           > l_consolidated_size + r_consolidated_size;
   }
 
   /*################################################################################################

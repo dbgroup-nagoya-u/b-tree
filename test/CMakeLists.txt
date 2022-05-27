@@ -27,6 +27,13 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
                  EXCLUDE_FROM_ALL)
 
 #--------------------------------------------------------------------------------------#
+# Configurations for testing
+#--------------------------------------------------------------------------------------#
+
+set(B_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
+set(B_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+
+#--------------------------------------------------------------------------------------#
 # Build Unit Tests
 #--------------------------------------------------------------------------------------#
 
@@ -38,6 +45,9 @@ function(ADD_B_TREE_TEST B_TREE_TEST_TARGET)
   )
   target_compile_features(${B_TREE_TEST_TARGET} PRIVATE
     "cxx_std_17"
+  )
+  target_compile_definitions(${B_TREE_TEST_TARGET} PRIVATE
+    B_TREE_TEST_THREAD_NUM=${B_TREE_TEST_THREAD_NUM}
   )
   target_compile_options(${B_TREE_TEST_TARGET} PRIVATE
     -Wall
