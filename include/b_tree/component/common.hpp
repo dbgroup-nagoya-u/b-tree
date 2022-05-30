@@ -21,7 +21,7 @@
 #include <cstring>
 #include <memory>
 
-#include "../utility.hpp"
+#include "b_tree/utility.hpp"
 
 namespace dbgroup::index::b_tree::component
 {

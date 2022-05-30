@@ -2,7 +2,7 @@
 #include <thread>
 #include <vector>
 
-#include "b_tree_pcl/b_tree_pcl.hpp"
+#include "b_tree/b_tree_pcl.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
