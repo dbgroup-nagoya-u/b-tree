@@ -19,6 +19,7 @@
 #define B_TREE_COMPONENT_NODE_HPP
 
 #include <optional>
+#include <shared_mutex>
 #include <utility>
 
 #include "common.hpp"
@@ -118,7 +119,7 @@ class Node
   {
     const auto &high_key = GetHighKey();
     if (!high_key) return true;
-    return Comp{}(key, high_key.value());
+    return !Comp{}(high_key.value(), key);
   }
 
   /**
@@ -150,6 +151,16 @@ class Node
       -> bool
   {
     return is_leaf_;
+  }
+
+  /**
+   * @return mutex_
+   */
+  [[nodiscard]] auto
+  GetMutex()  //
+      -> std::shared_mutex *
+  {
+    return &mutex_;
   }
 
   /**
@@ -988,6 +999,9 @@ class Node
 
   /// a black block for alignment.
   uint64_t : 0;
+
+  /// the latch this node.
+  std::shared_mutex mutex_{};
 
   /// the pointer to the next node.
   Node *next_{nullptr};

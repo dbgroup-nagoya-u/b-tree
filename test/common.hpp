@@ -60,6 +60,8 @@ struct MyClass {
  * Constants for testing
  *####################################################################################*/
 
+constexpr size_t kThreadNum = B_TREE_TEST_THREAD_NUM;
+
 constexpr size_t kVarDataLength = 12;
 
 constexpr size_t kRandomSeed = 10;

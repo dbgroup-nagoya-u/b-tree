@@ -1,6 +1,6 @@
 #include <random>
 
-#include "b_tree/b_tree.hpp"
+#include "b_tree/b_tree_pcl.hpp"
 #include "common.hpp"
 #include "gtest/gtest.h"
 
@@ -41,7 +41,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   using Node_t = component::Node<Key, KeyComp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-  using BTree_t = BTree<Key, Payload, KeyComp>;
+  using BTreePCL_t = BTreePCL<Key, Payload, KeyComp>;
 
  protected:
   /*################################################################################################
@@ -66,7 +66,7 @@ class BTreeFixture : public testing::Test  // NOLINT
     PrepareTestData(keys_, kKeyNumForTest);      // NOLINT
     PrepareTestData(payloads_, kKeyNumForTest);  // NOLINT
 
-    b_tree_ = std::make_unique<BTree_t>();
+    b_tree_ = std::make_unique<BTreePCL_t>();
   }
 
   void
@@ -343,7 +343,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   Key keys_[kKeyNumForTest]{};
   Payload payloads_[kKeyNumForTest]{};
 
-  std::unique_ptr<BTree_t> b_tree_{nullptr};
+  std::unique_ptr<BTreePCL_t> b_tree_{nullptr};
 };
 
 /*######################################################################################

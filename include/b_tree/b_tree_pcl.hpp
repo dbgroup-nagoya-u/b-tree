@@ -34,7 +34,7 @@ namespace dbgroup::index::b_tree
  * @tparam Comp a class for ordering keys.
  */
 template <class Key, class Payload, class Comp = ::std::less<Key>>
-class BTree
+class BTreePCL
 {
  public:
   /*####################################################################################
@@ -165,10 +165,10 @@ class BTree
    *##################################################################################*/
 
   /**
-   * @brief Construct a new BTree object.
+   * @brief Construct a new BTreePCL object.
    *
    */
-  explicit BTree()
+  explicit BTreePCL()
   {
     if constexpr (IsVariableLengthData<Key>()) {
       static_assert(sizeof(component::Metadata) + kMaxVarDataSize + sizeof(Payload)
@@ -178,21 +178,21 @@ class BTree
     }
   };
 
-  BTree(const BTree &) = delete;
-  BTree(BTree &&) = delete;
+  BTreePCL(const BTreePCL &) = delete;
+  BTreePCL(BTreePCL &&) = delete;
 
-  BTree &operator=(const BTree &) = delete;
-  BTree &operator=(BTree &&) = delete;
+  BTreePCL &operator=(const BTreePCL &) = delete;
+  BTreePCL &operator=(BTreePCL &&) = delete;
 
   /*####################################################################################
    * Public destructors
    *##################################################################################*/
 
   /**
-   * @brief Destroy the BTree object.
+   * @brief Destroy the BTreePCL object.
    *
    */
-  ~BTree() = default;
+  ~BTreePCL() = default;
 
   /*####################################################################################
    * Public read APIs
@@ -209,11 +209,12 @@ class BTree
   Read(const Key &key)  //
       -> std::optional<Payload>
   {
-    const auto &stack = SearchLeafNode(key, true);
+    const auto &stack = SearchLeafNodeForRead(key, true);
     auto *node = stack.back().first;
 
     Payload payload{};
     const auto rc = node->Read(key, payload);
+    node->GetMutex()->unlock_shared();
     if (rc == NodeRC::kCompleted) return payload;
     return std::nullopt;
   }
@@ -429,6 +430,37 @@ class BTree
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto pos = current_node->SearchChild(key, range_is_closed);
+      current_node = current_node->template GetPayload<Node_t *>(pos);
+      stack.emplace_back(current_node, pos);
+    }
+
+    return stack;
+  }
+
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @return a stack of traversed nodes.
+   */
+  [[nodiscard]] auto
+  SearchLeafNodeForRead(  //
+      const Key &key,
+      const bool range_is_closed) const  //
+      -> NodeStack
+  {
+    NodeStack stack{};
+    stack.reserve(kExpectedTreeHeight);
+    while (!root_->GetMutex()->try_lock_shared()) {
+    }
+    auto *current_node = root_;
+    stack.emplace_back(current_node, 0);
+    while (!current_node->IsLeaf()) {
+      const auto pos = current_node->SearchChild(key, range_is_closed);
+      while (!current_node->template GetPayload<Node_t *>(pos)->GetMutex()->try_lock_shared()) {
+      }
+      current_node->GetMutex()->unlock_shared();
       current_node = current_node->template GetPayload<Node_t *>(pos);
       stack.emplace_back(current_node, pos);
     }

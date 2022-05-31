@@ -273,7 +273,7 @@ class NodeFixture : public testing::Test
     auto *right_node = new Node_t{kLeafFlag};
     node_->template Split<Payload>(right_node);
 
-    const auto l_count = kRecNumInNode / 2;
+    const auto l_count = (kRecNumInNode - 1) / 2 + 1;  // ceiling
     const auto r_count = kRecNumInNode - l_count;
 
     for (size_t i = 0; i < l_count; ++i) {
