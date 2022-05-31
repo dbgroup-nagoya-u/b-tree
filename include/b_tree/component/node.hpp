@@ -119,7 +119,7 @@ class Node
   {
     const auto &high_key = GetHighKey();
     if (!high_key) return true;
-    return Comp{}(key, high_key.value());
+    return !Comp{}(high_key.value(), key);
   }
 
   /**
