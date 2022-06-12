@@ -168,7 +168,8 @@ class Node
   ReleaseSharedLock()  //
       -> void
   {
-    return mutex_.unlock_shared();
+    mutex_.unlock_shared();
+    return;
   }
 
   /**
