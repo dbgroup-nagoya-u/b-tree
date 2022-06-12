@@ -154,13 +154,21 @@ class Node
   }
 
   /**
-   * @return mutex_
+   * @return true if acquire shared_lock
+   * @return false otherwise
    */
   [[nodiscard]] auto
-  GetMutex()  //
-      -> std::shared_mutex *
+  TrySharedLock()  //
+      -> bool
   {
-    return &mutex_;
+    return mutex_.try_lock_shared();
+  }
+
+  auto
+  ReleaseSharedLock()  //
+      -> void
+  {
+    return mutex_.unlock_shared();
   }
 
   /**
@@ -343,6 +351,46 @@ class Node
   }
 
   /**
+   * @brief Get the position of a specified key by using binary search. If there is no
+   * specified key, this returns the minimum metadata index that is greater than the
+   * specified key
+   *
+   * @param key a target key.
+   * @param range_is_closed a flag to indicate that a target key is included.
+   * @return the position of a specified key.
+   */
+  [[nodiscard]] auto
+  SearchChildWithSharedLock(  //
+      const Key &key,
+      const bool range_is_closed)  //
+      -> size_t
+  {
+    int64_t begin_pos = 0;
+    int64_t end_pos = record_count_ - 2;
+    while (begin_pos <= end_pos) {
+      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+
+      const auto &index_key = GetKey(meta_array_[pos]);
+
+      if (Comp{}(key, index_key)) {  // a target key is in a left side
+        end_pos = pos - 1;
+      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+        begin_pos = pos + 1;
+      } else {  // find an equivalent key
+        if (!range_is_closed) ++pos;
+        begin_pos = pos;
+        break;
+      }
+    }
+
+    while (!GetPayload<Node *>(begin_pos)->TrySharedLock()) {
+    }
+    ReleaseSharedLock();
+
+    return begin_pos;
+  }
+
+  /**
    * @brief Get the end position of records for scanning and check it has been finished.
    *
    * @param end_key a pair of a target key and its closed/open-interval flag.
@@ -383,15 +431,17 @@ class Node
   auto
   Read(  //
       const Key &key,
-      Payload &out_payload) const  //
+      Payload &out_payload)  //
       -> NodeRC
   {
     const auto [rc, pos] = SearchRecord(key);
-    if (rc == kKeyNotInserted) return kKeyNotInserted;
-
+    if (rc == kKeyNotInserted) {
+      ReleaseSharedLock();
+      return kKeyNotInserted;
+    }
     const auto meta = meta_array_[pos];
     memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
-
+    ReleaseSharedLock();
     return kCompleted;
   }
 
