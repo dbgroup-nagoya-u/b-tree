@@ -364,7 +364,7 @@ class Node
   SearchChildWithSharedLock(  //
       const Key &key,
       const bool range_is_closed)  //
-      -> size_t
+      -> std::pair<Node *, size_t>
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -388,7 +388,7 @@ class Node
     child->mutex_.lock_shared();
     mutex_.unlock_shared();
 
-    return begin_pos;
+    return {child, begin_pos};
   }
 
   /**
@@ -435,15 +435,15 @@ class Node
       Payload &out_payload)  //
       -> NodeRC
   {
-    const auto [rc, pos] = SearchRecord(key);
-    if (rc == kKeyNotInserted) {
-      ReleaseSharedLock();
-      return kKeyNotInserted;
+    auto [rc, pos] = SearchRecord(key);
+    if (rc == kKeyAlreadyInserted) {
+      const auto meta = meta_array_[pos];
+      memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
+      rc = kCompleted;
     }
-    const auto meta = meta_array_[pos];
-    memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
-    ReleaseSharedLock();
-    return kCompleted;
+
+    mutex_.unlock_shared();
+    return rc;
   }
 
   /*####################################################################################
