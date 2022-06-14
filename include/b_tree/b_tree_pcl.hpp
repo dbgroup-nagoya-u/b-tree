@@ -410,6 +410,19 @@ class BTreePCL
    *##################################################################################*/
 
   /**
+   * @brief Get root node with shared_lock
+   * @return root
+   */
+  [[nodiscard]] auto
+  GetRootWithSharedLock()  //
+      -> Node_t *
+  {
+    while (!mutex_.try_lock_shared()) {
+    }
+    return root_;
+  }
+
+  /**
    * @brief Search a leaf node that may have a target key.
    *
    * @param key a search key.
@@ -446,14 +459,12 @@ class BTreePCL
   [[nodiscard]] auto
   SearchLeafNodeForRead(  //
       const Key &key,
-      const bool range_is_closed) const  //
+      const bool range_is_closed)  //
       -> NodeStack
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
-    while (!root_->TrySharedLock()) {
-    }
-    auto *current_node = root_;
+    auto *current_node = GetRootWithSharedLock();
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos] = current_node->SearchChildWithSharedLock(key, range_is_closed);
@@ -563,6 +574,9 @@ class BTreePCL
 
   // root node of B+tree
   Node_t *root_ = new Node_t{true};
+
+  // mutex for root
+  std::shared_mutex mutex_{};
 };
 }  // namespace dbgroup::index::b_tree
 
