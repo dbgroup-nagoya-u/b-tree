@@ -384,9 +384,9 @@ class Node
       }
     }
 
-    while (!GetPayload<Node *>(begin_pos)->TrySharedLock()) {
-    }
-    ReleaseSharedLock();
+    auto *child = GetPayload<Node *>(begin_pos);
+    child->mutex_.lock_shared();
+    mutex_.unlock_shared();
 
     return begin_pos;
   }
