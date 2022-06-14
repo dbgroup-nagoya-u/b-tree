@@ -414,11 +414,16 @@ class BTreePCL
    * @return root
    */
   [[nodiscard]] auto
-  GetRootWithSharedLock()  //
+  GetRoot(LockType lock_type = kNoMutex)  //
       -> Node_t *
   {
-    while (!mutex_.try_lock_shared()) {
-    }
+    if (lock_type == kSharedMutex)
+      while (!mutex_.try_lock_shared()) {
+      }
+    else if (lock_type == kExclusiveMutex)
+      while (!mutex_.try_lock()) {
+      }
+
     return root_;
   }
 
@@ -432,13 +437,13 @@ class BTreePCL
   [[nodiscard]] auto
   SearchLeafNode(  //
       const Key &key,
-      const bool range_is_closed) const  //
+      const bool range_is_closed)  //
       -> NodeStack
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
 
-    auto *current_node = root_;
+    auto *current_node = GetRoot();
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto pos = current_node->SearchChild(key, range_is_closed);
@@ -464,7 +469,7 @@ class BTreePCL
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
-    auto *current_node = GetRootWithSharedLock();
+    auto *current_node = GetRoot(kSharedMutex);
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos] = current_node->SearchChildWithSharedLock(key, range_is_closed);
@@ -481,10 +486,10 @@ class BTreePCL
    * @return a stack of traversed nodes.
    */
   [[nodiscard]] auto
-  SearchLeftmostLeaf() const  //
+  SearchLeftmostLeaf()  //
       -> Node_t *
   {
-    auto *current_node = root_;
+    auto *current_node = GetRoot();
     while (!current_node->IsLeaf()) {
       current_node = current_node->template GetPayload<Node_t *>(0);
     }
