@@ -214,7 +214,6 @@ class BTreePCL
 
     Payload payload{};
     const auto rc = node->Read(key, payload);
-    node->GetMutex()->unlock_shared();
     if (rc == NodeRC::kCompleted) return payload;
     return std::nullopt;
   }
@@ -452,16 +451,13 @@ class BTreePCL
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
-    while (!root_->GetMutex()->try_lock_shared()) {
+    while (!root_->TrySharedLock()) {
     }
     auto *current_node = root_;
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
-      const auto pos = current_node->SearchChild(key, range_is_closed);
-      while (!current_node->template GetPayload<Node_t *>(pos)->GetMutex()->try_lock_shared()) {
-      }
-      current_node->GetMutex()->unlock_shared();
-      current_node = current_node->template GetPayload<Node_t *>(pos);
+      const auto [next_node, pos] = current_node->SearchChildWithSharedLock(key, range_is_closed);
+      current_node = next_node;
       stack.emplace_back(current_node, pos);
     }
 

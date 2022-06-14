@@ -274,7 +274,6 @@ class NodeFixture : public testing::Test
     node_->template Split<Payload>(right_node);
 
     const auto l_count = (kRecNumInNode - 1) / 2 + 1;  // ceiling
-    const auto r_count = kRecNumInNode - l_count;
 
     for (size_t i = 0; i < l_count; ++i) {
       VerifyRead(i, i, kExpectSuccess);
