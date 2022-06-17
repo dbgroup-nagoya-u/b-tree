@@ -115,9 +115,14 @@ class BTreePCL
     {
       while (true) {
         if (current_pos_ < record_count_) return true;
-        if (is_end_) return false;
-
-        node_ = node_->GetNextNode();
+        if (is_end_) {
+          node_->ReleaseSharedLock();
+          return false;
+        }
+        auto *next_node = node_->GetNextNode();
+        next_node->AcquireSharedLock();
+        node_->ReleaseSharedLock();
+        node_ = next_node;
         current_pos_ = 0;
         std::tie(is_end_, record_count_) = node_->SearchEndPositionFor(end_key_);
       }
@@ -236,7 +241,7 @@ class BTreePCL
 
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
-      const auto &stack = SearchLeafNode(key, is_closed);
+      const auto &stack = SearchLeafNodeForRead(key, is_closed);
       node = stack.back().first;
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
@@ -271,7 +276,7 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNode(key, true);
+    auto &&stack = SearchLeafNodeForWrite(key, true);
     auto *node = stack.back().first;
 
     while (true) {
@@ -279,17 +284,22 @@ class BTreePCL
 
       switch (rc) {
         case NodeRC::kCompleted:
+          if (!stack.empty()) stack.pop_back();
+          if (node == root_) mutex_.unlock();
+          ReleaseExclusiveLocks(stack);
           return kSuccess;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
           if (!node->IncludeKey(key)) {
             node = node->GetNextNode();
-            stack.back().first = node;
           }
+          node->AcquireExclusiveLock();
+          stack.emplace_back(node, 0);
           break;
         case NodeRC::kNeedConsolidation:
         default:
           node->template Consolidate<Payload>();
+          if (node == root_) mutex_.unlock();
           break;
       }
     }
@@ -316,7 +326,7 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNode(key, true);
+    auto &&stack = SearchLeafNodeForWrite(key, true);
     auto *node = stack.back().first;
 
     while (true) {
@@ -324,15 +334,20 @@ class BTreePCL
 
       switch (rc) {
         case NodeRC::kCompleted:
+          if (!stack.empty()) stack.pop_back();
+          if (node == root_) mutex_.unlock();
+          ReleaseExclusiveLocks(stack);
           return kSuccess;
         case NodeRC::kKeyAlreadyInserted:
+          ReleaseExclusiveLocks(stack);
           return kKeyExist;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
           if (!node->IncludeKey(key)) {
             node = node->GetNextNode();
-            stack.back().first = node;
           }
+          node->AcquireExclusiveLock();
+          stack.emplace_back(node, 0);
           break;
         case NodeRC::kNeedConsolidation:
         default:
@@ -362,11 +377,16 @@ class BTreePCL
       const Payload &payload)  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNode(key, true);
+    auto &&stack = SearchLeafNodeForWrite(key, true);
     auto *node = stack.back().first;
 
     const auto rc = node->template Update<Payload>(key, payload);
-    if (rc == NodeRC::kCompleted) return kSuccess;
+    if (rc == NodeRC::kCompleted) {
+      stack.pop_back();
+      ReleaseExclusiveLocks(stack);
+      return kSuccess;
+    }
+    ReleaseExclusiveLocks(stack);
     return kKeyNotExist;
   }
 
@@ -385,15 +405,19 @@ class BTreePCL
   Delete(const Key &key)  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNode(key, true);
+    auto &&stack = SearchLeafNodeForWrite(key, true);
     auto *node = stack.back().first;
 
     const auto rc = node->Delete(key);
 
-    if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
+    if (rc == NodeRC::kKeyNotInserted) {
+      ReleaseExclusiveLocks(stack);
+      return kKeyNotExist;
+    }
     if (rc == NodeRC::kNeedMerge) {
       Merge<Payload>(stack);
     }
+    ReleaseExclusiveLocks(stack);
     return kSuccess;
   }
 
@@ -410,20 +434,26 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Get root node with shared_lock
+   * @brief Get root node with shared lock
    * @return root
    */
   [[nodiscard]] auto
-  GetRoot(LockType lock_type = kNoMutex)  //
+  GetRootForRead()  //
       -> Node_t *
   {
-    if (lock_type == kSharedMutex)
-      while (!mutex_.try_lock_shared()) {
-      }
-    else if (lock_type == kExclusiveMutex)
-      while (!mutex_.try_lock()) {
-      }
+    mutex_.lock_shared();
+    return root_;
+  }
 
+  /**
+   * @brief Get root node with exclusive lock
+   * @return root
+   */
+  [[nodiscard]] auto
+  GetRootForWrite()  //
+      -> Node_t *
+  {
+    mutex_.lock();
     return root_;
   }
 
@@ -435,7 +465,7 @@ class BTreePCL
    * @return a stack of traversed nodes.
    */
   [[nodiscard]] auto
-  SearchLeafNode(  //
+  SearchLeafNodeForWrite(  //
       const Key &key,
       const bool range_is_closed)  //
       -> NodeStack
@@ -443,14 +473,16 @@ class BTreePCL
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
 
-    auto *current_node = GetRoot();
+    auto *current_node = GetRootForWrite();
+    current_node->AcquireExclusiveLock();
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
-      const auto pos = current_node->SearchChild(key, range_is_closed);
-      current_node = current_node->template GetPayload<Node_t *>(pos);
+      const auto [next_node, pos, is_latched] =
+          current_node->SearchChildWithExclusiveLock(key, range_is_closed);
+      if (!is_latched) ReleaseExclusiveLocks(stack);
+      current_node = next_node;
       stack.emplace_back(current_node, pos);
     }
-
     return stack;
   }
 
@@ -469,15 +501,31 @@ class BTreePCL
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
-    auto *current_node = GetRoot(kSharedMutex);
+    auto *current_node = GetRootForRead();  // tree-latch
+    current_node->AcquireSharedLock();      // root-latch
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos] = current_node->SearchChildWithSharedLock(key, range_is_closed);
+      if (current_node == root_) mutex_.unlock_shared();  // unlatch tree-latch
       current_node = next_node;
       stack.emplace_back(current_node, pos);
     }
 
+    if (root_->IsLeaf()) mutex_.unlock_shared();  // unlatch tree-latch
     return stack;
+  }
+
+  auto
+  ReleaseExclusiveLocks(NodeStack &stack)  //
+      -> void
+  {
+    while (!stack.empty()) {
+      auto [node, pos] = stack.back();
+      stack.pop_back();
+      node->ReleaseExclusiveLock();
+      if (node == root_) mutex_.unlock();
+    }
+    return;
   }
 
   /**
@@ -489,11 +537,17 @@ class BTreePCL
   SearchLeftmostLeaf()  //
       -> Node_t *
   {
-    auto *current_node = GetRoot();
+    auto *current_node = GetRootForRead();
+    current_node->AcquireSharedLock();
     while (!current_node->IsLeaf()) {
-      current_node = current_node->template GetPayload<Node_t *>(0);
+      auto *child = current_node->template GetPayload<Node_t *>(0);
+      child->AcquireSharedLock();
+      if (current_node == root_) mutex_.unlock_shared();  // unlatch tree-latch
+      current_node = child;
+      current_node->ReleaseSharedLock();
     }
 
+    if (root_->IsLeaf()) mutex_.unlock_shared();  // unlatch tree-latch
     return current_node;
   }
 
@@ -518,6 +572,7 @@ class BTreePCL
     if (stack.empty()) {
       // if node is root, create a new root
       root_ = new Node_t{node, r_node};
+      mutex_.unlock();
     } else {
       auto *parent = stack.back().first;
       const auto rc = parent->InsertChild(node, r_node, pos);
@@ -549,18 +604,29 @@ class BTreePCL
         // if a root node has only one child, shrink a tree
         root_ = node->template GetPayload<Node_t *>(0);
         delete node;
+      } else {
+        node->ReleaseExclusiveLock();
       }
+      mutex_.unlock();
       return;
     }
 
     auto *parent = stack.back().first;
 
     // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) return;
+    if (pos == parent->GetRecordCount() - 1) {
+      node->ReleaseExclusiveLock();
+      return;
+    }
 
     // check the right-sibling node has enough capacity for merging
     auto *right_node = parent->template GetPayload<Node_t *>(pos + 1);
-    if (!node->CanMerge(right_node)) return;
+    if (!node->CanMerge(right_node)) {
+      node->ReleaseExclusiveLock();
+      return;
+    }
+
+    right_node->AcquireExclusiveLock();
 
     // perform merging
     node->template Merge<Value>(right_node);

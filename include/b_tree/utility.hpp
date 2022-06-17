@@ -50,16 +50,6 @@ enum ReturnCode {
 };
 
 /**
- * @brief Lock type for B_TREE.
- *
- */
-enum LockType {
-  kNoMutex = 0,
-  kSharedMutex,
-  kExclusiveMutex,
-};
-
-/**
  * @brief Compare binary keys as CString. The end of every key must be '\\0'.
  *
  */

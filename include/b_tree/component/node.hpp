@@ -153,15 +153,12 @@ class Node
     return is_leaf_;
   }
 
-  /**
-   * @return true if acquire shared_lock
-   * @return false otherwise
-   */
-  [[nodiscard]] auto
-  TrySharedLock()  //
-      -> bool
+  auto
+  AcquireSharedLock()  //
+      -> void
   {
-    return mutex_.try_lock_shared();
+    mutex_.lock_shared();
+    return;
   }
 
   auto
@@ -169,6 +166,22 @@ class Node
       -> void
   {
     mutex_.unlock_shared();
+    return;
+  }
+
+  auto
+  AcquireExclusiveLock()  //
+      -> void
+  {
+    mutex_.lock();
+    return;
+  }
+
+  auto
+  ReleaseExclusiveLock()  //
+      -> void
+  {
+    mutex_.unlock();
     return;
   }
 
@@ -325,10 +338,10 @@ class Node
    * @return the position of a specified key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
+  SearchChildWithExclusiveLock(  //
       const Key &key,
-      const bool range_is_closed) const  //
-      -> size_t
+      const bool range_is_closed)  //
+      -> std::tuple<Node *, size_t, bool>
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -348,7 +361,23 @@ class Node
       }
     }
 
-    return begin_pos;
+    auto *child = GetPayload<Node *>(begin_pos);
+    child->mutex_.lock();
+
+    // don't release lock when child node should be split or merged
+
+    // if there is a possibility of split
+    const auto child_inserted_size = sizeof(Metadata) * (child->record_count_ + 1)
+                                     + child->block_size_ + kMaxVarDataSize - child->deleted_size_;
+    if (child_inserted_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
+      return {child, begin_pos, true};
+
+    // if there is a possibility of merge
+    const auto child_deleted_size =
+        sizeof(Metadata) * (child->record_count_ - 1) + child->block_size_ - child->deleted_size_;
+    if (child_deleted_size < kMaxVarDataSize + kMinUsedSpaceSize) return {child, begin_pos, true};
+
+    return {child, begin_pos, false};
   }
 
   /**
@@ -399,7 +428,7 @@ class Node
    * @retval 2nd: the end position for scanning.
    */
   [[nodiscard]] auto
-  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> std::pair<bool, size_t>
   {
     const auto is_end = IsRightmostOf(end_key);
@@ -498,6 +527,7 @@ class Node
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
     }
 
+    mutex_.unlock();
     return kCompleted;
   }
 
@@ -549,6 +579,7 @@ class Node
     meta_array_[pos] = Metadata{offset, key_length, total_length};
     record_count_ += 1;
 
+    mutex_.unlock();
     return kCompleted;
   }
 
@@ -586,6 +617,7 @@ class Node
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
 
+    mutex_.unlock();
     return kCompleted;
   }
 
@@ -772,6 +804,8 @@ class Node
     // copy temporal node to this node
     memcpy(&high_meta_, &temp_node_->high_meta_, sizeof(Metadata) * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
+
+    mutex_.unlock();
   }
 
   /**
@@ -801,6 +835,8 @@ class Node
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     next_ = r_node->next_;
+
+    mutex_.unlock();
   }
 
  private:
