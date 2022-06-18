@@ -365,7 +365,6 @@ class Node
     auto *child = GetPayload<Node *>(begin_pos);
     child->mutex_.lock();
 
-    // don't release lock when child node should be split or merged
     const auto PayLen = child->is_leaf_ ? sizeof(Payload) : sizeof(Node *);
 
     // check if the child may be split
