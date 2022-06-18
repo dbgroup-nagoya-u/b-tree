@@ -337,6 +337,7 @@ class Node
    * @param range_is_closed a flag to indicate that a target key is included.
    * @return the position of a specified key.
    */
+  template <class Payload>
   [[nodiscard]] auto
   SearchChildWithExclusiveLock(  //
       const Key &key,
@@ -365,17 +366,20 @@ class Node
     child->mutex_.lock();
 
     // don't release lock when child node should be split or merged
+    const auto PayLen = child->is_leaf_ ? sizeof(Payload) : sizeof(Node *);
 
-    // if there is a possibility of split
+    // check if the child may be split
     const auto child_inserted_size = sizeof(Metadata) * (child->record_count_ + 1)
-                                     + child->block_size_ + kMaxVarDataSize - child->deleted_size_;
-    if (child_inserted_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
+                                     + child->block_size_ + kMaxVarDataSize + PayLen
+                                     - child->deleted_size_;
+    if (child_inserted_size > kPageSize - kHeaderLength - kMinFreeSpaceSize)
       return {child, begin_pos, false};
 
-    // if there is a possibility of merge
+    // check if the child may be merged
     const auto child_deleted_size =
         sizeof(Metadata) * (child->record_count_ - 1) + child->block_size_ - child->deleted_size_;
-    if (child_deleted_size < kMaxVarDataSize + kMinUsedSpaceSize) return {child, begin_pos, false};
+    if (child_deleted_size < PayLen + kMaxVarDataSize + kMinUsedSpaceSize)
+      return {child, begin_pos, false};
 
     return {child, begin_pos, true};
   }
@@ -752,6 +756,7 @@ class Node
   Consolidate()
   {
     // copy records to a temporal node
+    temp_node_->mutex_.lock();
     auto offset = temp_node_->CopyHighKeyFrom(this, high_meta_);
     offset = temp_node_->template CopyRecordsFrom<Payload>(this, 0, record_count_, 0, offset);
 
@@ -762,6 +767,7 @@ class Node
     // copy consolidated records to the original node
     memcpy(meta_array_, temp_node_->meta_array_, sizeof(Metadata) * (record_count_));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
+    temp_node_->mutex_.unlock();
   }
 
   /**
@@ -778,6 +784,7 @@ class Node
     size_t offset = kPageSize;
     size_t l_count = 0;
     const auto target_offset = offset - (block_size_ - deleted_size_) / 2;
+    temp_node_->mutex_.lock();
     while (offset > target_offset) {
       const auto target_meta = meta_array_[l_count];
       offset = temp_node_->template CopyRecordFrom<Payload>(this, target_meta, l_count++, offset);
@@ -803,7 +810,7 @@ class Node
     // copy temporal node to this node
     memcpy(&high_meta_, &temp_node_->high_meta_, sizeof(Metadata) * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
-
+    temp_node_->mutex_.unlock();
     mutex_.unlock();
   }
 
@@ -817,6 +824,7 @@ class Node
   void
   Merge(const Node *r_node)
   {
+    temp_node_->mutex_.lock();
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node, r_node->high_meta_);
 
@@ -824,6 +832,7 @@ class Node
     offset = temp_node_->template CopyRecordsFrom<Payload>(this, 0, record_count_, 0, offset);
     memcpy(&high_meta_, &temp_node_->high_meta_, sizeof(Metadata) * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
+    temp_node_->mutex_.unlock();
 
     // copy right records to this nodes
     const auto r_count = r_node->GetRecordCount();

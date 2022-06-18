@@ -17,16 +17,8 @@ namespace dbgroup::index::b_tree::component
 
 constexpr size_t kN = 1e5;
 constexpr size_t kKeyNumForTest = kN * kThreadNum / 2;
-constexpr bool kLeafFlag = true;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
-constexpr bool kExpectKeyExist = true;
-constexpr bool kExpectKeyNotExist = false;
-constexpr bool kWriteTwice = true;
-constexpr bool kWithWrite = true;
-constexpr bool kWithDelete = true;
-constexpr bool kShuffled = true;
-constexpr bool kRangeClosed = true;
 
 template <class KeyType, class PayloadType>
 struct KeyPayload {
@@ -51,7 +43,12 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   using BTreePCL_t = BTreePCL<Key, Payload, KeyComp>;
 
  protected:
-  enum WriteType { kWrite, kInsert, kUpdate, kDelete };
+  enum WriteType {
+    kWrite,
+    kInsert,
+    kUpdate,
+    kDelete,
+  };
 
   struct Operation {
     constexpr Operation(  //
@@ -71,12 +68,6 @@ class BTreePCLFixture : public testing::Test  // NOLINT
    *##############################################################################################*/
 
   static constexpr size_t kKeyLen = GetDataLength<Key>();
-  static constexpr size_t kPayLen = GetDataLength<Payload>();
-  static constexpr size_t kRecLen = kKeyLen + kPayLen;
-  static constexpr size_t kRecNumInNode =
-      (kPageSize - kHeaderLength) / (kRecLen + sizeof(Metadata));
-  static constexpr size_t kMaxRecNumForTest = 2 * kRecNumInNode * kRecNumInNode;
-  static constexpr size_t kKeyNumForTest = 2 * kRecNumInNode * kRecNumInNode + 2;
 
   /*################################################################################################
    * Setup/Teardown
@@ -96,20 +87,8 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   {
     ReleaseTestData(keys_, kKeyNumForTest);      // NOLINT
     ReleaseTestData(payloads_, kKeyNumForTest);  // NOLINT
+
     b_tree_pcl_.reset(nullptr);
-  }
-
-  /*####################################################################################
-   * Operation wrappers
-   *##################################################################################*/
-
-  auto
-  Insert(  //
-      const size_t key_id,
-      const size_t payload_id)  //
-      -> ReturnCode
-  {
-    return b_tree_pcl_->Insert(keys_[key_id], payloads_[payload_id], kKeyLen);
   }
 
   /*####################################################################################
@@ -371,10 +350,6 @@ TYPED_TEST_SUITE(BTreePCLFixture, TestTargets);
 /*######################################################################################
  * Unit test definitions
  *####################################################################################*/
-
-/*--------------------------------------------------------------------------------------
- * Read operation tests
- *------------------------------------------------------------------------------------*/
 
 TYPED_TEST(BTreePCLFixture, WriteWithMultiThreadsReadWrittenPayloads)
 {  //

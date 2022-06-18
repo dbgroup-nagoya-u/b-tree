@@ -219,6 +219,8 @@ class BTreePCL
 
     Payload payload{};
     const auto rc = node->Read(key, payload);
+
+    if (node == root_) mutex_.unlock_shared();  // unlatch tree-latch
     if (rc == NodeRC::kCompleted) return payload;
     return std::nullopt;
   }
@@ -467,7 +469,7 @@ class BTreePCL
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos, child_is_safe] =
-          current_node->SearchChildWithExclusiveLock(key, range_is_closed);
+          current_node->template SearchChildWithExclusiveLock<Payload>(key, range_is_closed);
       if (child_is_safe) ReleaseExclusiveLocks(stack);
       current_node = next_node;
       stack.emplace_back(current_node, pos);
@@ -500,7 +502,6 @@ class BTreePCL
       stack.emplace_back(current_node, pos);
     }
 
-    if (root_->IsLeaf()) mutex_.unlock_shared();  // unlatch tree-latch
     return stack;
   }
 
@@ -610,12 +611,12 @@ class BTreePCL
 
     // check the right-sibling node has enough capacity for merging
     auto *right_node = parent->template GetPayload<Node_t *>(pos + 1);
+    right_node->AcquireExclusiveLock();
     if (!node->CanMerge(right_node)) {
       node->ReleaseExclusiveLock();
+      right_node->ReleaseExclusiveLock();
       return;
     }
-
-    right_node->AcquireExclusiveLock();
 
     // perform merging
     node->template Merge<Value>(right_node);
