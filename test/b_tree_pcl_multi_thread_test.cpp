@@ -1,3 +1,6 @@
+#include <future>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <vector>
@@ -12,6 +15,8 @@ namespace dbgroup::index::b_tree::component
  * Global constants
  *####################################################################################*/
 
+constexpr size_t kN = 1e5;
+constexpr size_t kKeyNumForTest = kN * kThreadNum / 2;
 constexpr bool kLeafFlag = true;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
@@ -46,6 +51,21 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   using BTreePCL_t = BTreePCL<Key, Payload, KeyComp>;
 
  protected:
+  enum WriteType { kWrite, kInsert, kUpdate, kDelete };
+
+  struct Operation {
+    constexpr Operation(  //
+        const WriteType type,
+        const size_t k_id,
+        const size_t p_id)
+        : w_type{type}, key_id{k_id}, payload_id{p_id}
+    {
+    }
+
+    WriteType w_type{};
+    size_t key_id{};
+    size_t payload_id{};
+  };
   /*################################################################################################
    * Internal constants
    *##############################################################################################*/
@@ -96,25 +116,103 @@ class BTreePCLFixture : public testing::Test  // NOLINT
    * Utility functions
    *##################################################################################*/
 
-  [[nodiscard]] auto
-  CreateTargetIDs(  //
-      const size_t rec_num,
-      const bool is_shuffled) const  //
+  auto
+  PerformWriteOperation(const Operation &ops)  //
+      -> ReturnCode
+  {
+    const auto &key = keys_[ops.key_id];
+    const auto &payload = payloads_[ops.payload_id];
+
+    switch (ops.w_type) {
+      case kInsert:
+        return b_tree_pcl_->Insert(key, payload, kKeyLen);
+      case kUpdate:
+        return b_tree_pcl_->Update(key, payload);
+      case kDelete:
+        return b_tree_pcl_->Delete(key);
+      case kWrite:
+      default:
+        return b_tree_pcl_->Write(key, payload, kKeyLen);
+    }
+  }
+
+  void
+  RunWorker(  //
+      const WriteType w_type,
+      const size_t rand_seed,
+      std::promise<std::vector<size_t>> p)
+  {
+    std::vector<Operation> operations{};
+    std::vector<size_t> written_ids{};
+    operations.reserve(kN);
+    written_ids.reserve(kN);
+
+    {  // create a lock to prevent a main thread
+      const std::shared_lock guard{main_lock_};
+
+      // prepare operations to be executed
+      std::mt19937_64 rand_engine{rand_seed};
+      for (size_t i = 0; i < kN; ++i) {
+        const auto id = id_dist_(rand_engine);
+        switch (w_type) {
+          case kUpdate:
+            operations.emplace_back(w_type, id, id + 1);
+            break;
+          case kWrite:
+          case kInsert:
+          case kDelete:
+          default:
+            operations.emplace_back(w_type, id, id);
+        }
+      }
+    }
+
+    {  // wait for a main thread to release a lock
+      const std::shared_lock lock{worker_lock_};
+
+      // perform and gather results
+      for (const auto &ops : operations) {
+        if (PerformWriteOperation(ops) == kSuccess) {
+          written_ids.emplace_back(ops.key_id);
+        }
+      }
+    }
+
+    // return results via promise
+    p.set_value(std::move(written_ids));
+  }
+
+  auto
+  RunOverMultiThread(const WriteType w_type)  //
       -> std::vector<size_t>
   {
-    std::mt19937_64 rand_engine{kRandomSeed};
+    std::vector<std::future<std::vector<size_t>>> futures{};
 
-    std::vector<size_t> target_ids{};
-    target_ids.reserve(rec_num);
-    for (size_t i = 0; i < rec_num; ++i) {
-      target_ids.emplace_back(i);
+    {  // create a lock to prevent workers from executing
+      const std::unique_lock guard{worker_lock_};
+
+      // run a function over multi-threads with promise
+      std::mt19937_64 rand_engine{kRandomSeed};
+      for (size_t i = 0; i < kThreadNum; ++i) {
+        std::promise<std::vector<size_t>> p{};
+        futures.emplace_back(p.get_future());
+        const auto seed = rand_engine();
+        std::thread{&BTreePCLFixture::RunWorker, this, w_type, seed, std::move(p)}.detach();
+      }
+
+      // wait for all workers to finish initialization
+      const std::unique_lock lock{main_lock_};
     }
 
-    if (is_shuffled) {
-      std::shuffle(target_ids.begin(), target_ids.end(), rand_engine);
+    // gather results via promise-future
+    std::vector<size_t> written_ids{};
+    written_ids.reserve(kN * kThreadNum);
+    for (auto &&future : futures) {
+      const auto &tmp_written = future.get();
+      written_ids.insert(written_ids.end(), tmp_written.begin(), tmp_written.end());
     }
 
-    return target_ids;
+    return written_ids;
   }
 
   /*####################################################################################
@@ -127,12 +225,12 @@ class BTreePCLFixture : public testing::Test  // NOLINT
       const size_t expected_id,
       const bool expect_success)
   {
-    const auto read_val = b_tree_pcl_->Read(keys_[key_id]);
+    const auto &read_val = b_tree_pcl_->Read(keys_[key_id]);
     if (expect_success) {
       EXPECT_TRUE(read_val);
 
-      const auto expected_val = payloads_[expected_id];
-      const auto actual_val = read_val.value();
+      const auto &expected_val = payloads_[expected_id];
+      const auto &actual_val = read_val.value();
       EXPECT_TRUE(component::IsEqual<PayloadComp>(expected_val, actual_val));
     } else {
       EXPECT_FALSE(read_val);
@@ -140,57 +238,104 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   }
 
   void
-  VerifyWrite(  //
-      const size_t key_id,
-      const size_t pay_id)
+  VerifyWrittenValuesWithMultiThreads(  //
+      const std::vector<size_t> &written_ids,
+      const WriteType w_type)
   {
-    auto rc = b_tree_pcl_->Write(keys_[key_id], payloads_[pay_id], kKeyLen);
-
-    EXPECT_EQ(ReturnCode::kSuccess, rc);
-  }
-
-  void
-  VerifyInsert(  //
-      const size_t key_id,
-      const size_t payload_id,
-      const bool expect_success)
-  {
-    ReturnCode expected_rc = b_tree::kSuccess;
-    expected_rc = (expect_success) ? expected_rc : b_tree::kKeyExist;
-    auto rc = Insert(key_id, payload_id);
-    EXPECT_EQ(expected_rc, rc);
-  }
-
-  void
-  VerifyReadMultiThreads(  //
-      const bool is_shuffled)
-  {
-    const auto &target_ids = CreateTargetIDs(kMaxRecNumForTest, is_shuffled);
-    // Insert key with single thread
-    for (size_t i = 0; i < kMaxRecNumForTest; i++) {
-      const auto id = target_ids.at(i);
-      VerifyInsert(id, id, kExpectSuccess);
-    }
-
-    // Read payload with multi-threads
-    std::vector<std::thread> threads{};
-    threads.reserve(kThreadNum);
-
-    auto f = [&]() {
-      for (size_t i = 0; i < kMaxRecNumForTest; i++) {
-        const auto id = target_ids.at(i);
-        VerifyRead(id, id, kExpectSuccess);
+    auto f = [&](const size_t begin_pos, const size_t n) {
+      const auto end_pos = begin_pos + n;
+      for (size_t i = begin_pos; i < end_pos; ++i) {
+        const auto id = written_ids.at(i);
+        switch (w_type) {
+          case kDelete:
+            VerifyRead(id, id, kExpectFailed);
+            break;
+          case kUpdate:
+            VerifyRead(id, id + 1, kExpectSuccess);
+            break;
+          case kWrite:
+          case kInsert:
+          default:
+            VerifyRead(id, id, kExpectSuccess);
+            break;
+        }
       }
     };
 
-    for (size_t i = 0; i < kThreadNum; ++i) {
-      threads.emplace_back(f);
-    }
+    const auto vec_size = written_ids.size();
+    std::vector<std::thread> threads{};
+    threads.reserve(kThreadNum);
 
+    size_t begin_pos = 0;
+    for (size_t i = 0; i < kThreadNum; ++i) {
+      const size_t n = (vec_size + i) / kThreadNum;
+      threads.emplace_back(f, begin_pos, n);
+    }
     for (auto &&t : threads) {
       t.join();
     }
   }
+
+  void
+  VerifyWrite()
+  {
+    // reading written records succeeds
+    auto &&written_ids = RunOverMultiThread(kWrite);
+    VerifyWrittenValuesWithMultiThreads(written_ids, kWrite);
+  }
+
+  void
+  VerifyInsert()
+  {
+    // insert operations do not insert duplicated records
+    auto &&written_ids = RunOverMultiThread(kInsert);
+    std::sort(written_ids.begin(), written_ids.end());
+    const auto &end_it = std::unique(written_ids.begin(), written_ids.end());
+    EXPECT_EQ(std::distance(end_it, written_ids.end()), 0);
+
+    // reading inserted records succeeds
+    VerifyWrittenValuesWithMultiThreads(written_ids, kInsert);
+
+    // inserting duplicate records fails
+    written_ids = RunOverMultiThread(kInsert);
+    EXPECT_EQ(0, written_ids.size());
+  }
+
+  void
+  VerifyUpdate()
+  {
+    // updating not inserted records fails
+    auto &&written_ids = RunOverMultiThread(kUpdate);
+    EXPECT_EQ(0, written_ids.size());
+
+    // updating inserted records succeeds
+    written_ids = RunOverMultiThread(kInsert);
+    auto &&updated_ids = RunOverMultiThread(kUpdate);
+    // update operations may succeed multiple times, so remove duplications
+    std::sort(updated_ids.begin(), updated_ids.end());
+    updated_ids.erase(std::unique(updated_ids.begin(), updated_ids.end()), updated_ids.end());
+    EXPECT_EQ(written_ids.size(), updated_ids.size());
+
+    // updated values must be read
+    VerifyWrittenValuesWithMultiThreads(written_ids, kUpdate);
+  }
+
+  void
+  VerifyDelete()
+  {
+    // deleting not inserted records fails
+    auto &&written_ids = RunOverMultiThread(kDelete);
+    EXPECT_EQ(0, written_ids.size());
+
+    // deleting inserted records succeeds
+    written_ids = RunOverMultiThread(kInsert);
+    auto &&deleted_ids = RunOverMultiThread(kDelete);
+    EXPECT_EQ(written_ids.size(), deleted_ids.size());
+
+    // reading deleted records fails
+    VerifyWrittenValuesWithMultiThreads(written_ids, kDelete);
+  }
+
   /*################################################################################################
    * Internal member variables
    *##############################################################################################*/
@@ -200,6 +345,12 @@ class BTreePCLFixture : public testing::Test  // NOLINT
   Payload payloads_[kKeyNumForTest]{};
 
   std::unique_ptr<BTreePCL_t> b_tree_pcl_{nullptr};
+
+  std::uniform_int_distribution<size_t> id_dist_{0, kKeyNumForTest - 2};
+
+  std::shared_mutex main_lock_{};
+
+  std::shared_mutex worker_lock_{};
 };
 
 /*######################################################################################
@@ -225,14 +376,24 @@ TYPED_TEST_SUITE(BTreePCLFixture, TestTargets);
  * Read operation tests
  *------------------------------------------------------------------------------------*/
 
-TYPED_TEST(BTreePCLFixture, ReadWithEmptyIndexFail)
+TYPED_TEST(BTreePCLFixture, WriteWithMultiThreadsReadWrittenPayloads)
 {  //
-  TestFixture::VerifyRead(0, 0, kExpectFailed);
+  TestFixture::VerifyWrite();
 }
 
-TYPED_TEST(BTreePCLFixture, ReadWithMultiThreadSuccess)
+TYPED_TEST(BTreePCLFixture, InsertWithMultiThreadsReadInsertedPayloads)
 {  //
-  TestFixture::VerifyReadMultiThreads(true);
+  TestFixture::VerifyInsert();
+}
+
+TYPED_TEST(BTreePCLFixture, UpdateWithMultiThreadsReadUpdatedPayloads)
+{  //
+  TestFixture::VerifyUpdate();
+}
+
+TYPED_TEST(BTreePCLFixture, DeleteWithMultiThreadsReadDeletedKeysFail)
+{  //
+  TestFixture::VerifyDelete();
 }
 
 }  // namespace dbgroup::index::b_tree::component
