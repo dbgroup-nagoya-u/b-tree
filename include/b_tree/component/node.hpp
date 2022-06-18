@@ -370,14 +370,14 @@ class Node
     const auto child_inserted_size = sizeof(Metadata) * (child->record_count_ + 1)
                                      + child->block_size_ + kMaxVarDataSize - child->deleted_size_;
     if (child_inserted_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
-      return {child, begin_pos, true};
+      return {child, begin_pos, false};
 
     // if there is a possibility of merge
     const auto child_deleted_size =
         sizeof(Metadata) * (child->record_count_ - 1) + child->block_size_ - child->deleted_size_;
-    if (child_deleted_size < kMaxVarDataSize + kMinUsedSpaceSize) return {child, begin_pos, true};
+    if (child_deleted_size < kMaxVarDataSize + kMinUsedSpaceSize) return {child, begin_pos, false};
 
-    return {child, begin_pos, false};
+    return {child, begin_pos, true};
   }
 
   /**
@@ -617,7 +617,6 @@ class Node
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
 
-    mutex_.unlock();
     return kCompleted;
   }
 

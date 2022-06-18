@@ -290,16 +290,13 @@ class BTreePCL
           return kSuccess;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IncludeKey(key)) {
-            node = node->GetNextNode();
-          }
+          if (!node->IncludeKey(key)) node = node->GetNextNode();
           node->AcquireExclusiveLock();
           stack.emplace_back(node, 0);
           break;
         case NodeRC::kNeedConsolidation:
         default:
           node->template Consolidate<Payload>();
-          if (node == root_) mutex_.unlock();
           break;
       }
     }
@@ -343,9 +340,7 @@ class BTreePCL
           return kKeyExist;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IncludeKey(key)) {
-            node = node->GetNextNode();
-          }
+          if (!node->IncludeKey(key)) node = node->GetNextNode();
           node->AcquireExclusiveLock();
           stack.emplace_back(node, 0);
           break;
@@ -381,12 +376,8 @@ class BTreePCL
     auto *node = stack.back().first;
 
     const auto rc = node->template Update<Payload>(key, payload);
-    if (rc == NodeRC::kCompleted) {
-      stack.pop_back();
-      ReleaseExclusiveLocks(stack);
-      return kSuccess;
-    }
     ReleaseExclusiveLocks(stack);
+    if (rc == NodeRC::kCompleted) return kSuccess;
     return kKeyNotExist;
   }
 
@@ -410,14 +401,12 @@ class BTreePCL
 
     const auto rc = node->Delete(key);
 
-    if (rc == NodeRC::kKeyNotInserted) {
-      ReleaseExclusiveLocks(stack);
-      return kKeyNotExist;
-    }
     if (rc == NodeRC::kNeedMerge) {
       Merge<Payload>(stack);
     }
     ReleaseExclusiveLocks(stack);
+
+    if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
     return kSuccess;
   }
 
@@ -473,13 +462,13 @@ class BTreePCL
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
 
-    auto *current_node = GetRootForWrite();
-    current_node->AcquireExclusiveLock();
+    auto *current_node = GetRootForWrite();  // tree-latch
+    current_node->AcquireExclusiveLock();    // root-latch
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
-      const auto [next_node, pos, is_latched] =
+      const auto [next_node, pos, child_is_safe] =
           current_node->SearchChildWithExclusiveLock(key, range_is_closed);
-      if (!is_latched) ReleaseExclusiveLocks(stack);
+      if (child_is_safe) ReleaseExclusiveLocks(stack);
       current_node = next_node;
       stack.emplace_back(current_node, pos);
     }
@@ -523,7 +512,7 @@ class BTreePCL
       auto [node, pos] = stack.back();
       stack.pop_back();
       node->ReleaseExclusiveLock();
-      if (node == root_) mutex_.unlock();
+      if (node == root_) mutex_.unlock();  // unlatch tree-latch
     }
     return;
   }
