@@ -59,7 +59,7 @@ class Node
    * @param r_node a right child node which is split into
    */
   explicit Node(  //
-      const Node *l_node,
+      Node *l_node,
       const Node *r_node)  //
       : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
   {
@@ -78,6 +78,8 @@ class Node
     meta_array_[1] = Metadata{offset, 0, kPayLen};
 
     block_size_ += l_rec_len + kPayLen;
+
+    l_node->mutex_.unlock();
   }
 
   Node(const Node &) = delete;
@@ -671,7 +673,7 @@ class Node
    */
   auto
   InsertChild(  //
-      const Node *l_node,
+      Node *l_node,
       const Node *r_node,
       const size_t pos)  //
       -> NodeRC
@@ -696,6 +698,8 @@ class Node
     block_size_ += rec_len;
     ++record_count_;
 
+    l_node->mutex_.unlock();
+
     // check this node has sufficient space for future records
     if constexpr (IsVariableLengthData<Key>()) {
       return GetSpaceStatus(kMaxVarDataSize + kPayLen);
@@ -716,7 +720,7 @@ class Node
    */
   auto
   DeleteChild(  //
-      const Node *l_node,
+      Node *l_node,
       const size_t pos)  //
       -> NodeRC
   {
@@ -733,6 +737,8 @@ class Node
     // update this header
     deleted_size_ += key_len + kPayLen;
     --record_count_;
+
+    l_node->mutex_.unlock();
 
     // check if this node should be merged
     const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
@@ -810,7 +816,6 @@ class Node
     memcpy(&high_meta_, &temp_node_->high_meta_, sizeof(Metadata) * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
     temp_node_->mutex_.unlock();
-    mutex_.unlock();
   }
 
   /**
@@ -842,8 +847,6 @@ class Node
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     next_ = r_node->next_;
-
-    mutex_.unlock();
   }
 
  private:
