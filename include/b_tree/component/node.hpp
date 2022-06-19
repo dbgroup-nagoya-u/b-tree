@@ -223,6 +223,15 @@ class Node
     return child;
   }
 
+  [[nodiscard]] constexpr auto
+  GetChildWithSharedLock(const size_t pos)  //
+      -> Node *
+  {
+    auto *child = GetPayload<Node *>(pos);
+    child->mutex_.lock_shared();
+    return child;
+  }
+
   /**
    * @param position the position of record metadata to be get.
    * @return Metadata: record metadata.

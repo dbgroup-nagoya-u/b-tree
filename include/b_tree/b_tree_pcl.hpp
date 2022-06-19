@@ -524,8 +524,7 @@ class BTreePCL
   {
     auto *current_node = GetRootForRead();
     while (!current_node->IsLeaf()) {
-      auto *child = current_node->template GetPayload<Node_t *>(0);
-      child->AcquireSharedLock();
+      auto *child = current_node->GetChildWithSharedLock(0);
       if (current_node == root_) mutex_.unlock_shared();  // unlatch tree-latch
       current_node = child;
       current_node->ReleaseSharedLock();
