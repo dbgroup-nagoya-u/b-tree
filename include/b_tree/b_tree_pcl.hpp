@@ -508,6 +508,7 @@ class BTreePCL
   void
   ReleaseExclusiveLocks(NodeStack &stack)
   {
+    if (stack.empty()) return;
     if (stack.front().first == root_) mutex_.unlock();  // unlatch tree-latch
     for (auto [node, pos] : stack) {
       node->ReleaseExclusiveLock();
