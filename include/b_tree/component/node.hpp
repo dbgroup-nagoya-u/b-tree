@@ -177,9 +177,8 @@ class Node
     return;
   }
 
-  auto
-  ReleaseExclusiveLock()  //
-      -> void
+  void
+  ReleaseExclusiveLock()
   {
     mutex_.unlock();
     return;
