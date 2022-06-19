@@ -155,9 +155,8 @@ class Node
     return is_leaf_;
   }
 
-  auto
-  AcquireSharedLock()  //
-      -> void
+  void
+  AcquireSharedLock()
   {
     mutex_.lock_shared();
     return;
@@ -171,17 +170,15 @@ class Node
     return;
   }
 
-  auto
-  AcquireExclusiveLock()  //
-      -> void
+  void
+  AcquireExclusiveLock()
   {
     mutex_.lock();
     return;
   }
 
-  auto
-  ReleaseExclusiveLock()  //
-      -> void
+  void
+  ReleaseExclusiveLock()
   {
     mutex_.unlock();
     return;

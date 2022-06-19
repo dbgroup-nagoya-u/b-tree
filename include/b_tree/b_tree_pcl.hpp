@@ -505,17 +505,14 @@ class BTreePCL
     return stack;
   }
 
-  auto
-  ReleaseExclusiveLocks(NodeStack &stack)  //
-      -> void
+  void
+  ReleaseExclusiveLocks(NodeStack &stack)
   {
-    while (!stack.empty()) {
-      auto [node, pos] = stack.back();
-      stack.pop_back();
+    if (stack.front().first == root_) mutex_.unlock();  // unlatch tree-latch
+    for (auto [node, pos] : stack) {
       node->ReleaseExclusiveLock();
-      if (node == root_) mutex_.unlock();  // unlatch tree-latch
     }
-    return;
+    stack.clear();
   }
 
   /**
