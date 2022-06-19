@@ -195,12 +195,14 @@ class Node
   }
 
   /**
-   * @return pointer of next node
+   * @return pointer of next node with exclusive lock
    */
   [[nodiscard]] constexpr auto
-  GetNextNode() const  //
+  GetNextNodeForWrite() //
       -> Node *
   {
+    next_->mutex_.lock();
+    mutex_.unlock();
     return next_;
   }
 

@@ -289,8 +289,8 @@ class BTreePCL
           return kSuccess;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IncludeKey(key)) node = node->GetNextNode();
           node->AcquireExclusiveLock();
+          while (!node->IncludeKey(key)) node = node->GetNextNodeForWrite();
           stack.emplace_back(node, 0);
           break;
         case NodeRC::kNeedConsolidation:
@@ -339,8 +339,8 @@ class BTreePCL
           return kKeyExist;
         case NodeRC::kNeedSplit:
           Split<Payload>(stack);
-          if (!node->IncludeKey(key)) node = node->GetNextNode();
           node->AcquireExclusiveLock();
+          while (!node->IncludeKey(key)) node = node->GetNextNodeForWrite();
           stack.emplace_back(node, 0);
           break;
         case NodeRC::kNeedConsolidation:
