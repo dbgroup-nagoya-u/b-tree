@@ -432,7 +432,8 @@ class BTreePCL
   GetRootForRead()  //
       -> Node_t *
   {
-    mutex_.lock_shared();
+    mutex_.lock_shared();        // tree-latch
+    root_->AcquireSharedLock();  // root-latch
     return root_;
   }
 
@@ -444,7 +445,8 @@ class BTreePCL
   GetRootForWrite()  //
       -> Node_t *
   {
-    mutex_.lock();
+    mutex_.lock();                  // tree-latch
+    root_->AcquireExclusiveLock();  // root-latch
     return root_;
   }
 
@@ -464,8 +466,7 @@ class BTreePCL
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
 
-    auto *current_node = GetRootForWrite();  // tree-latch
-    current_node->AcquireExclusiveLock();    // root-latch
+    auto *current_node = GetRootForWrite();
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos, child_is_safe] =
@@ -492,8 +493,7 @@ class BTreePCL
   {
     NodeStack stack{};
     stack.reserve(kExpectedTreeHeight);
-    auto *current_node = GetRootForRead();  // tree-latch
-    current_node->AcquireSharedLock();      // root-latch
+    auto *current_node = GetRootForRead();
     stack.emplace_back(current_node, 0);
     while (!current_node->IsLeaf()) {
       const auto [next_node, pos] = current_node->SearchChildWithSharedLock(key, range_is_closed);
@@ -526,7 +526,6 @@ class BTreePCL
       -> Node_t *
   {
     auto *current_node = GetRootForRead();
-    current_node->AcquireSharedLock();
     while (!current_node->IsLeaf()) {
       auto *child = current_node->template GetPayload<Node_t *>(0);
       child->AcquireSharedLock();

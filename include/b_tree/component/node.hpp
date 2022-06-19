@@ -363,23 +363,9 @@ class Node
 
     auto *child = GetPayload<Node *>(begin_pos);
     child->mutex_.lock();
+    const auto child_is_safe = child->template IsSafe<Payload>();
 
-    const auto PayLen = child->is_leaf_ ? sizeof(Payload) : sizeof(Node *);
-
-    // check if the child may be split
-    const auto child_inserted_size = sizeof(Metadata) * (child->record_count_ + 1)
-                                     + child->block_size_ + kMaxVarDataSize + PayLen
-                                     - child->deleted_size_;
-    if (child_inserted_size > kPageSize - kHeaderLength - kMinFreeSpaceSize)
-      return {child, begin_pos, false};
-
-    // check if the child may be merged
-    const auto child_deleted_size =
-        sizeof(Metadata) * (child->record_count_ - 1) + child->block_size_ - child->deleted_size_;
-    if (child_deleted_size < PayLen + kMaxVarDataSize + kMinUsedSpaceSize)
-      return {child, begin_pos, false};
-
-    return {child, begin_pos, true};
+    return {child, begin_pos, child_is_safe};
   }
 
   /**
@@ -957,6 +943,29 @@ class Node
     }
 
     return kNeedConsolidation;
+  }
+
+  /**
+   * @retval true if this node is safe
+   * @retval false otherwise.
+   */
+  template <class Payload>
+  [[nodiscard]] constexpr auto
+  IsSafe() const  //
+      -> bool
+  {
+    const auto PayLen = is_leaf_ ? sizeof(Payload) : sizeof(Node *);
+
+    // check if the node may be split
+    const auto inserted_size = sizeof(Metadata) * (record_count_ + 1) + block_size_
+                               + kMaxVarDataSize + PayLen - deleted_size_;
+    if (inserted_size > kPageSize - kHeaderLength - kMinFreeSpaceSize) return false;
+
+    // check if the node may be merged
+    const auto deleted_size = sizeof(Metadata) * (record_count_ - 1) + block_size_ - deleted_size_;
+    if (deleted_size < PayLen + kMaxVarDataSize + kMinUsedSpaceSize) return false;
+
+    return true;
   }
 
   /**
