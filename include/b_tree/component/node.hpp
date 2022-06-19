@@ -155,9 +155,8 @@ class Node
     return is_leaf_;
   }
 
-  auto
-  AcquireSharedLock()  //
-      -> void
+  void
+  AcquireSharedLock()
   {
     mutex_.lock_shared();
     return;
