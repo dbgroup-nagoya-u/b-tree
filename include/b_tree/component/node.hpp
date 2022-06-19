@@ -338,7 +338,7 @@ class Node
    */
   template <class Payload>
   [[nodiscard]] auto
-  SearchChildWithExclusiveLock(  //
+  SearchChildForWrite(  //
       const Key &key,
       const bool range_is_closed)  //
       -> std::tuple<Node *, size_t, bool>
@@ -378,7 +378,7 @@ class Node
    * @return the position of a specified key.
    */
   [[nodiscard]] auto
-  SearchChildWithSharedLock(  //
+  SearchChildForRead(  //
       const Key &key,
       const bool range_is_closed)  //
       -> std::pair<Node *, size_t>
