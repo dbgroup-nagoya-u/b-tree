@@ -170,9 +170,8 @@ class Node
     return;
   }
 
-  auto
-  AcquireExclusiveLock()  //
-      -> void
+  void
+  AcquireExclusiveLock()
   {
     mutex_.lock();
     return;
