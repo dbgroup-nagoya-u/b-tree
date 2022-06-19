@@ -159,7 +159,6 @@ class Node
   AcquireSharedLock()
   {
     mutex_.lock_shared();
-    return;
   }
 
   auto
@@ -167,21 +166,18 @@ class Node
       -> void
   {
     mutex_.unlock_shared();
-    return;
   }
 
   void
   AcquireExclusiveLock()
   {
     mutex_.lock();
-    return;
   }
 
   void
   ReleaseExclusiveLock()
   {
     mutex_.unlock();
-    return;
   }
 
   /**
@@ -198,7 +194,7 @@ class Node
    * @return pointer of next node with exclusive lock
    */
   [[nodiscard]] constexpr auto
-  GetNextNodeForWrite() //
+  GetNextNodeForWrite()  //
       -> Node *
   {
     next_->mutex_.lock();
@@ -216,6 +212,15 @@ class Node
     next_->mutex_.lock_shared();
     mutex_.unlock_shared();
     return next_;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetChildWithExclusiveLock(const size_t pos)  //
+      -> Node *
+  {
+    auto *child = GetPayload<Node *>(pos);
+    child->mutex_.lock();
+    return child;
   }
 
   /**
@@ -375,8 +380,7 @@ class Node
       }
     }
 
-    auto *child = GetPayload<Node *>(begin_pos);
-    child->mutex_.lock();
+    auto *child = GetChildWithExclusiveLock(begin_pos);
     const auto child_is_safe = child->template IsSafe<Payload>();
 
     return {child, begin_pos, child_is_safe};

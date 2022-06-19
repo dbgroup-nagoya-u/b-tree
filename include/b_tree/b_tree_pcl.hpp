@@ -604,8 +604,7 @@ class BTreePCL
     }
 
     // check the right-sibling node has enough capacity for merging
-    auto *right_node = parent->template GetPayload<Node_t *>(pos + 1);
-    right_node->AcquireExclusiveLock();
+    auto *right_node = parent->GetChildWithExclusiveLock(pos + 1);
     if (!node->CanMerge(right_node)) {
       node->ReleaseExclusiveLock();
       right_node->ReleaseExclusiveLock();
