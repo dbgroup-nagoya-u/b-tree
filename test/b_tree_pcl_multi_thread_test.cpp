@@ -289,6 +289,10 @@ class BTreePCLFixture : public testing::Test  // NOLINT
 
     // updating inserted records succeeds
     written_ids = RunOverMultiThread(kInsert);
+    std::sort(written_ids.begin(), written_ids.end());
+    const auto &end_it = std::unique(written_ids.begin(), written_ids.end());
+    EXPECT_EQ(std::distance(end_it, written_ids.end()), 0);
+
     auto &&updated_ids = RunOverMultiThread(kUpdate);
     // update operations may succeed multiple times, so remove duplications
     std::sort(updated_ids.begin(), updated_ids.end());
@@ -308,6 +312,10 @@ class BTreePCLFixture : public testing::Test  // NOLINT
 
     // deleting inserted records succeeds
     written_ids = RunOverMultiThread(kInsert);
+    std::sort(written_ids.begin(), written_ids.end());
+    const auto &end_it = std::unique(written_ids.begin(), written_ids.end());
+    EXPECT_EQ(std::distance(end_it, written_ids.end()), 0);
+
     auto &&deleted_ids = RunOverMultiThread(kDelete);
     EXPECT_EQ(written_ids.size(), deleted_ids.size());
 
