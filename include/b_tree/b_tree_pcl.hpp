@@ -119,10 +119,7 @@ class BTreePCL
           node_->ReleaseSharedLock();
           return false;
         }
-        auto *next_node = node_->GetNextNode();
-        next_node->AcquireSharedLock();
-        node_->ReleaseSharedLock();
-        node_ = next_node;
+        node_ = node_->GetNextNodeForRead();
         current_pos_ = 0;
         std::tie(is_end_, record_count_) = node_->SearchEndPositionFor(end_key_);
       }

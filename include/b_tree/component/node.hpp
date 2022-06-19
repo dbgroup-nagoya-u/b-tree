@@ -205,6 +205,18 @@ class Node
   }
 
   /**
+   * @return pointer of next node with shared lock
+   */
+  [[nodiscard]] constexpr auto
+  GetNextNodeForRead()  //
+      -> Node *
+  {
+    next_->mutex_.lock_shared();
+    mutex_.unlock_shared();
+    return next_;
+  }
+
+  /**
    * @param position the position of record metadata to be get.
    * @return Metadata: record metadata.
    */
