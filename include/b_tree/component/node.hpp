@@ -58,8 +58,8 @@ class Node
    * @param l_node a left child node which is previous root
    * @param r_node a right child node which is split into
    */
-  explicit Node(  //
-      const Node *l_node,
+  Node(  //
+      Node *l_node,
       const Node *r_node)  //
       : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
   {
@@ -110,32 +110,24 @@ class Node
   }
 
   /**
-   * @return true if key is in range of this node
-   * @return false otherwise
-   */
-  auto
-  IncludeKey(const Key &key)  //
-      -> bool
-  {
-    const auto &high_key = GetHighKey();
-    if (!high_key) return true;
-    return !Comp{}(high_key.value(), key);
-  }
-
-  /**
    * @return true r_node can be merged into this node
    * @return false otherwise
    */
   auto
-  CanMerge(const Node *r_node)  //
+  CanMerge(Node *r_node)  //
       -> bool
   {
-    const auto l_consolidated_size =
-        (sizeof(Metadata) * (record_count_)) + block_size_ - deleted_size_;
-    const auto r_consolidated_size =
+    const auto l_size = (sizeof(Metadata) * (record_count_)) + block_size_ - deleted_size_;
+    const auto r_size =
         (sizeof(Metadata) * r_node->record_count_) + r_node->block_size_ - r_node->deleted_size_;
-    return kPageSize - (kHeaderLength + kMinFreeSpaceSize)
-           > l_consolidated_size + r_consolidated_size;
+
+    const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
+    if (!can_merge) {
+      r_node->mutex_.unlock();
+      mutex_.unlock();
+    }
+
+    return can_merge;
   }
 
   /*################################################################################################
@@ -153,15 +145,10 @@ class Node
     return is_leaf_;
   }
 
-  /**
-   * @return true if acquire shared_lock
-   * @return false otherwise
-   */
-  [[nodiscard]] auto
-  TrySharedLock()  //
-      -> bool
+  void
+  AcquireSharedLock()
   {
-    return mutex_.try_lock_shared();
+    mutex_.lock_shared();
   }
 
   auto
@@ -169,7 +156,18 @@ class Node
       -> void
   {
     mutex_.unlock_shared();
-    return;
+  }
+
+  void
+  AcquireExclusiveLock()
+  {
+    mutex_.lock();
+  }
+
+  void
+  ReleaseExclusiveLock()
+  {
+    mutex_.unlock();
   }
 
   /**
@@ -183,13 +181,62 @@ class Node
   }
 
   /**
-   * @return pointer of next node
+   * @return pointer of next node with exclusive lock
    */
-  [[nodiscard]] constexpr auto
-  GetNextNode() const  //
+  [[nodiscard]] auto
+  GetValidSplitNode(const Key &key)  //
       -> Node *
   {
+    const auto &high_key = GetHighKey();
+    if (!high_key || !Comp{}(high_key.value(), key)) {
+      next_->mutex_.unlock();
+      return this;
+    }
+    mutex_.unlock();
     return next_;
+  }
+
+  /**
+   * @return pointer of next node with shared lock
+   */
+  [[nodiscard]] constexpr auto
+  GetNextNodeForRead()  //
+      -> Node *
+  {
+    next_->mutex_.lock_shared();
+    mutex_.unlock_shared();
+    return next_;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetChildForRead(const size_t pos)  //
+      -> Node *
+  {
+    auto *child = GetPayload<Node *>(pos);
+    child->mutex_.lock_shared();
+    mutex_.unlock_shared();
+    return child;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetChildForWrite(  //
+      const size_t pos,
+      const bool ops_is_del)  //
+      -> std::pair<Node *, bool>
+  {
+    constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kRecLen = kKeyLen + sizeof(Node *) + sizeof(Metadata);
+
+    auto *child = GetPayload<Node *>(pos);
+    child->mutex_.lock();
+
+    // check if the node has sufficient space
+    const auto size = sizeof(Metadata) * child->record_count_ + child->block_size_;
+    const auto keep_lock =
+        (!ops_is_del && (size > kPageSize - (kHeaderLength + kRecLen)))
+        || (ops_is_del && (size - child->deleted_size_ < kRecLen + kMinUsedSpaceSize));
+
+    return {child, keep_lock};
   }
 
   /**
@@ -327,7 +374,7 @@ class Node
   [[nodiscard]] auto
   SearchChild(  //
       const Key &key,
-      const bool range_is_closed) const  //
+      const bool range_is_closed)  //
       -> size_t
   {
     int64_t begin_pos = 0;
@@ -352,46 +399,6 @@ class Node
   }
 
   /**
-   * @brief Get the position of a specified key by using binary search. If there is no
-   * specified key, this returns the minimum metadata index that is greater than the
-   * specified key
-   *
-   * @param key a target key.
-   * @param range_is_closed a flag to indicate that a target key is included.
-   * @return the position of a specified key.
-   */
-  [[nodiscard]] auto
-  SearchChildWithSharedLock(  //
-      const Key &key,
-      const bool range_is_closed)  //
-      -> std::pair<Node *, size_t>
-  {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-
-      const auto &index_key = GetKey(meta_array_[pos]);
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (!range_is_closed) ++pos;
-        begin_pos = pos;
-        break;
-      }
-    }
-
-    auto *child = GetPayload<Node *>(begin_pos);
-    child->mutex_.lock_shared();
-    mutex_.unlock_shared();
-
-    return {child, begin_pos};
-  }
-
-  /**
    * @brief Get the end position of records for scanning and check it has been finished.
    *
    * @param end_key a pair of a target key and its closed/open-interval flag.
@@ -399,7 +406,7 @@ class Node
    * @retval 2nd: the end position for scanning.
    */
   [[nodiscard]] auto
-  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key)  //
       -> std::pair<bool, size_t>
   {
     const auto is_end = IsRightmostOf(end_key);
@@ -631,30 +638,32 @@ class Node
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
    * @param pos the position of a left child node.
-   * @retval kHasSpace if this node does not need any SMOs.
+   * @retval kCompleted if a child node is inserted.
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
    */
   auto
   InsertChild(  //
-      const Node *l_node,
+      Node *l_node,
       const Node *r_node,
       const size_t pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
+    const auto l_high_meta = l_node->high_meta_;
+    const auto key_len = l_high_meta.key_length;
+    const auto rec_len = key_len + kPayLen;
+
+    if (auto rc = GetSpaceStatus(rec_len); rc != kHasSpace) return rc;
 
     // insert a right child by updating an original record
     memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPayLen);
 
     // insert a left child
-    const auto l_high_meta = l_node->high_meta_;
     auto offset = SetPayload(kPageSize - block_size_, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
     // add metadata for a left child
-    const auto key_len = l_high_meta.key_length;
-    const auto rec_len = key_len + kPayLen;
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
     meta_array_[pos] = Metadata{offset, key_len, rec_len};
 
@@ -662,12 +671,7 @@ class Node
     block_size_ += rec_len;
     ++record_count_;
 
-    // check this node has sufficient space for future records
-    if constexpr (IsVariableLengthData<Key>()) {
-      return GetSpaceStatus(kMaxVarDataSize + kPayLen);
-    } else {
-      return GetSpaceStatus(sizeof(Key) + kPayLen);
-    }
+    return kCompleted;
   }
 
   /**
@@ -682,7 +686,7 @@ class Node
    */
   auto
   DeleteChild(  //
-      const Node *l_node,
+      Node *l_node,
       const size_t pos)  //
       -> NodeRC
   {
@@ -702,9 +706,7 @@ class Node
 
     // check if this node should be merged
     const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
-    if (used_size < kMinUsedSpaceSize) return kNeedMerge;
-
-    return kCompleted;
+    return (used_size < kMinUsedSpaceSize) ? kNeedMerge : kCompleted;
   }
 
   /*####################################################################################
@@ -801,6 +803,8 @@ class Node
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     next_ = r_node->next_;
+
+    mutex_.unlock();
   }
 
  private:
@@ -906,14 +910,9 @@ class Node
     if (total_size <= kPageSize - kHeaderLength) return kHasSpace;
 
     // the node needs any SMO
-    total_size -= deleted_size_;
-    if (total_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize)) {
-      return kNeedSplit;
-    } else if (total_size < kMinUsedSpaceSize) {
-      return kNeedMerge;
-    }
-
-    return kNeedConsolidation;
+    return (total_size - deleted_size_ > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
+               ? kNeedSplit
+               : kNeedConsolidation;
   }
 
   /**
@@ -1064,9 +1063,10 @@ class Node
   Metadata meta_array_[0];
 
   // temporary node for SMO
-  static inline std::unique_ptr<Node> temp_node_ = std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
+      std::make_unique<Node>(0);
 };
 
 }  // namespace dbgroup::index::b_tree::component
 
-#endif
+#endif  // B_TREE_COMPONENT_NODE_HPP

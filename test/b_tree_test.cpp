@@ -10,11 +10,8 @@ namespace dbgroup::index::b_tree::component
  * Global constants
  *####################################################################################*/
 
-constexpr bool kLeafFlag = true;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
-constexpr bool kExpectKeyExist = true;
-constexpr bool kExpectKeyNotExist = false;
 constexpr bool kWriteTwice = true;
 constexpr bool kWithWrite = true;
 constexpr bool kWithDelete = true;
