@@ -94,7 +94,10 @@ class NodeFixture : public testing::Test
       const size_t key_id,
       const size_t payload_id)
   {
-    return node_->Write(keys_[key_id], kKeyLen, payloads_[payload_id]);
+    node_->AcquireExclusiveLock();
+    const auto rc = node_->Write(keys_[key_id], kKeyLen, payloads_[payload_id]);
+    node_->ReleaseExclusiveLock();
+    return rc;
   }
 
   auto
@@ -102,7 +105,10 @@ class NodeFixture : public testing::Test
       const size_t key_id,
       const size_t payload_id)
   {
-    return node_->Insert(keys_[key_id], kKeyLen, payloads_[payload_id]);
+    node_->AcquireExclusiveLock();
+    const auto rc = node_->Insert(keys_[key_id], kKeyLen, payloads_[payload_id]);
+    node_->ReleaseExclusiveLock();
+    return rc;
   }
 
   auto
@@ -110,29 +116,51 @@ class NodeFixture : public testing::Test
       const size_t key_id,
       const size_t payload_id)
   {
-    return node_->Update(keys_[key_id], payloads_[payload_id]);
+    node_->AcquireExclusiveLock();
+    const auto rc = node_->Update(keys_[key_id], payloads_[payload_id]);
+    node_->ReleaseExclusiveLock();
+    return rc;
   }
 
   auto
   Delete(const size_t key_id)
   {
-    return node_->Delete(keys_[key_id]);
+    node_->AcquireExclusiveLock();
+    const auto rc = node_->Delete(keys_[key_id]);
+    node_->ReleaseExclusiveLock();
+    return rc;
   }
 
   void
   Consolidate()
   {
-    // auto *consolidated_node = new Node_t{kLeafFlag};
-    // consolidated_node->template Consolidate<Payload>();
-    // node_.reset(consolidated_node);
+    node_->AcquireExclusiveLock();
     node_->template Consolidate<Payload>();
+    node_->ReleaseExclusiveLock();
   }
 
   auto
-  Split()
+  Split(Node_t *right_node)
   {
-    auto *right_node = new Node_t{kLeafFlag};
+    node_->AcquireExclusiveLock();
+    right_node->AcquireExclusiveLock();
+
     node_->template Split<Payload>(right_node);
+
+    node_->ReleaseExclusiveLock();
+    right_node->ReleaseExclusiveLock();
+  }
+
+  auto
+  Merge(Node_t *right_node)
+  {
+    node_->AcquireExclusiveLock();
+    right_node->AcquireExclusiveLock();
+
+    node_->template Merge<Payload>(right_node);
+
+    node_->ReleaseExclusiveLock();
+    right_node->ReleaseExclusiveLock();
   }
 
   /*####################################################################################
@@ -162,6 +190,7 @@ class NodeFixture : public testing::Test
     const NodeRC expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
 
     Payload payload{};
+    node_->AcquireSharedLock();
     const auto rc = node_->Read(keys_[key_id], payload);
 
     EXPECT_EQ(expected_rc, rc);
@@ -271,7 +300,7 @@ class NodeFixture : public testing::Test
     VerifyInsert(kRecNumInNode, kRecNumInNode, kExpectFailed, kExpectKeyNotExist);
 
     auto *right_node = new Node_t{kLeafFlag};
-    node_->template Split<Payload>(right_node);
+    Split(right_node);
 
     const auto l_count = (kRecNumInNode - 1) / 2 + 1;  // ceiling
 
@@ -291,13 +320,13 @@ class NodeFixture : public testing::Test
     PrepareNode();
 
     auto *right_node = new Node_t{kLeafFlag};
-    node_->template Split<Payload>(right_node);
+    Split(right_node);
 
     // to avoid overflow of merged node
-    node_->Delete(keys_[0]);
+    Delete(0);
     right_node->Delete(keys_[kRecNumInNode - 1]);
 
-    node_->template Merge<Payload>(right_node);
+    Merge(right_node);
 
     VerifyRead(0, 0, kExpectFailed);
     VerifyRead(kRecNumInNode - 1, kRecNumInNode - 1, kExpectFailed);
@@ -316,9 +345,6 @@ class NodeFixture : public testing::Test
   // actual keys and payloads
   Key keys_[kKeyNumForTest]{};
   Payload payloads_[kKeyNumForTest]{};
-
-  // the length of a record and its maximum number
-  size_t max_del_num_{};
 
   std::unique_ptr<Node_t> node_{nullptr};
 };
