@@ -9,6 +9,7 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BUILD_TESTS: ON
+        B_TREE_TEST_THREAD_NUM: 8
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
@@ -16,6 +17,7 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BUILD_TESTS: ON
+        B_TREE_TEST_THREAD_NUM: 8
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
@@ -23,3 +25,4 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         BUILD_TESTS: ON
+        B_TREE_TEST_THREAD_NUM: 8
