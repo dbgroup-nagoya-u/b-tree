@@ -963,12 +963,8 @@ class Node
 
     // the node needs any SMO
     total_size -= deleted_size_;
-    if (total_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize)) {
-      return kNeedSplit;
-    } else if (total_size < kMinUsedSpaceSize) {
-      return kNeedMerge;
-    }
-
+    if (total_size > kPageSize - (kHeaderLength + kMinFreeSpaceSize)) return kNeedSplit;
+    if (total_size < kMinUsedSpaceSize) return kNeedMerge;
     return kNeedConsolidation;
   }
 
@@ -981,18 +977,16 @@ class Node
   IsSafe() const  //
       -> bool
   {
-    const auto PayLen = is_leaf_ ? sizeof(Payload) : sizeof(Node *);
+    const auto pay_len = is_leaf_ ? sizeof(Payload) : sizeof(Node *);
 
     // check if the node may be split
     const auto inserted_size = sizeof(Metadata) * (record_count_ + 1) + block_size_
-                               + kMaxVarDataSize + PayLen - deleted_size_;
+                               + kMaxVarDataSize + pay_len - deleted_size_;
     if (inserted_size > kPageSize - kHeaderLength - kMinFreeSpaceSize) return false;
 
     // check if the node may be merged
     const auto deleted_size = sizeof(Metadata) * (record_count_ - 1) + block_size_ - deleted_size_;
-    if (deleted_size < PayLen + kMaxVarDataSize + kMinUsedSpaceSize) return false;
-
-    return true;
+    return deleted_size >= pay_len + kMaxVarDataSize + kMinUsedSpaceSize;
   }
 
   /**
@@ -1143,9 +1137,10 @@ class Node
   Metadata meta_array_[0];
 
   // temporary node for SMO
-  static inline std::unique_ptr<Node> temp_node_ = std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
+      std::make_unique<Node>(0);
 };
 
 }  // namespace dbgroup::index::b_tree::component
 
-#endif
+#endif  // B_TREE_COMPONENT_NODE_HPP
