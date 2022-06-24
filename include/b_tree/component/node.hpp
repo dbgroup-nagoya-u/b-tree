@@ -48,7 +48,11 @@ class Node
    * @param is_leaf a flag to indicate whether a leaf node is constructed
    */
   explicit Node(const bool is_leaf)
-      : is_leaf_{static_cast<uint64_t>(is_leaf)}, record_count_{0}, block_size_{0}, deleted_size_{0}
+      : is_leaf_{static_cast<uint64_t>(is_leaf)},
+        record_count_{0},
+        deleted_count_{0},
+        block_size_{0},
+        deleted_size_{0}
   {
   }
 
@@ -61,7 +65,7 @@ class Node
   Node(  //
       Node *l_node,
       const Node *r_node)  //
-      : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
+      : is_leaf_{0}, record_count_{2}, deleted_count_{0}, block_size_{0}, deleted_size_{0}
   {
     constexpr auto kPayLen = sizeof(Node *);
 
@@ -71,11 +75,11 @@ class Node
     const auto l_rec_len = l_key_len + kPayLen;
     auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
-    meta_array_[0] = Metadata{offset, l_key_len, l_rec_len};
+    meta_array_[0] = Metadata{0, offset, l_key_len, l_rec_len};
 
     // insert r_node
     offset = SetPayload(offset, r_node);
-    meta_array_[1] = Metadata{offset, 0, kPayLen};
+    meta_array_[1] = Metadata{0, offset, 0, kPayLen};
 
     block_size_ += l_rec_len + kPayLen;
   }
@@ -117,9 +121,10 @@ class Node
   CanMerge(Node *r_node)  //
       -> bool
   {
-    const auto l_size = (sizeof(Metadata) * (record_count_)) + block_size_ - deleted_size_;
-    const auto r_size =
-        (sizeof(Metadata) * r_node->record_count_) + r_node->block_size_ - r_node->deleted_size_;
+    const auto l_size =
+        (sizeof(Metadata) * (record_count_ - deleted_count_)) + block_size_ - deleted_size_;
+    const auto r_size = (sizeof(Metadata) * (r_node->record_count_ - r_node->deleted_count_))
+                        + r_node->block_size_ - r_node->deleted_size_;
 
     const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
     if (!can_merge) {
@@ -181,6 +186,28 @@ class Node
   }
 
   /**
+   * @return the number of records in this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetValidRecordCount() const  //
+      -> size_t
+  {
+    return record_count_ - deleted_count_;
+  }
+
+  /**
+   * @return position of valid record in this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetValidRecordPos(const size_t pos) const  //
+      -> size_t
+  {
+    for (size_t i = pos; i < record_count_; i++) {
+      if (!meta_array_[i].is_deleted) return i;
+    }
+  }
+
+  /**
    * @return pointer of next node with exclusive lock
    */
   [[nodiscard]] auto
@@ -234,7 +261,9 @@ class Node
     const auto size = sizeof(Metadata) * child->record_count_ + child->block_size_;
     const auto keep_lock =
         (!ops_is_del && (size > kPageSize - (kHeaderLength + kRecLen)))
-        || (ops_is_del && (size - child->deleted_size_ < kRecLen + kMinUsedSpaceSize));
+        || (ops_is_del
+            && (size - child->deleted_size_ - sizeof(Metadata) * child->deleted_count_
+                < kRecLen + kMinUsedSpaceSize));
 
     return {child, keep_lock};
   }
@@ -355,6 +384,7 @@ class Node
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
+        if (meta_array_[pos].is_deleted) return {kKeyAlreadyDeleted, pos};
         return {kKeyAlreadyInserted, pos};
       }
     }
@@ -447,6 +477,8 @@ class Node
       const auto meta = meta_array_[pos];
       memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
       rc = kCompleted;
+    } else {
+      rc = kKeyNotInserted;
     }
 
     mutex_.unlock_shared();
@@ -498,11 +530,15 @@ class Node
 
       memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]),
               sizeof(Metadata) * (record_count_ - pos));
-      meta_array_[pos] = Metadata{offset, key_length, total_length};
+      meta_array_[pos] = Metadata{0, offset, key_length, total_length};
       record_count_ += 1;
     } else {
       // update
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
+      if (rc == kKeyAlreadyDeleted) {
+        meta_array_[pos].is_deleted = 0;
+        deleted_count_--;
+      }
     }
 
     return kCompleted;
@@ -544,6 +580,14 @@ class Node
 
     if (rc == kKeyAlreadyInserted) return kKeyAlreadyInserted;
 
+    // reuse dead record
+    if (rc == kKeyAlreadyDeleted) {
+      memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
+      meta_array_[pos].is_deleted = 0;
+      deleted_count_--;
+      return kCompleted;
+    }
+
     // insert record
     auto offset = kPageSize - block_size_;
     offset = SetPayload(offset, payload);
@@ -553,7 +597,7 @@ class Node
 
     // insert metadata
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, key_length, total_length};
+    meta_array_[pos] = Metadata{0, offset, key_length, total_length};
     record_count_ += 1;
 
     return kCompleted;
@@ -588,7 +632,7 @@ class Node
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
-    if (rc == kKeyNotInserted) return kKeyNotInserted;
+    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) return kKeyNotInserted;
 
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
@@ -616,17 +660,15 @@ class Node
       -> NodeRC
   {
     const auto [rc, pos] = SearchRecord(key);
-    if (rc == kKeyNotInserted) return kKeyNotInserted;
-
-    // delete metadata
-    memmove(&(meta_array_[pos]), &(meta_array_[pos + 1]),
-            sizeof(Metadata) * (record_count_ - pos - 1));
+    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) return kKeyNotInserted;
 
     // update a header
+    meta_array_[pos].is_deleted = 1;
     deleted_size_ += meta_array_[pos].total_length;
-    record_count_ -= 1;
+    deleted_count_++;
 
-    const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
+    const auto used_size =
+        sizeof(Metadata) * (record_count_ - deleted_count_) + block_size_ - deleted_size_;
     if (used_size < kMinUsedSpaceSize) return kNeedMerge;
 
     return kCompleted;
@@ -646,7 +688,8 @@ class Node
   InsertChild(  //
       Node *l_node,
       const Node *r_node,
-      const size_t pos)  //
+      const size_t l_node_pos,
+      const size_t r_node_pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
@@ -657,20 +700,28 @@ class Node
     if (auto rc = GetSpaceStatus(rec_len); rc != kHasSpace) return rc;
 
     // insert a right child by updating an original record
-    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPayLen);
+    memcpy(GetPayloadAddr(meta_array_[r_node_pos]), &r_node, kPayLen);
 
-    // insert a left child
-    auto offset = SetPayload(kPageSize - block_size_, l_node);
-    offset = CopyKeyFrom(l_node, l_high_meta, offset);
+    // reuse dead record
+    if (meta_array_[l_node_pos].is_deleted) {
+      memcpy(GetPayloadAddr(meta_array_[l_node_pos]), &l_node, kPayLen);
+      meta_array_[l_node_pos].is_deleted = 0;
+      deleted_count_--;
+      deleted_size_ += meta_array_[l_node_pos].total_length;
+    } else {
+      // insert a left child
+      auto offset = SetPayload(kPageSize - block_size_, l_node);
+      offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
-    // add metadata for a left child
-    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, key_len, rec_len};
+      // add metadata for a left child
+      memmove(&(meta_array_[l_node_pos + 1]), &(meta_array_[l_node_pos]),
+              sizeof(Metadata) * (record_count_ - l_node_pos));
+      meta_array_[l_node_pos] = Metadata{0, offset, key_len, rec_len};
 
-    // update this header
-    block_size_ += rec_len;
-    ++record_count_;
-
+      // update this header
+      block_size_ += rec_len;
+      ++record_count_;
+    }
     return kCompleted;
   }
 
@@ -687,25 +738,25 @@ class Node
   auto
   DeleteChild(  //
       Node *l_node,
-      const size_t pos)  //
+      const size_t pos,
+      const size_t next_pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
-
     // update payload
-    memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPayLen);
+    memcpy(GetPayloadAddr(meta_array_[next_pos]), &l_node, kPayLen);
 
-    const auto key_len = meta_array_[pos - 1].key_length;
+    const auto key_len = meta_array_[pos].key_length;
 
-    // delete metadata
-    memmove(&(meta_array_[pos - 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
+    meta_array_[pos].is_deleted = 1;
+    deleted_count_++;
 
     // update this header
     deleted_size_ += key_len + kPayLen;
-    --record_count_;
 
     // check if this node should be merged
-    const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
+    const auto used_size =
+        sizeof(Metadata) * (record_count_ - deleted_count_) + block_size_ - deleted_size_;
     return (used_size < kMinUsedSpaceSize) ? kNeedMerge : kCompleted;
   }
 
@@ -729,6 +780,8 @@ class Node
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
+    record_count_ -= deleted_count_;
+    deleted_count_ = 0;
 
     // copy consolidated records to the original node
     memcpy(meta_array_, temp_node_->meta_array_, sizeof(Metadata) * (record_count_));
@@ -748,26 +801,29 @@ class Node
     // copy left half records to a temporal node
     size_t offset = kPageSize;
     size_t l_count = 0;
+    size_t count = 0;
     const auto target_offset = offset - (block_size_ - deleted_size_) / 2;
     while (offset > target_offset) {
-      const auto target_meta = meta_array_[l_count];
-      offset = temp_node_->template CopyRecordFrom<Payload>(this, target_meta, l_count++, offset);
+      const auto target_meta = meta_array_[count++];
+      if (!target_meta.is_deleted)
+        offset = temp_node_->template CopyRecordFrom<Payload>(this, target_meta, l_count++, offset);
     }
-    const auto sep_key_len = meta_array_[l_count - 1].key_length;
-    temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
+    const auto sep_key_len = meta_array_[count - 1].key_length;
+    temp_node_->high_meta_ = Metadata{0, offset, sep_key_len, sep_key_len};
 
     // copy right half records to a right node
     auto r_offset = r_node->CopyHighKeyFrom(this, high_meta_);
-    r_offset = r_node->template CopyRecordsFrom<Payload>(this, l_count, record_count_, 0, r_offset);
+    r_offset = r_node->template CopyRecordsFrom<Payload>(this, count, record_count_, 0, r_offset);
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    r_node->record_count_ = record_count_ - l_count;
+    r_node->record_count_ = record_count_ - deleted_count_ - l_count;
     r_node->next_ = next_;
 
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
+    deleted_count_ = 0;
     record_count_ = l_count;
     next_ = r_node;
 
@@ -791,6 +847,7 @@ class Node
 
     // copy consolidated records to the original node
     offset = temp_node_->template CopyRecordsFrom<Payload>(this, 0, record_count_, 0, offset);
+    record_count_ -= deleted_count_;
     memcpy(&high_meta_, &temp_node_->high_meta_, sizeof(Metadata) * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
 
@@ -799,9 +856,10 @@ class Node
     offset = CopyRecordsFrom<Payload>(r_node, 0, r_count, record_count_, offset);
 
     // update a header
-    record_count_ += r_count;
+    record_count_ += r_node->GetValidRecordCount();
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
+    deleted_count_ = 0;
     next_ = r_node->next_;
 
     mutex_.unlock();
@@ -910,7 +968,8 @@ class Node
     if (total_size <= kPageSize - kHeaderLength) return kHasSpace;
 
     // the node needs any SMO
-    return (total_size - deleted_size_ > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
+    return (total_size - deleted_size_ - sizeof(Metadata) * deleted_count_
+            > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
                ? kNeedSplit
                : kNeedConsolidation;
   }
@@ -1025,7 +1084,8 @@ class Node
     // copy records from the given node
     for (size_t i = begin_pos; i < end_pos; ++i) {
       const auto target_meta = orig_node->meta_array_[i];
-      offset = CopyRecordFrom<Payload>(orig_node, target_meta, rec_count++, offset);
+      if (!target_meta.is_deleted)
+        offset = CopyRecordFrom<Payload>(orig_node, target_meta, rec_count++, offset);
     }
 
     return offset;
@@ -1040,6 +1100,9 @@ class Node
 
   /// the number of records in this node.
   uint64_t record_count_ : 16;
+
+  /// the number of deleted records in this node.
+  uint64_t deleted_count_ : 16;
 
   /// the total byte length of records in a node.
   uint64_t block_size_ : 16;
@@ -1057,7 +1120,7 @@ class Node
   Node *next_{nullptr};
 
   /// the metadata of a highest key.
-  Metadata high_meta_{kPageSize, 0, 0};
+  Metadata high_meta_{0, kPageSize, 0, 0};
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];

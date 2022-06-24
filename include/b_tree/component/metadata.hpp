@@ -30,17 +30,19 @@ struct Metadata {
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
-  constexpr Metadata() = default;
+  Metadata() = default;
 
   /**
    * @brief Construct a new metadata object.
    *
    */
   constexpr Metadata(  //
+      const size_t is_deleted,
       const size_t offset,
       const size_t key_length,
       const size_t total_length)
-      : offset{static_cast<uint32_t>(offset)},
+      : is_deleted{static_cast<uint32_t>(is_deleted)},
+        offset{static_cast<uint32_t>(offset)},
         key_length{static_cast<uint16_t>(key_length)},
         total_length{static_cast<uint16_t>(total_length)}
   {
@@ -77,8 +79,10 @@ struct Metadata {
    * Internal member variables
    *##############################################################################################*/
 
+  uint32_t is_deleted : 1;
+
   /// an offset to a corresponding record.
-  uint32_t offset{};
+  uint32_t offset : 31;
 
   /// the length of a key in a corresponding record.
   uint16_t key_length{};

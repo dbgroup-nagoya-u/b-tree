@@ -33,7 +33,7 @@ namespace dbgroup::index::b_tree
 constexpr size_t kWordSize = sizeof(uintptr_t);
 
 /// Header length in bytes.
-constexpr size_t kHeaderLength = 80;
+constexpr size_t kHeaderLength = 88;
 
 /*######################################################################################
  * Utility enum and classes
