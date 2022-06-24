@@ -570,8 +570,6 @@ class BTreePCL
         stack.emplace_back(parent, 0);  // add a parent to release its lock
       }
     }
-
-    ReleaseExclusiveLocks(stack);
   }
 
   /**
