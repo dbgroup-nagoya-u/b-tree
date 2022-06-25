@@ -702,26 +702,18 @@ class Node
     // insert a right child by updating an original record
     memcpy(GetPayloadAddr(meta_array_[r_node_pos]), &r_node, kPayLen);
 
-    // reuse dead record
-    if (meta_array_[l_node_pos].is_deleted) {
-      memcpy(GetPayloadAddr(meta_array_[l_node_pos]), &l_node, kPayLen);
-      meta_array_[l_node_pos].is_deleted = 0;
-      deleted_count_--;
-      deleted_size_ += meta_array_[l_node_pos].total_length;
-    } else {
-      // insert a left child
-      auto offset = SetPayload(kPageSize - block_size_, l_node);
-      offset = CopyKeyFrom(l_node, l_high_meta, offset);
+    // insert a left child
+    auto offset = SetPayload(kPageSize - block_size_, l_node);
+    offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
-      // add metadata for a left child
-      memmove(&(meta_array_[l_node_pos + 1]), &(meta_array_[l_node_pos]),
-              sizeof(Metadata) * (record_count_ - l_node_pos));
-      meta_array_[l_node_pos] = Metadata{0, offset, key_len, rec_len};
+    // add metadata for a left child
+    memmove(&(meta_array_[l_node_pos + 1]), &(meta_array_[l_node_pos]),
+            sizeof(Metadata) * (record_count_ - l_node_pos));
+    meta_array_[l_node_pos] = Metadata{0, offset, key_len, rec_len};
 
-      // update this header
-      block_size_ += rec_len;
-      ++record_count_;
-    }
+    // update this header
+    block_size_ += rec_len;
+    ++record_count_;
     return kCompleted;
   }
 
