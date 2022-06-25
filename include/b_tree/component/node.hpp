@@ -538,6 +538,7 @@ class Node
       if (rc == kKeyAlreadyDeleted) {
         meta_array_[pos].is_deleted = 0;
         deleted_count_--;
+        deleted_size_ -= meta_array_[pos].total_length;
       }
     }
 
@@ -585,6 +586,7 @@ class Node
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       meta_array_[pos].is_deleted = 0;
       deleted_count_--;
+      deleted_size_ -= meta_array_[pos].total_length;
       return kCompleted;
     }
 
