@@ -722,8 +722,8 @@ class Node
    * @brief Delete child node in this node.
    *
    * @param l_node a left child node.
-   * @param r_node a right child (i.e., to be deleted) node.
-   * @param pos the position of a right child node.
+   * @param l_node_pos the position of a left child node.
+   * @param r_node_pos the position of a right child node.
    * @retval kHasSpace if this node does not need any SMOs.
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
@@ -731,17 +731,17 @@ class Node
   auto
   DeleteChild(  //
       Node *l_node,
-      const size_t pos,
-      const size_t next_pos)  //
+      const size_t l_node_pos,
+      const size_t r_node_pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
     // update payload
-    memcpy(GetPayloadAddr(meta_array_[next_pos]), &l_node, kPayLen);
+    memcpy(GetPayloadAddr(meta_array_[r_node_pos]), &l_node, kPayLen);
 
-    const auto key_len = meta_array_[pos].key_length;
+    const auto key_len = meta_array_[l_node_pos].key_length;
 
-    meta_array_[pos].is_deleted = 1;
+    meta_array_[l_node_pos].is_deleted = 1;
     deleted_count_++;
 
     // update this header
