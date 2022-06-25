@@ -186,7 +186,7 @@ class Node
   }
 
   /**
-   * @return the number of records in this node.
+   * @return the number of valid records in this node.
    */
   [[nodiscard]] constexpr auto
   GetValidRecordCount() const  //
@@ -196,10 +196,10 @@ class Node
   }
 
   /**
-   * @return position of valid record in this node.
+   * @return nearest valid position to the right of pos
    */
   [[nodiscard]] constexpr auto
-  GetValidRecordPos(const size_t pos) const  //
+  GetRightValidRecordPos(const size_t pos) const  //
       -> size_t
   {
     for (size_t i = pos; i < record_count_; i++) {
@@ -679,7 +679,8 @@ class Node
    *
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
-   * @param pos the position of a left child node.
+   * @param l_node_pos the position of a left child node.
+   * @param r_node_pos the position of a right child node.
    * @retval kCompleted if a child node is inserted.
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
