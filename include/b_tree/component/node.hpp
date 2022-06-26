@@ -18,8 +18,8 @@
 #ifndef B_TREE_COMPONENT_NODE_HPP
 #define B_TREE_COMPONENT_NODE_HPP
 
+#include <atomic>
 #include <optional>
-#include <shared_mutex>
 #include <utility>
 
 #include "common.hpp"
@@ -123,8 +123,8 @@ class Node
 
     const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
     if (!can_merge) {
-      r_node->mutex_.unlock();
-      mutex_.unlock();
+      r_node->ReleaseExclusiveLock();
+      ReleaseExclusiveLock();
     }
 
     return can_merge;
@@ -148,26 +148,40 @@ class Node
   void
   AcquireSharedLock()
   {
-    mutex_.lock_shared();
+    auto expected = latch_ & (~1);  // turn-off LSB
+    auto desired = expected + 2;    // increment read-counter
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = expected & (~1);
+      desired = expected + 2;
+    }
   }
 
   auto
   ReleaseSharedLock()  //
       -> void
   {
-    mutex_.unlock_shared();
+    auto expected = latch_ & (~1);  // turn-off LSB
+    auto desired = expected - 2;    // decrement read-counter
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = expected & (~1);
+      desired = expected - 2;
+    }
   }
 
   void
   AcquireExclusiveLock()
   {
-    mutex_.lock();
+    uint64_t expected = 0;
+    const auto desired = 1;
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = 0;
+    }
   }
 
   void
   ReleaseExclusiveLock()
   {
-    mutex_.unlock();
+    latch_ = 0;
   }
 
   /**
@@ -189,10 +203,10 @@ class Node
   {
     const auto &high_key = GetHighKey();
     if (!high_key || !Comp{}(high_key.value(), key)) {
-      next_->mutex_.unlock();
+      next_->ReleaseExclusiveLock();
       return this;
     }
-    mutex_.unlock();
+    ReleaseExclusiveLock();
     return next_;
   }
 
@@ -203,8 +217,8 @@ class Node
   GetNextNodeForRead()  //
       -> Node *
   {
-    next_->mutex_.lock_shared();
-    mutex_.unlock_shared();
+    next_->AcquireSharedLock();
+    ReleaseSharedLock();
     return next_;
   }
 
@@ -213,8 +227,8 @@ class Node
       -> Node *
   {
     auto *child = GetPayload<Node *>(pos);
-    child->mutex_.lock_shared();
-    mutex_.unlock_shared();
+    child->AcquireSharedLock();
+    ReleaseSharedLock();
     return child;
   }
 
@@ -228,7 +242,7 @@ class Node
     constexpr auto kRecLen = kKeyLen + sizeof(Node *) + sizeof(Metadata);
 
     auto *child = GetPayload<Node *>(pos);
-    child->mutex_.lock();
+    child->AcquireExclusiveLock();
 
     // check if the node has sufficient space
     const auto size = sizeof(Metadata) * child->record_count_ + child->block_size_;
@@ -449,7 +463,7 @@ class Node
       rc = kCompleted;
     }
 
-    mutex_.unlock_shared();
+    ReleaseSharedLock();
     return rc;
   }
 
@@ -804,7 +818,7 @@ class Node
     deleted_size_ = 0;
     next_ = r_node->next_;
 
-    mutex_.unlock();
+    ReleaseExclusiveLock();
   }
 
  private:
@@ -1051,7 +1065,7 @@ class Node
   uint64_t : 0;
 
   /// the latch this node.
-  std::shared_mutex mutex_{};
+  std::atomic<uint64_t> latch_{};
 
   /// the pointer to the next node.
   Node *next_{nullptr};

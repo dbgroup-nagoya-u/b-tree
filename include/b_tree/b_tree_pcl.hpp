@@ -421,9 +421,22 @@ class BTreePCL
   GetRootForRead()  //
       -> Node_t *
   {
-    mutex_.lock_shared();        // tree-latch
+    // tree-latch
+    auto expected = latch_ & (~1);  // turn-off LSB
+    auto desired = expected + 2;    // increment read-counter
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = expected & (~1);
+      desired = expected + 2;
+    }
+
     root_->AcquireSharedLock();  // root-latch
-    mutex_.unlock_shared();
+
+    expected = latch_ & (~1);  // turn-off LSB
+    desired = expected - 2;    // decrement read-counter
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = expected & (~1);
+      desired = expected - 2;
+    }
     return root_;
   }
 
@@ -435,7 +448,12 @@ class BTreePCL
   GetRootForWrite()  //
       -> Node_t *
   {
-    mutex_.lock();  // tree-latch
+    // tree-latch
+    uint64_t expected = 0;
+    const auto desired = 1;
+    while (!latch_.compare_exchange_weak(expected, desired)) {
+      expected = 0;
+    }
     has_tree_lock_ = true;
     root_->AcquireExclusiveLock();  // root-latch
     return root_;
@@ -500,7 +518,7 @@ class BTreePCL
   ReleaseExclusiveLocks(NodeStack &stack)
   {
     if (has_tree_lock_) {
-      mutex_.unlock();  // unlatch tree-latch
+      latch_ = 0;  // unlatch tree-latch
       has_tree_lock_ = false;
     }
 
@@ -627,7 +645,7 @@ class BTreePCL
   Node_t *root_ = new Node_t{true};
 
   /// mutex for root
-  std::shared_mutex mutex_{};
+  std::atomic<uint64_t> latch_{};
 
   /// thread local flags for managing the tree lock
   static inline thread_local bool has_tree_lock_{false};  // NOLINT
