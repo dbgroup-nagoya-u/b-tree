@@ -30,7 +30,7 @@ struct Metadata {
   /*################################################################################################
    * Public constructors/destructors
    *##############################################################################################*/
-  Metadata() = default;
+  constexpr Metadata() : is_deleted{}, offset{} {};
 
   /**
    * @brief Construct a new metadata object.

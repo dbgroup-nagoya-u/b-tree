@@ -590,7 +590,7 @@ class BTreePCL
 
     if (stack.empty()) {
       // a root node cannot be merged
-      if (!root_->IsLeaf() && node->GetValidRecordCount() == 1) {
+      if (!root_->IsLeaf() && node->HasSingleRecord()) {
         // if a root node has only one child, shrink a tree
         root_ = node->template GetPayload<Node_t *>(node->GetRecordCount() - 1);
         delete node;
