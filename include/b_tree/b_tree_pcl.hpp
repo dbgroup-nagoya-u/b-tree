@@ -463,8 +463,7 @@ class BTreePCL
       const auto pos = node->SearchChild(key, kClosed);
 
       bool keep_lock{};
-      const auto right_valid_pos = node->GetRightValidRecordPos(pos);
-      std::tie(node, keep_lock) = node->GetChildForWrite(right_valid_pos, ops_is_del);
+      std::tie(node, keep_lock) = node->GetChildForWrite(pos, ops_is_del);
       if (!keep_lock) {
         ReleaseExclusiveLocks(stack);
       }
@@ -491,8 +490,7 @@ class BTreePCL
     auto *node = GetRootForRead();
     while (!node->IsLeaf()) {
       const auto pos = node->SearchChild(key, range_is_closed);
-      const auto right_valid_pos = node->GetRightValidRecordPos(pos);
-      node = node->GetChildForRead(right_valid_pos);
+      node = node->GetChildForRead(pos);
     }
 
     return node;
@@ -555,8 +553,7 @@ class BTreePCL
       root_ = new Node_t{l_node, r_node};
     } else {
       auto *parent = stack.back().first;
-      const auto right_valid_pos = parent->GetRightValidRecordPos(pos);
-      const auto rc = parent->InsertChild(l_node, r_node, pos, right_valid_pos);
+      const auto rc = parent->InsertChild(l_node, r_node, pos);
       if (rc != NodeRC::kCompleted) {
         if (rc == NodeRC::kNeedSplit) {
           Split<Node_t *>(key, stack);
@@ -569,8 +566,7 @@ class BTreePCL
 
         // update the child position and insert again
         pos = parent->SearchChild(key, kClosed);
-        const auto right_valid_pos = parent->GetRightValidRecordPos(pos);
-        parent->InsertChild(l_node, r_node, pos, right_valid_pos);
+        parent->InsertChild(l_node, r_node, pos);
         stack.emplace_back(parent, 0);  // add a parent to release its lock
       }
     }
@@ -590,9 +586,9 @@ class BTreePCL
 
     if (stack.empty()) {
       // a root node cannot be merged
-      if (!root_->IsLeaf() && node->HasSingleRecord()) {
+      if (!root_->IsLeaf() && node->GetRecordCount() == 1) {
         // if a root node has only one child, shrink a tree
-        root_ = node->template GetPayload<Node_t *>(node->GetRecordCount() - 1);
+        root_ = node->template GetPayload<Node_t *>(0);
         delete node;
       } else {
         node->ReleaseExclusiveLock();
@@ -603,20 +599,18 @@ class BTreePCL
     auto *parent = stack.back().first;
 
     // check there is a right-sibling node
-    pos = parent->GetRightValidRecordPos(pos);
     if (pos == parent->GetRecordCount() - 1) {
       node->ReleaseExclusiveLock();
       return;
     }
 
     // check the right-sibling node has enough capacity for merging
-    const auto right_valid_pos = parent->GetRightValidRecordPos(pos + 1);
-    auto *right_node = parent->GetChildForWrite(right_valid_pos, kDelOps).first;
+    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps).first;
     if (!node->CanMerge(right_node)) return;
 
     // perform merging
     node->template Merge<Value>(right_node);
-    const auto rc = parent->DeleteChild(node, pos, right_valid_pos);
+    const auto rc = parent->DeleteChild(node, pos + 1);
     delete right_node;
 
     if (rc == NodeRC::kNeedMerge) {

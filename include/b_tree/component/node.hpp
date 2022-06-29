@@ -183,37 +183,6 @@ class Node
   }
 
   /**
-   * @return true if a valid record in this node.
-   * @return false otherwise.
-   */
-  [[nodiscard]] constexpr auto
-  HasSingleRecord() const  //
-      -> bool
-  {
-    auto has_record = false;
-    for (size_t i = 0; i < record_count_; i++) {
-      if (!meta_array_[i].is_deleted) {
-        if (has_record) return false;
-        has_record = true;
-      }
-    }
-    return has_record;
-  }
-
-  /**
-   * @return nearest valid position to the right of pos
-   */
-  [[nodiscard]] constexpr auto
-  GetRightValidRecordPos(const size_t pos) const  //
-      -> size_t
-  {
-    for (size_t i = pos; i < record_count_; i++) {
-      if (!meta_array_[i].is_deleted) return i;
-    }
-    return record_count_;
-  }
-
-  /**
    * @return pointer of next node with exclusive lock
    */
   [[nodiscard]] auto
@@ -688,8 +657,7 @@ class Node
    *
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
-   * @param l_node_pos the position of a left child node.
-   * @param r_node_pos the position of a right child node.
+   * @param pos the position of a left child node.
    * @retval kCompleted if a child node is inserted.
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
@@ -698,12 +666,10 @@ class Node
   InsertChild(  //
       Node *l_node,
       const Node *r_node,
-      const size_t l_node_pos,
-      const size_t r_node_pos)  //
+      const size_t pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
-    constexpr auto kMetaLen = sizeof(Metadata);
     const auto l_high_meta = l_node->high_meta_;
     const auto key_len = l_high_meta.key_length;
     const auto rec_len = key_len + kPayLen;
@@ -711,32 +677,20 @@ class Node
     if (auto rc = GetSpaceStatus(rec_len); rc != kHasSpace) return rc;
 
     // insert a right child by updating an original record
-    memcpy(GetPayloadAddr(meta_array_[r_node_pos]), &r_node, kPayLen);
-
-    if (l_node_pos != r_node_pos) {
-      const auto l_high_key = l_node->GetHighKey().value();
-      const auto pos_key = GetKey(l_node_pos);
-      // reuse dead record
-      if (!Comp{}(l_high_key, pos_key) && !Comp{}(pos_key, l_high_key)) {
-        memcpy(GetPayloadAddr(meta_array_[l_node_pos]), &l_node, kPayLen);
-        meta_array_[l_node_pos].is_deleted = 0;
-        deleted_size_ -= meta_array_[l_node_pos].total_length + kMetaLen;
-        return kCompleted;
-      }
-    }
+    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPayLen);
 
     // insert a left child
     auto offset = SetPayload(kPageSize - block_size_, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
 
     // add metadata for a left child
-    memmove(&(meta_array_[l_node_pos + 1]), &(meta_array_[l_node_pos]),
-            kMetaLen * (record_count_ - l_node_pos));
-    meta_array_[l_node_pos] = Metadata{0, offset, key_len, rec_len};
+    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
+    meta_array_[pos] = Metadata{0, offset, key_len, rec_len};
 
     // update this header
     block_size_ += rec_len;
     ++record_count_;
+
     return kCompleted;
   }
 
@@ -744,8 +698,8 @@ class Node
    * @brief Delete child node in this node.
    *
    * @param l_node a left child node.
-   * @param l_node_pos the position of a left child node.
-   * @param r_node_pos the position of a right child node.
+   * @param r_node a right child (i.e., to be deleted) node.
+   * @param pos the position of a right child node.
    * @retval kHasSpace if this node does not need any SMOs.
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
@@ -753,24 +707,25 @@ class Node
   auto
   DeleteChild(  //
       Node *l_node,
-      const size_t l_node_pos,
-      const size_t r_node_pos)  //
+      const size_t pos)  //
       -> NodeRC
   {
     constexpr auto kPayLen = sizeof(Node *);
-    constexpr auto kMetaLen = sizeof(Metadata);
+
     // update payload
-    memcpy(GetPayloadAddr(meta_array_[r_node_pos]), &l_node, kPayLen);
+    memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPayLen);
 
-    const auto key_len = meta_array_[l_node_pos].key_length;
+    const auto key_len = meta_array_[pos - 1].key_length;
 
-    meta_array_[l_node_pos].is_deleted = 1;
+    // delete metadata
+    memmove(&(meta_array_[pos - 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
 
     // update this header
-    deleted_size_ += key_len + kPayLen + kMetaLen;
+    deleted_size_ += key_len + kPayLen;
+    --record_count_;
 
     // check if this node should be merged
-    const auto used_size = kMetaLen * record_count_ + block_size_ - deleted_size_;
+    const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
     return (used_size < kMinUsedSpaceSize) ? kNeedMerge : kCompleted;
   }
 
