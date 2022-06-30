@@ -37,7 +37,8 @@ namespace dbgroup::index::b_tree::component
 enum NodeRC {
   kCompleted = 0,
   kHasSpace,
-  kKeyNotInserted = -5,
+  kKeyNotInserted = -6,
+  kKeyAlreadyDeleted,
   kKeyAlreadyInserted,
   kNeedConsolidation,
   kNeedSplit,
