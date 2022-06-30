@@ -39,7 +39,7 @@ class MetadataFixture : public testing::Test
   void
   SetUp() override
   {
-    meta_ = Metadata{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+    meta_ = Metadata{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   }
 
   void
@@ -96,15 +96,15 @@ TEST_F(MetadataFixture, SetTotalLengthDefaultMetadataGetUpdatedTotalLength)
 
 TEST_F(MetadataFixture, EQWithSameMetadatasReturnTrue)
 {
-  const Metadata meta_a{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
-  const Metadata meta_b{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_b{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
 
   EXPECT_TRUE(meta_a == meta_b);
 }
 
 TEST_F(MetadataFixture, EQWithDifferentMetadatasReturnFalse)
 {
-  const Metadata meta_a{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{};
 
   EXPECT_FALSE(meta_a == meta_b);
@@ -112,15 +112,15 @@ TEST_F(MetadataFixture, EQWithDifferentMetadatasReturnFalse)
 
 TEST_F(MetadataFixture, NEQWithSameMetadatasReturnFalse)
 {
-  const Metadata meta_a{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
-  const Metadata meta_b{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_b{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
 
   EXPECT_FALSE(meta_a != meta_b);
 }
 
 TEST_F(MetadataFixture, NEQWithDifferentMetadatasReturnTrue)
 {
-  const Metadata meta_a{0, kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
+  const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{};
 
   EXPECT_TRUE(meta_a != meta_b);

@@ -71,11 +71,11 @@ class Node
     const auto l_rec_len = l_key_len + kPayLen;
     auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
-    meta_array_[0] = Metadata{0, offset, l_key_len, l_rec_len};
+    meta_array_[0] = Metadata{offset, l_key_len, l_rec_len};
 
     // insert r_node
     offset = SetPayload(offset, r_node);
-    meta_array_[1] = Metadata{0, offset, 0, kPayLen};
+    meta_array_[1] = Metadata{offset, 0, kPayLen};
 
     block_size_ += l_rec_len + kPayLen;
   }
@@ -506,7 +506,7 @@ class Node
       block_size_ += total_length;
 
       memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-      meta_array_[pos] = Metadata{0, offset, key_length, total_length};
+      meta_array_[pos] = Metadata{offset, key_length, total_length};
       record_count_ += 1;
     } else {
       // update
@@ -575,7 +575,7 @@ class Node
 
     // insert metadata
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-    meta_array_[pos] = Metadata{0, offset, key_length, total_length};
+    meta_array_[pos] = Metadata{offset, key_length, total_length};
     record_count_ += 1;
 
     return kCompleted;
@@ -685,7 +685,7 @@ class Node
 
     // add metadata for a left child
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
-    meta_array_[pos] = Metadata{0, offset, key_len, rec_len};
+    meta_array_[pos] = Metadata{offset, key_len, rec_len};
 
     // update this header
     block_size_ += rec_len;
@@ -784,7 +784,7 @@ class Node
       }
     }
     const auto sep_key_len = meta_array_[pos - 1].key_length;
-    temp_node_->high_meta_ = Metadata{0, offset, sep_key_len, sep_key_len};
+    temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
 
     // copy right half records to a right node
     auto r_offset = r_node->CopyHighKeyFrom(this, high_meta_);
@@ -1093,7 +1093,7 @@ class Node
   Node *next_{nullptr};
 
   /// the metadata of a highest key.
-  Metadata high_meta_{0, kPageSize, 0, 0};
+  Metadata high_meta_{kPageSize, 0, 0};
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];

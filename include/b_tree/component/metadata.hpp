@@ -37,11 +37,10 @@ struct Metadata {
    *
    */
   constexpr Metadata(  //
-      const size_t is_deleted,
       const size_t offset,
       const size_t key_length,
       const size_t total_length)
-      : is_deleted{static_cast<uint32_t>(is_deleted)},
+      : is_deleted{0},
         offset{static_cast<uint32_t>(offset)},
         key_length{static_cast<uint16_t>(key_length)},
         total_length{static_cast<uint16_t>(total_length)}
