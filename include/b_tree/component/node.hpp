@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "common.hpp"
+#include "lock/pessimistic_lock.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::b_tree::component
@@ -35,8 +36,14 @@ namespace dbgroup::index::b_tree::component
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
-class Node
+class PessimisticNode
 {
+  /*####################################################################################
+   * Type aliases
+   *##################################################################################*/
+
+  using Lock = ::dbgroup::lock::PessimisticLock;
+
  public:
   /*################################################################################################
    * Public constructors/destructors
@@ -47,7 +54,7 @@ class Node
    *
    * @param is_leaf a flag to indicate whether a leaf node is constructed
    */
-  explicit Node(const bool is_leaf)
+  explicit PessimisticNode(const bool is_leaf)
       : is_leaf_{static_cast<uint64_t>(is_leaf)}, record_count_{0}, block_size_{0}, deleted_size_{0}
   {
   }
@@ -58,12 +65,12 @@ class Node
    * @param l_node a left child node which is previous root
    * @param r_node a right child node which is split into
    */
-  Node(  //
-      Node *l_node,
-      const Node *r_node)  //
+  PessimisticNode(  //
+      PessimisticNode *l_node,
+      const PessimisticNode *r_node)  //
       : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
   {
-    constexpr auto kPayLen = sizeof(Node *);
+    constexpr auto kPayLen = sizeof(PessimisticNode *);
 
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
@@ -80,17 +87,17 @@ class Node
     block_size_ += l_rec_len + kPayLen;
   }
 
-  Node(const Node &) = delete;
-  Node(Node &&) = delete;
+  PessimisticNode(const PessimisticNode &) = delete;
+  PessimisticNode(PessimisticNode &&) = delete;
 
-  auto operator=(const Node &) -> Node & = delete;
-  auto operator=(Node &&) -> Node & = delete;
+  auto operator=(const PessimisticNode &) -> PessimisticNode & = delete;
+  auto operator=(PessimisticNode &&) -> PessimisticNode & = delete;
 
   /**
    * @brief Destroy the node object.
    *
    */
-  ~Node() = default;
+  ~PessimisticNode() = default;
 
   /*####################################################################################
    * new/delete operators
@@ -114,7 +121,7 @@ class Node
    * @return false otherwise
    */
   auto
-  CanMerge(Node *r_node)  //
+  CanMerge(PessimisticNode *r_node)  //
       -> bool
   {
     const auto l_size = (sizeof(Metadata) * (record_count_)) + block_size_ - deleted_size_;
@@ -148,40 +155,26 @@ class Node
   void
   AcquireSharedLock()
   {
-    auto expected = latch_ & (~1);  // turn-off LSB
-    auto desired = expected + 2;    // increment read-counter
-    while (!latch_.compare_exchange_weak(expected, desired)) {
-      expected = expected & (~1);
-      desired = expected + 2;
-    }
+    mutex_.LockShared();
   }
 
   auto
   ReleaseSharedLock()  //
       -> void
   {
-    auto expected = latch_ & (~1);  // turn-off LSB
-    auto desired = expected - 2;    // decrement read-counter
-    while (!latch_.compare_exchange_weak(expected, desired)) {
-      expected = expected & (~1);
-      desired = expected - 2;
-    }
+    mutex_.UnlockShared();
   }
 
   void
   AcquireExclusiveLock()
   {
-    uint64_t expected = 0;
-    const auto desired = 1;
-    while (!latch_.compare_exchange_weak(expected, desired)) {
-      expected = 0;
-    }
+    mutex_.Lock();
   }
 
   void
   ReleaseExclusiveLock()
   {
-    latch_ = 0;
+    mutex_.Unlock();
   }
 
   /**
@@ -199,7 +192,7 @@ class Node
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> Node *
+      -> PessimisticNode *
   {
     const auto &high_key = GetHighKey();
     if (!high_key || !Comp{}(high_key.value(), key)) {
@@ -215,7 +208,7 @@ class Node
    */
   [[nodiscard]] constexpr auto
   GetNextNodeForRead()  //
-      -> Node *
+      -> PessimisticNode *
   {
     next_->AcquireSharedLock();
     ReleaseSharedLock();
@@ -224,9 +217,9 @@ class Node
 
   [[nodiscard]] constexpr auto
   GetChildForRead(const size_t pos)  //
-      -> Node *
+      -> PessimisticNode *
   {
-    auto *child = GetPayload<Node *>(pos);
+    auto *child = GetPayload<PessimisticNode *>(pos);
     child->AcquireSharedLock();
     ReleaseSharedLock();
     return child;
@@ -236,12 +229,12 @@ class Node
   GetChildForWrite(  //
       const size_t pos,
       const bool ops_is_del)  //
-      -> std::pair<Node *, bool>
+      -> std::pair<PessimisticNode *, bool>
   {
     constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + sizeof(Node *) + sizeof(Metadata);
+    constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + sizeof(Metadata);
 
-    auto *child = GetPayload<Node *>(pos);
+    auto *child = GetPayload<PessimisticNode *>(pos);
     child->AcquireExclusiveLock();
 
     // check if the node has sufficient space
@@ -658,12 +651,12 @@ class Node
    */
   auto
   InsertChild(  //
-      Node *l_node,
-      const Node *r_node,
+      PessimisticNode *l_node,
+      const PessimisticNode *r_node,
       const size_t pos)  //
       -> NodeRC
   {
-    constexpr auto kPayLen = sizeof(Node *);
+    constexpr auto kPayLen = sizeof(PessimisticNode *);
     const auto l_high_meta = l_node->high_meta_;
     const auto key_len = l_high_meta.key_length;
     const auto rec_len = key_len + kPayLen;
@@ -700,11 +693,11 @@ class Node
    */
   auto
   DeleteChild(  //
-      Node *l_node,
+      PessimisticNode *l_node,
       const size_t pos)  //
       -> NodeRC
   {
-    constexpr auto kPayLen = sizeof(Node *);
+    constexpr auto kPayLen = sizeof(PessimisticNode *);
 
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPayLen);
@@ -757,7 +750,7 @@ class Node
    */
   template <class Payload>
   void
-  Split(Node *r_node)
+  Split(PessimisticNode *r_node)
   {
     // copy left half records to a temporal node
     size_t offset = kPageSize;
@@ -798,7 +791,7 @@ class Node
    */
   template <class Payload>
   void
-  Merge(const Node *r_node)
+  Merge(const PessimisticNode *r_node)
   {
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node, r_node->high_meta_);
@@ -939,7 +932,7 @@ class Node
    */
   auto
   CopyKeyFrom(  //
-      const Node *node,
+      const PessimisticNode *node,
       const Metadata meta,
       size_t offset)  //
       -> size_t
@@ -967,7 +960,7 @@ class Node
    */
   auto
   CopyHighKeyFrom(  //
-      const Node *orig_node,
+      const PessimisticNode *orig_node,
       const Metadata target_meta)  //
       -> size_t
   {
@@ -991,7 +984,7 @@ class Node
   template <class Payload>
   auto
   CopyRecordFrom(  //
-      const Node *node,
+      const PessimisticNode *node,
       const Metadata meta,
       const size_t rec_count,
       size_t offset)  //
@@ -1029,7 +1022,7 @@ class Node
   template <class Payload>
   auto
   CopyRecordsFrom(  //
-      const Node *orig_node,
+      const PessimisticNode *orig_node,
       const size_t begin_pos,
       const size_t end_pos,
       size_t rec_count,
@@ -1065,10 +1058,10 @@ class Node
   uint64_t : 0;
 
   /// the latch this node.
-  std::atomic<uint64_t> latch_{};
+  Lock mutex_{};
 
   /// the pointer to the next node.
-  Node *next_{nullptr};
+  PessimisticNode *next_{nullptr};
 
   /// the metadata of a highest key.
   Metadata high_meta_{kPageSize, 0, 0};
@@ -1077,8 +1070,8 @@ class Node
   Metadata meta_array_[0];
 
   // temporary node for SMO
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<PessimisticNode> temp_node_ =  // NOLINT
+      std::make_unique<PessimisticNode>(0);
 };
 
 }  // namespace dbgroup::index::b_tree::component
