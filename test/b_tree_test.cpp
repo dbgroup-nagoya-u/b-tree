@@ -35,10 +35,10 @@ class BTreeFixture : public testing::Test  // NOLINT
 
   // define type aliases for simplicity
   using Metadata = component::Metadata;
-  using Node_t = component::Node<Key, KeyComp>;
+  using Node_t = component::PessimisticNode<Key, KeyComp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-  using BTreePCL_t = BTreePCL<Key, Payload, KeyComp>;
+  using BTreePCL_t = BTreePCL<component::PessimisticNode, Key, Payload, KeyComp>;
 
  protected:
   /*################################################################################################

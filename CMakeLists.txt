@@ -27,6 +27,11 @@ set(B_TREE_MIN_USED_SPACE_SIZE "(kPageSize / 16)" CACHE STRING "Invoking merge-o
 set(B_TREE_MAX_VARIABLE_DATA_SIZE "128" CACHE STRING "The expected maximum size of a variable-length data.")
 
 #--------------------------------------------------------------------------------------#
+# Configure cpp-utility
+#--------------------------------------------------------------------------------------#
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/cpp-utility")
+
+#--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
@@ -45,6 +50,9 @@ if(NOT TARGET b_tree::b_tree)
   )
   target_include_directories(b_tree INTERFACE
     "${B_TREE_SOURCE_DIR}/include"
+  )
+  target_link_libraries(b_tree INTERFACE
+    cpp_utility::cpp_utility
   )
 endif()
 

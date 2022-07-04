@@ -29,11 +29,15 @@ namespace dbgroup::index::b_tree
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
+ * @tparam Node a class of stored nodes.
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
  */
-template <class Key, class Payload, class Comp = ::std::less<Key>>
+template <template <class Key, class Comp> class Node,
+          class Key,
+          class Payload,
+          class Comp = ::std::less<Key>>
 class BTreePCL
 {
  public:
@@ -41,7 +45,7 @@ class BTreePCL
    * Type aliases
    *##################################################################################*/
 
-  using Node_t = component::Node<Key, Comp>;
+  using Node_t = Node<Key, Comp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
 
@@ -421,9 +425,9 @@ class BTreePCL
   GetRootForRead()  //
       -> Node_t *
   {
-    mutex_.lock_shared();        // tree-latch
+    mutex_.LockShared();         // tree-latch
     root_->AcquireSharedLock();  // root-latch
-    mutex_.unlock_shared();
+    mutex_.UnlockShared();       // tree-unlatch
     return root_;
   }
 
@@ -435,7 +439,7 @@ class BTreePCL
   GetRootForWrite()  //
       -> Node_t *
   {
-    mutex_.lock();  // tree-latch
+    mutex_.Lock();  // tree-latch
     has_tree_lock_ = true;
     root_->AcquireExclusiveLock();  // root-latch
     return root_;
@@ -500,7 +504,7 @@ class BTreePCL
   ReleaseExclusiveLocks(NodeStack &stack)
   {
     if (has_tree_lock_) {
-      mutex_.unlock();  // unlatch tree-latch
+      mutex_.Unlock();  // unlatch tree-latch
       has_tree_lock_ = false;
     }
 
@@ -627,7 +631,7 @@ class BTreePCL
   Node_t *root_ = new Node_t{true};
 
   /// mutex for root
-  std::shared_mutex mutex_{};
+  ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// thread local flags for managing the tree lock
   static inline thread_local bool has_tree_lock_{false};  // NOLINT

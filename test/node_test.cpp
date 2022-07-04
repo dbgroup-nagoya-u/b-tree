@@ -49,7 +49,7 @@ class NodeFixture : public testing::Test
   using PayloadComp = typename KeyPayload::Payload::Comp;
 
   // define type aliases for simplicity
-  using Node_t = Node<Key, KeyComp>;
+  using Node_t = PessimisticNode<Key, KeyComp>;
 
  protected:
   /*################################################################################################
