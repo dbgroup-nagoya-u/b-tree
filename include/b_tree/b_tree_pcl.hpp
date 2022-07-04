@@ -48,7 +48,6 @@ class BTreePCL
   using Node_t = Node<Key, Comp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-  using Lock = ::dbgroup::lock::PessimisticLock;
 
   /**
    * @brief A class for representing an iterator of scan results.
@@ -632,7 +631,7 @@ class BTreePCL
   Node_t *root_ = new Node_t{true};
 
   /// mutex for root
-  Lock mutex_{};
+  ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// thread local flags for managing the tree lock
   static inline thread_local bool has_tree_lock_{false};  // NOLINT

@@ -130,8 +130,8 @@ class PessimisticNode
 
     const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
     if (!can_merge) {
-      r_node->ReleaseExclusiveLock();
-      ReleaseExclusiveLock();
+      r_node->mutex_.Unlock();
+      mutex_.Unlock();
     }
 
     return can_merge;
@@ -196,10 +196,10 @@ class PessimisticNode
   {
     const auto &high_key = GetHighKey();
     if (!high_key || !Comp{}(high_key.value(), key)) {
-      next_->ReleaseExclusiveLock();
+      next_->mutex_.Unlock();
       return this;
     }
-    ReleaseExclusiveLock();
+    mutex_.Unlock();
     return next_;
   }
 
@@ -210,8 +210,8 @@ class PessimisticNode
   GetNextNodeForRead()  //
       -> PessimisticNode *
   {
-    next_->AcquireSharedLock();
-    ReleaseSharedLock();
+    next_->mutex_.LockShared();
+    mutex_.UnlockShared();
     return next_;
   }
 
@@ -220,8 +220,8 @@ class PessimisticNode
       -> PessimisticNode *
   {
     auto *child = GetPayload<PessimisticNode *>(pos);
-    child->AcquireSharedLock();
-    ReleaseSharedLock();
+    child->mutex_.LockShared();
+    mutex_.UnlockShared();
     return child;
   }
 
@@ -235,7 +235,7 @@ class PessimisticNode
     constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + sizeof(Metadata);
 
     auto *child = GetPayload<PessimisticNode *>(pos);
-    child->AcquireExclusiveLock();
+    child->mutex_.Lock();
 
     // check if the node has sufficient space
     const auto size = sizeof(Metadata) * child->record_count_ + child->block_size_;
@@ -456,7 +456,7 @@ class PessimisticNode
       rc = kCompleted;
     }
 
-    ReleaseSharedLock();
+    mutex_.UnlockShared();
     return rc;
   }
 
@@ -811,7 +811,7 @@ class PessimisticNode
     deleted_size_ = 0;
     next_ = r_node->next_;
 
-    ReleaseExclusiveLock();
+    mutex_.Unlock();
   }
 
  private:
