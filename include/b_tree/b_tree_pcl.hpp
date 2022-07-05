@@ -597,7 +597,7 @@ class BTreePCL
   Node_t *root_ = new Node_t{true};
 
   /// mutex for root
-  dbgroup::lock::PessimisticLock mutex_{};
+  ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// thread local flags for managing the tree lock
   static inline thread_local bool has_tree_lock_{false};  // NOLINT
