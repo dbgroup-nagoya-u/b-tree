@@ -228,7 +228,7 @@ class PessimisticNode
   }
 
   [[nodiscard]] constexpr auto
-  CheckSufficientSpace(const bool ops_is_del)  //
+  HasSufficientSpace(const bool ops_is_del)  //
       -> bool
   {
     constexpr auto kMetaLen = sizeof(Metadata);
@@ -237,9 +237,10 @@ class PessimisticNode
 
     // check if the node has sufficient space
     const auto size = kMetaLen * record_count_ + block_size_;
-    const auto keep_lock = (!ops_is_del && (size > kPageSize - (kHeaderLength + kRecLen)))
-                           || (ops_is_del && (size - deleted_size_ < kRecLen + kMinUsedSpaceSize));
-    return keep_lock;
+    const auto has_sufficient_space =
+        (!ops_is_del && (size <= kPageSize - (kHeaderLength + kRecLen)))
+        || (ops_is_del && (size - deleted_size_ >= kRecLen + kMinUsedSpaceSize));
+    return has_sufficient_space;
   }
 
   [[nodiscard]] constexpr auto
@@ -252,8 +253,8 @@ class PessimisticNode
     child->mutex_.Lock();
 
     // check if the node has sufficient space
-    const auto keep_lock = child->CheckSufficientSpace(ops_is_del);
-    return {child, keep_lock};
+    const auto should_smo = !child->HasSufficientSpace(ops_is_del);
+    return {child, should_smo};
   }
 
   /**
