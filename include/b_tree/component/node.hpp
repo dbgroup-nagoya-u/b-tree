@@ -228,25 +228,31 @@ class PessimisticNode
   }
 
   [[nodiscard]] constexpr auto
+  CheckSufficientSpace(const bool ops_is_del)  //
+      -> bool
+  {
+    constexpr auto kMetaLen = sizeof(Metadata);
+    constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + kMetaLen;
+
+    // check if the node has sufficient space
+    const auto size = kMetaLen * record_count_ + block_size_;
+    const auto keep_lock = (!ops_is_del && (size > kPageSize - (kHeaderLength + kRecLen)))
+                           || (ops_is_del && (size - deleted_size_ < kRecLen + kMinUsedSpaceSize));
+    return keep_lock;
+  }
+
+  [[nodiscard]] constexpr auto
   GetChildForWrite(  //
       const size_t pos,
       const bool ops_is_del)  //
       -> std::pair<PessimisticNode *, bool>
   {
-    constexpr auto kMetaLen = sizeof(Metadata);
-
-    constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + kMetaLen;
-
     auto *child = GetPayload<PessimisticNode *>(pos);
     child->mutex_.Lock();
 
     // check if the node has sufficient space
-    const auto size = kMetaLen * child->record_count_ + child->block_size_;
-    const auto keep_lock =
-        (!ops_is_del && (size > kPageSize - (kHeaderLength + kRecLen)))
-        || (ops_is_del && (size - child->deleted_size_ < kRecLen + kMinUsedSpaceSize));
-
+    const auto keep_lock = child->CheckSufficientSpace(ops_is_del);
     return {child, keep_lock};
   }
 
@@ -669,19 +675,16 @@ class PessimisticNode
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
    */
-  auto
+  void
   InsertChild(  //
       PessimisticNode *l_node,
       const PessimisticNode *r_node,
       const size_t pos)  //
-      -> NodeRC
   {
     constexpr auto kPayLen = sizeof(PessimisticNode *);
     const auto l_high_meta = l_node->high_meta_;
     const auto key_len = l_high_meta.key_length;
     const auto rec_len = key_len + kPayLen;
-
-    if (auto rc = GetSpaceStatus(rec_len); rc != kHasSpace) return rc;
 
     // insert a right child by updating an original record
     memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPayLen);
@@ -698,7 +701,7 @@ class PessimisticNode
     block_size_ += rec_len;
     ++record_count_;
 
-    return kCompleted;
+    return;
   }
 
   /**
@@ -711,11 +714,10 @@ class PessimisticNode
    * @retval kNeedConsolidation if this node needs consolidation for future insertion.
    * @retval kNeedSplit if this node needs splitting for future insertion.
    */
-  auto
+  void
   DeleteChild(  //
       PessimisticNode *l_node,
       const size_t pos)  //
-      -> NodeRC
   {
     constexpr auto kPayLen = sizeof(PessimisticNode *);
 
@@ -731,9 +733,7 @@ class PessimisticNode
     deleted_size_ += key_len + kPayLen;
     --record_count_;
 
-    // check if this node should be merged
-    const auto used_size = sizeof(Metadata) * (record_count_) + block_size_ - deleted_size_;
-    return (used_size < kMinUsedSpaceSize) ? kNeedMerge : kCompleted;
+    return;
   }
 
   /*####################################################################################
@@ -841,8 +841,6 @@ class PessimisticNode
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     next_ = r_node->next_;
-
-    mutex_.Unlock();
   }
 
  private:
