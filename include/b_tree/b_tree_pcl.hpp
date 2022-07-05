@@ -411,7 +411,7 @@ class BTreePCL
    *
    * @param key a search key.
    * @param ops_is_del a flag for indicating a target operation.
-   * @return a stack of traversed nodes.
+   * @return a target leaf node.
    */
   [[nodiscard]] auto
   SearchLeafNodeForWrite(  //
