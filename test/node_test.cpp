@@ -143,8 +143,6 @@ class NodeFixture : public testing::Test
   Split(Node_t *right_node)
   {
     node_->AcquireExclusiveLock();
-    right_node->AcquireExclusiveLock();
-
     node_->template Split<Payload>(right_node);
 
     node_->ReleaseExclusiveLock();

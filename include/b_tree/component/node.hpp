@@ -246,7 +246,8 @@ class PessimisticNode
   [[nodiscard]] constexpr auto
   GetChildForWrite(  //
       const size_t pos,
-      const bool ops_is_del)  //
+      const bool ops_is_del,
+      const bool unlock_parent = true)  //
       -> std::pair<PessimisticNode *, bool>
   {
     auto *child = GetPayload<PessimisticNode *>(pos);
@@ -254,6 +255,7 @@ class PessimisticNode
 
     // check if the node has sufficient space
     const auto should_smo = !child->HasSufficientSpace(ops_is_del);
+    if (!should_smo && unlock_parent) mutex_.Unlock();
     return {child, should_smo};
   }
 
@@ -507,7 +509,10 @@ class PessimisticNode
 
     const auto total_length = key_length + sizeof(Payload);
 
-    if (auto rc = GetSpaceStatus(total_length); rc != kHasSpace) return rc;
+    if (auto rc = GetSpaceStatus(total_length); rc != kHasSpace) {
+      mutex_.Unlock();
+      return rc;
+    }
 
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
@@ -531,6 +536,7 @@ class PessimisticNode
       }
     }
 
+    mutex_.Unlock();
     return kCompleted;
   }
 
@@ -565,18 +571,24 @@ class PessimisticNode
 
     const auto total_length = key_length + sizeof(Payload);
 
-    if (auto rc = GetSpaceStatus(total_length); rc != kHasSpace) return rc;
-
+    if (auto rc = GetSpaceStatus(total_length); rc != kHasSpace) {
+      mutex_.Unlock();
+      return rc;
+    }
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
-    if (rc == kKeyAlreadyInserted) return kKeyAlreadyInserted;
+    if (rc == kKeyAlreadyInserted) {
+      mutex_.Unlock();
+      return kKeyAlreadyInserted;
+    }
 
     // reuse dead record
     if (rc == kKeyAlreadyDeleted) {
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       meta_array_[pos].is_deleted = 0;
       deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
+      mutex_.Unlock();
       return kCompleted;
     }
 
@@ -592,6 +604,7 @@ class PessimisticNode
     meta_array_[pos] = Metadata{offset, key_length, total_length};
     record_count_ += 1;
 
+    mutex_.Unlock();
     return kCompleted;
   }
 
@@ -624,11 +637,14 @@ class PessimisticNode
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
-    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) return kKeyNotInserted;
+    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) {
+      mutex_.Unlock();
+      return kKeyNotInserted;
+    }
 
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
-
+    mutex_.Unlock();
     return kCompleted;
   }
 
@@ -654,16 +670,19 @@ class PessimisticNode
     constexpr auto kMetaLen = sizeof(Metadata);
 
     const auto [rc, pos] = SearchRecord(key);
-    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) return kKeyNotInserted;
+    if (rc == kKeyNotInserted || rc == kKeyAlreadyDeleted) {
+      mutex_.Unlock();
+      return kKeyNotInserted;
+    }
 
     // update a header
     meta_array_[pos].is_deleted = 1;
     deleted_size_ += meta_array_[pos].total_length + kMetaLen;
 
     const auto used_size = kMetaLen * record_count_ + block_size_ - deleted_size_;
-    if (used_size < kMinUsedSpaceSize) return kNeedMerge;
 
-    return kCompleted;
+    mutex_.Unlock();
+    return (used_size < kMinUsedSpaceSize) ? kNeedMerge : kCompleted;
   }
 
   /**
@@ -702,6 +721,7 @@ class PessimisticNode
     block_size_ += rec_len;
     ++record_count_;
 
+    mutex_.Unlock();
     return;
   }
 
@@ -734,7 +754,7 @@ class PessimisticNode
     deleted_size_ += key_len + kPayLen;
     --record_count_;
 
-    return;
+    mutex_.Unlock();
   }
 
   /*####################################################################################
@@ -776,6 +796,8 @@ class PessimisticNode
   void
   Split(PessimisticNode *r_node)
   {
+    r_node->mutex_.Lock();
+
     constexpr auto kMetaLen = sizeof(Metadata);
     // copy left half records to a temporal node
     size_t offset = kPageSize;

@@ -278,8 +278,6 @@ class BTreePCL
   {
     auto *node = SearchLeafNodeForWrite(key, !kDelOps);
     node->template Write<Payload>(key, key_len, payload);
-    UnlockTree();
-    node->ReleaseExclusiveLock();
     return kSuccess;
   }
 
@@ -306,8 +304,6 @@ class BTreePCL
   {
     auto *node = SearchLeafNodeForWrite(key, !kDelOps);
     auto rc = node->template Insert<Payload>(key, key_len, payload);
-    UnlockTree();
-    node->ReleaseExclusiveLock();
     return (rc == NodeRC::kCompleted) ? kSuccess : kKeyExist;
   }
 
@@ -333,8 +329,6 @@ class BTreePCL
   {
     auto *node = SearchLeafNodeForWrite(key, !kDelOps);
     const auto rc = node->template Update<Payload>(key, payload);
-    UnlockTree();
-    node->ReleaseExclusiveLock();
     return (rc == NodeRC::kCompleted) ? kSuccess : kKeyNotExist;
   }
 
@@ -355,8 +349,6 @@ class BTreePCL
   {
     auto *node = SearchLeafNodeForWrite(key, kDelOps);
     const auto rc = node->Delete(key);
-    UnlockTree();
-    node->ReleaseExclusiveLock();
     return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
   }
 
@@ -397,13 +389,27 @@ class BTreePCL
    * @return root
    */
   [[nodiscard]] auto
-  GetRootForWrite()  //
+  GetRootForWrite(  //
+      const Key &key,
+      const bool ops_is_del)  //
       -> Node_t *
   {
-    mutex_.Lock();  // tree-latch
-    has_tree_lock_ = true;
+    mutex_.Lock();                  // tree-latch
     root_->AcquireExclusiveLock();  // root-latch
-    return root_;
+
+    // check if the root has sufficient space
+    Node_t *node{};
+    if (root_->HasSufficientSpace(ops_is_del)) {
+      node = root_;
+    } else if (ops_is_del) {
+      node = TryShrinkTree();
+    } else {
+      node = RootSplit(key);
+    }
+
+    mutex_.Unlock();
+
+    return node;
   }
 
   /**
@@ -419,54 +425,20 @@ class BTreePCL
       const bool ops_is_del)  //
       -> Node_t *
   {
-    auto *node = GetRootForWrite();
-
-    // check if the root has sufficient space
-    if (!node->HasSufficientSpace(ops_is_del)) {
-      auto child = node;
-      const size_t pos = 0;
-      if (ops_is_del) {
-        if (!node->IsLeaf()) {
-          Merge<Node_t *>(child, node, pos);
-          node = root_;
-        }
-      } else {
-        if (node->IsLeaf()) {
-          Split<Payload>(child, node, pos);
-        } else {
-          Split<Node_t *>(child, node, pos);
-        }
-        child = child->GetValidSplitNode(key);
-        node = child;
-      }
-    }
-
+    auto *node = GetRootForWrite(key, ops_is_del);
     while (!node->IsLeaf()) {
       const auto pos = node->SearchChild(key, kClosed);
-
-      bool should_smo{};
-      Node_t *child;
-      std::tie(child, should_smo) = node->GetChildForWrite(pos, ops_is_del);
+      auto [child, should_smo] = node->GetChildForWrite(pos, ops_is_del);
 
       // SMO eagerly
       if (should_smo) {
         if (ops_is_del) {
-          if (child->IsLeaf()) {
-            Merge<Payload>(child, node, pos);
-          } else {
-            Merge<Node_t *>(child, node, pos);
-          }
+          Merge(child, node, pos);
         } else {
-          if (child->IsLeaf()) {
-            Split<Payload>(child, node, pos);
-          } else {
-            Split<Node_t *>(child, node, pos);
-          }
+          Split(child, node, pos);
           child = child->GetValidSplitNode(key);
         }
       }
-      UnlockTree();
-      node->ReleaseExclusiveLock();
       node = child;
     }
 
@@ -495,14 +467,35 @@ class BTreePCL
     return node;
   }
 
-  void
-  UnlockTree()
+  [[nodiscard]] auto
+  TryShrinkTree() -> Node_t *
   {
-    if (has_tree_lock_) {
-      mutex_.Unlock();
-      has_tree_lock_ = false;
+    // a root node cannot be merged
+    if (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
+      // for delete
+      auto *node = root_;
+      // if a root node has only one child, shrink a tree
+      auto child = node->template GetPayload<Node_t *>(0);
+      child->AcquireExclusiveLock();
+      root_ = child;
+      delete node;
     }
-    return;
+    return root_;
+  }
+
+  [[nodiscard]] auto
+  RootSplit(const Key &key) -> Node_t *
+  {
+    auto *l_node = root_;
+    auto *r_node = new Node_t{l_node->IsLeaf()};
+    if (l_node->IsLeaf()) {
+      l_node->template Split<Payload>(r_node);
+    } else {
+      l_node->template Split<Node_t *>(r_node);
+    }
+    root_ = new Node_t{l_node, r_node};
+    auto *node = l_node->GetValidSplitNode(key);
+    return node;
   }
 
   /**
@@ -530,7 +523,6 @@ class BTreePCL
    * @param parent a parent node of the l_node
    * @param pos the position of the l_node
    */
-  template <class Value>
   void
   Split(  //
       Node_t *l_node,
@@ -538,16 +530,12 @@ class BTreePCL
       const size_t pos)
   {
     auto *r_node = new Node_t{l_node->IsLeaf()};
-    r_node->AcquireExclusiveLock();
-    l_node->template Split<Value>(r_node);
-
-    if (l_node == parent) {
-      // if node is root, create a new root
-      root_ = new Node_t{l_node, r_node};
-      UnlockTree();
+    if (l_node->IsLeaf()) {
+      l_node->template Split<Payload>(r_node);
     } else {
-      parent->InsertChild(l_node, r_node, pos);
+      l_node->template Split<Node_t *>(r_node);
     }
+    parent->InsertChild(l_node, r_node, pos);
   }
 
   /**
@@ -557,34 +545,31 @@ class BTreePCL
    * @param parent a parent node of the node
    * @param pos the position of the node
    */
-  template <class Value>
   void
   Merge(  //
       Node_t *node,
       Node_t *parent,
       const size_t pos)
   {
-    if (node == parent) {
-      // a root node cannot be merged
-      if (!root_->IsLeaf() && node->GetRecordCount() == 1) {
-        // if a root node has only one child, shrink a tree
-        auto child = node->template GetPayload<Node_t *>(0);
-        child->AcquireExclusiveLock();
-        root_ = child;
-        delete node;
-      }
+    // check there is a right-sibling node
+    if (pos == parent->GetRecordCount() - 1) {
+      parent->ReleaseExclusiveLock();
       return;
     }
 
-    // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) return;
-
     // check the right-sibling node has enough capacity for merging
-    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps).first;
-    if (!node->CanMerge(right_node)) return;
+    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
+    if (!node->CanMerge(right_node)) {
+      parent->ReleaseExclusiveLock();
+      return;
+    }
 
     // perform merging
-    node->template Merge<Value>(right_node);
+    if (node->IsLeaf()) {
+      node->template Merge<Payload>(right_node);
+    } else {
+      node->template Merge<Node_t *>(right_node);
+    }
     parent->DeleteChild(node, pos + 1);
     delete right_node;
   }
@@ -598,9 +583,6 @@ class BTreePCL
 
   /// mutex for root
   ::dbgroup::lock::PessimisticLock mutex_{};
-
-  /// thread local flags for managing the tree lock
-  static inline thread_local bool has_tree_lock_{false};  // NOLINT
 };
 }  // namespace dbgroup::index::b_tree
 
