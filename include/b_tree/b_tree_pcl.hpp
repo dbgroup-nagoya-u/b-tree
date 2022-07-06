@@ -471,14 +471,12 @@ class BTreePCL
   TryShrinkTree() -> Node_t *
   {
     // a root node cannot be merged
-    if (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
-      // for delete
-      auto *node = root_;
+    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
       // if a root node has only one child, shrink a tree
-      auto child = node->template GetPayload<Node_t *>(0);
+      auto *child = root_->template GetPayload<Node_t *>(0);
       child->AcquireExclusiveLock();
+      delete root_;
       root_ = child;
-      delete node;
     }
     return root_;
   }
