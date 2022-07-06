@@ -276,26 +276,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNodeForWrite(key, !kDelOps);
-    auto *node = stack.back().first;
-
-    const auto rc = node->template Write<Payload>(key, key_len, payload);
-    if (rc != NodeRC::kCompleted) {
-      if (rc == NodeRC::kNeedSplit) {
-        Split<Payload>(key, stack);
-        node = node->GetValidSplitNode(key);
-      } else {
-        stack.pop_back();
-        ReleaseExclusiveLocks(stack);  // unlock ancestor nodes
-        node->template Consolidate<Payload>();
-      }
-
-      // insert a record again
-      node->template Write<Payload>(key, key_len, payload);
-      stack.emplace_back(node, 0);  // add a current node to release its lock
-    }
-
-    ReleaseExclusiveLocks(stack);
+    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
+    node->template Write<Payload>(key, key_len, payload);
     return kSuccess;
   }
 
@@ -320,26 +302,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNodeForWrite(key, !kDelOps);
-    auto *node = stack.back().first;
-
+    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
     auto rc = node->template Insert<Payload>(key, key_len, payload);
-    if (rc != NodeRC::kCompleted && rc != NodeRC::kKeyAlreadyInserted) {
-      if (rc == NodeRC::kNeedSplit) {
-        Split<Payload>(key, stack);
-        node = node->GetValidSplitNode(key);
-      } else {
-        stack.pop_back();
-        ReleaseExclusiveLocks(stack);  // unlock ancestor nodes
-        node->template Consolidate<Payload>();
-      }
-
-      // insert a record again
-      rc = node->template Insert<Payload>(key, key_len, payload);
-      stack.emplace_back(node, 0);  // add a current node to release its lock
-    }
-
-    ReleaseExclusiveLocks(stack);
     return (rc == NodeRC::kCompleted) ? kSuccess : kKeyExist;
   }
 
@@ -363,12 +327,8 @@ class BTreePCL
       const Payload &payload)  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNodeForWrite(key, !kDelOps);
-    auto *node = stack.back().first;
-
+    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
     const auto rc = node->template Update<Payload>(key, payload);
-
-    ReleaseExclusiveLocks(stack);
     return (rc == NodeRC::kCompleted) ? kSuccess : kKeyNotExist;
   }
 
@@ -387,15 +347,8 @@ class BTreePCL
   Delete(const Key &key)  //
       -> ReturnCode
   {
-    auto &&stack = SearchLeafNodeForWrite(key, kDelOps);
-    auto *node = stack.back().first;
-
+    auto *node = SearchLeafNodeForWrite(key, kDelOps);
     const auto rc = node->Delete(key);
-    if (rc == NodeRC::kNeedMerge) {
-      Merge<Payload>(stack);
-    }
-
-    ReleaseExclusiveLocks(stack);
     return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
   }
 
@@ -436,13 +389,27 @@ class BTreePCL
    * @return root
    */
   [[nodiscard]] auto
-  GetRootForWrite()  //
+  GetRootForWrite(  //
+      const Key &key,
+      const bool ops_is_del)  //
       -> Node_t *
   {
-    mutex_.Lock();  // tree-latch
-    has_tree_lock_ = true;
+    mutex_.Lock();                  // tree-latch
     root_->AcquireExclusiveLock();  // root-latch
-    return root_;
+
+    // check if the root has sufficient space
+    Node_t *node{};
+    if (root_->HasSufficientSpace(ops_is_del)) {
+      node = root_;
+    } else if (ops_is_del) {
+      node = TryShrinkTree();
+    } else {
+      node = RootSplit(key);
+    }
+
+    mutex_.Unlock();
+
+    return node;
   }
 
   /**
@@ -450,32 +417,32 @@ class BTreePCL
    *
    * @param key a search key.
    * @param ops_is_del a flag for indicating a target operation.
-   * @return a stack of traversed nodes.
+   * @return a target leaf node.
    */
   [[nodiscard]] auto
   SearchLeafNodeForWrite(  //
       const Key &key,
       const bool ops_is_del)  //
-      -> NodeStack
+      -> Node_t *
   {
-    NodeStack stack{};
-    stack.reserve(kExpectedTreeHeight);
-
-    auto *node = GetRootForWrite();
-    stack.emplace_back(node, 0);
+    auto *node = GetRootForWrite(key, ops_is_del);
     while (!node->IsLeaf()) {
       const auto pos = node->SearchChild(key, kClosed);
+      auto [child, should_smo] = node->GetChildForWrite(pos, ops_is_del);
 
-      bool keep_lock{};
-      std::tie(node, keep_lock) = node->GetChildForWrite(pos, ops_is_del);
-      if (!keep_lock) {
-        ReleaseExclusiveLocks(stack);
+      // SMO eagerly
+      if (should_smo) {
+        if (ops_is_del) {
+          Merge(child, node, pos);
+        } else {
+          Split(child, node, pos);
+          child = child->GetValidSplitNode(key);
+        }
       }
-
-      stack.emplace_back(node, pos);
+      node = child;
     }
 
-    return stack;
+    return node;
   }
 
   /**
@@ -500,18 +467,33 @@ class BTreePCL
     return node;
   }
 
-  void
-  ReleaseExclusiveLocks(NodeStack &stack)
+  [[nodiscard]] auto
+  TryShrinkTree() -> Node_t *
   {
-    if (has_tree_lock_) {
-      mutex_.Unlock();  // unlatch tree-latch
-      has_tree_lock_ = false;
+    // a root node cannot be merged
+    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
+      // if a root node has only one child, shrink a tree
+      auto *child = root_->template GetPayload<Node_t *>(0);
+      child->AcquireExclusiveLock();
+      delete root_;
+      root_ = child;
     }
+    return root_;
+  }
 
-    for (auto [node, pos] : stack) {
-      node->ReleaseExclusiveLock();
+  [[nodiscard]] auto
+  RootSplit(const Key &key) -> Node_t *
+  {
+    auto *l_node = root_;
+    auto *r_node = new Node_t{l_node->IsLeaf()};
+    if (l_node->IsLeaf()) {
+      l_node->template Split<Payload>(r_node);
+    } else {
+      l_node->template Split<Node_t *>(r_node);
     }
-    stack.clear();
+    root_ = new Node_t{l_node, r_node};
+    auto *node = l_node->GetValidSplitNode(key);
+    return node;
   }
 
   /**
@@ -535,92 +517,59 @@ class BTreePCL
    * @brief Split a given node
    *
    * @tparam Value a payload type of given node
-   * @param key a search key.
-   * @param stack a stack of nodes in the path to given node
+   * @param l_node a node to be split
+   * @param parent a parent node of the l_node
+   * @param pos the position of the l_node
    */
-  template <class Value>
   void
   Split(  //
-      const Key &key,
-      NodeStack &stack)
+      Node_t *l_node,
+      Node_t *parent,
+      const size_t pos)
   {
-    // perform splitting for a current node
-    auto [l_node, pos] = stack.back();
-    stack.pop_back();
-
     auto *r_node = new Node_t{l_node->IsLeaf()};
-    r_node->AcquireExclusiveLock();
-    l_node->template Split<Value>(r_node);
-
-    if (stack.empty()) {
-      // if node is root, create a new root
-      root_ = new Node_t{l_node, r_node};
+    if (l_node->IsLeaf()) {
+      l_node->template Split<Payload>(r_node);
     } else {
-      auto *parent = stack.back().first;
-      const auto rc = parent->InsertChild(l_node, r_node, pos);
-      if (rc != NodeRC::kCompleted) {
-        if (rc == NodeRC::kNeedSplit) {
-          Split<Node_t *>(key, stack);
-          parent = parent->GetValidSplitNode(key);
-        } else {  // NodeRC::kNeedConsolidation
-          stack.pop_back();
-          ReleaseExclusiveLocks(stack);  // unlock ancestor nodes
-          parent->template Consolidate<Node_t *>();
-        }
-
-        // update the child position and insert again
-        pos = parent->SearchChild(key, kClosed);
-        parent->InsertChild(l_node, r_node, pos);
-        stack.emplace_back(parent, 0);  // add a parent to release its lock
-      }
+      l_node->template Split<Node_t *>(r_node);
     }
+    parent->InsertChild(l_node, r_node, pos);
   }
 
   /**
    * @brief Merge given nodes
    *
-   * @param stack a stack of nodes in the path to given node
+   * @param node a node to be merged
+   * @param parent a parent node of the node
+   * @param pos the position of the node
    */
-  template <class Value>
   void
-  Merge(NodeStack &stack)
+  Merge(  //
+      Node_t *node,
+      Node_t *parent,
+      const size_t pos)
   {
-    auto [node, pos] = stack.back();
-    stack.pop_back();
-
-    if (stack.empty()) {
-      // a root node cannot be merged
-      if (!root_->IsLeaf() && node->GetRecordCount() == 1) {
-        // if a root node has only one child, shrink a tree
-        root_ = node->template GetPayload<Node_t *>(0);
-        delete node;
-      } else {
-        node->ReleaseExclusiveLock();
-      }
-      return;
-    }
-
-    auto *parent = stack.back().first;
-
     // check there is a right-sibling node
     if (pos == parent->GetRecordCount() - 1) {
-      node->ReleaseExclusiveLock();
+      parent->ReleaseExclusiveLock();
       return;
     }
 
     // check the right-sibling node has enough capacity for merging
-    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps).first;
-    if (!node->CanMerge(right_node)) return;
+    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
+    if (!node->CanMerge(right_node)) {
+      parent->ReleaseExclusiveLock();
+      return;
+    }
 
     // perform merging
-    node->template Merge<Value>(right_node);
-    const auto rc = parent->DeleteChild(node, pos + 1);
-    delete right_node;
-
-    if (rc == NodeRC::kNeedMerge) {
-      // perform merging recursively
-      Merge<Node_t *>(stack);
+    if (node->IsLeaf()) {
+      node->template Merge<Payload>(right_node);
+    } else {
+      node->template Merge<Node_t *>(right_node);
     }
+    parent->DeleteChild(node, pos + 1);
+    delete right_node;
   }
 
   /*####################################################################################
@@ -632,9 +581,6 @@ class BTreePCL
 
   /// mutex for root
   ::dbgroup::lock::PessimisticLock mutex_{};
-
-  /// thread local flags for managing the tree lock
-  static inline thread_local bool has_tree_lock_{false};  // NOLINT
 };
 }  // namespace dbgroup::index::b_tree
 
