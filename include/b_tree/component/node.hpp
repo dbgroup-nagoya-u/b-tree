@@ -722,7 +722,6 @@ class PessimisticNode
     ++record_count_;
 
     mutex_.Unlock();
-    return;
   }
 
   /**
