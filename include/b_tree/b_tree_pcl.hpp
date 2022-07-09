@@ -396,7 +396,7 @@ class BTreePCL
         iter += n;
       }
 
-      // wait for the worker threads to create BzTrees
+      // wait for the worker threads to create BTrees
       std::vector<Node_t *> partial_trees{};
       partial_trees.reserve(thread_num);
       for (auto &&future : threads) {
@@ -562,7 +562,7 @@ class BTreePCL
    *
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @return the root node of a created BzTree.
+   * @return the root node of a created BTree.
    */
   auto
   BulkloadWithSingleThread(  //
@@ -570,20 +570,20 @@ class BTreePCL
       const typename std::vector<LoadEntry_t>::const_iterator &iter_end)  //
       -> Node_t *
   {
-    std::vector<Node_t *> new_nodes{};
+    std::vector<Node_t *> next_level_nodes{};
 
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template Bulkload<Payload>(iter, iter_end);
-      if (!new_nodes.empty()) {
-        auto *new_node = new_nodes.back();
-        new_node->SetNextNode(node);
+      node->template BulkloadLeafNode<Payload>(iter, iter_end);
+      if (!next_level_nodes.empty()) {
+        auto *left_node = next_level_nodes.back();
+        left_node->SetNextNode(node);
       }
-      new_nodes.emplace_back(node);
+      next_level_nodes.emplace_back(node);
     }
-    auto &&new_iter = new_nodes.cbegin();
-    return BulkloadInnerNode(new_iter, new_nodes.cend());
+    auto &&new_iter = next_level_nodes.cbegin();
+    return BulkloadInnerNode(new_iter, next_level_nodes.cend());
   }
 
   auto
@@ -591,20 +591,20 @@ class BTreePCL
                     const typename std::vector<Node_t *>::const_iterator &iter_end)  //
       -> Node_t *
   {
-    std::vector<Node_t *> new_nodes;
+    std::vector<Node_t *> next_level_nodes;
     while (iter < iter_end) {
-      // load records into a leaf node
+      // load records into a inner node
       auto *node = new Node_t{false};
       node->BulkloadInnerNode(iter, iter_end);
-      if (!new_nodes.empty()) {
-        auto *new_node = new_nodes.back();
-        new_node->SetNextNode(node);
+      if (!next_level_nodes.empty()) {
+        auto *left_node = next_level_nodes.back();
+        left_node->SetNextNode(node);
       }
-      new_nodes.emplace_back(node);
+      next_level_nodes.emplace_back(node);
     }
-    if (new_nodes.size() == 1) return new_nodes[0];
-    auto &&new_iter = new_nodes.cbegin();
-    return BulkloadInnerNode(new_iter, new_nodes.cend());
+    if (next_level_nodes.size() == 1) return next_level_nodes[0];
+    auto &&new_iter = next_level_nodes.cbegin();
+    return BulkloadInnerNode(new_iter, next_level_nodes.cend());
   }
 
   /**

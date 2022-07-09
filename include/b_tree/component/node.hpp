@@ -885,7 +885,7 @@ class PessimisticNode
    */
   template <class Payload>
   void
-  Bulkload(  //
+  BulkloadLeafNode(  //
       typename std::vector<BulkloadEntry<Key, Payload>>::const_iterator &iter,
       const typename std::vector<BulkloadEntry<Key, Payload>>::const_iterator &iter_end)
   {
@@ -917,9 +917,8 @@ class PessimisticNode
   }
 
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a inner node with the maximum number of records for bulkloading.
    *
-   * @tparam Payload a target payload class.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    */
@@ -928,7 +927,6 @@ class PessimisticNode
       typename std::vector<PessimisticNode *>::const_iterator &iter,
       const typename std::vector<PessimisticNode *>::const_iterator &iter_end)
   {
-    // extract and insert entries for the leaf node
     size_t node_size = kHeaderLength;
     auto offset = kPageSize;
     while (iter < iter_end) {
@@ -939,7 +937,7 @@ class PessimisticNode
       node_size += rec_len + sizeof(Metadata);
       if (node_size > kPageSize - kMinFreeSpaceSize) break;
 
-      // insert an entry to the leaf node
+      // insert an entry to the inner node
       auto tmp_offset = SetPayload(offset, *iter);
       if (key_len != 0) tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
