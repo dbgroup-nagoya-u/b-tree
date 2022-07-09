@@ -39,6 +39,7 @@ class BTreeFixture : public testing::Test  // NOLINT
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
   using BTreePCL_t = BTreePCL<component::PessimisticNode, Key, Payload, KeyComp>;
+  using LoadEntry_t = BulkloadEntry<Key, Payload>;
 
  protected:
   /*################################################################################################
@@ -211,6 +212,21 @@ class BTreeFixture : public testing::Test  // NOLINT
 
     auto rc = b_tree_->Delete(keys_[key_id]);
     EXPECT_EQ(expected_rc, rc);
+  }
+
+  void
+  VerifyBulkload(  //
+      const size_t thread_num = 1)
+  {
+    std::vector<LoadEntry_t> entries;
+    entries.reserve(kMaxRecNumForTest);
+    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
+      entries.emplace_back(keys_[i], payloads_[i], kKeyLen, kPayLen);
+    }
+    b_tree_->Bulkload(entries, thread_num);
+    for (size_t i = 0; i < kMaxRecNumForTest; ++i) {
+      VerifyRead(i, i, kExpectSuccess);
+    }
   }
 
   void
@@ -551,6 +567,19 @@ TYPED_TEST(BTreeFixture, RandomDeleteWithNotInsertedKeysFail)
 TYPED_TEST(BTreeFixture, RandomDeleteWithDeletedKeysFail)
 {
   TestFixture::VerifyDeletesWith(kWithWrite, kWithDelete, kShuffled);
+}
+
+/*--------------------------------------------------------------------------------------
+ * Bulkload operation
+ *------------------------------------------------------------------------------------*/
+TYPED_TEST(BTreeFixture, BulkloadWithSingleThreadSuccess)
+{  //
+  TestFixture::VerifyBulkload();
+}
+
+TYPED_TEST(BTreeFixture, BulkloadWithMultiThreadSuccess)
+{
+  TestFixture::VerifyBulkload(kThreadNum);
 }
 
 }  // namespace dbgroup::index::b_tree::component

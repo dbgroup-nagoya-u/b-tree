@@ -17,7 +17,9 @@
 #ifndef B_TREE_B_TREE_HPP
 #define B_TREE_B_TREE_HPP
 
+#include <future>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "component/node.hpp"
@@ -48,6 +50,7 @@ class BTreePCL
   using Node_t = Node<Key, Comp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
+  using LoadEntry_t = BulkloadEntry<Key, Payload>;
 
   /**
    * @brief A class for representing an iterator of scan results.
@@ -352,6 +355,64 @@ class BTreePCL
     return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
   }
 
+  auto
+  Bulkload(  //
+      std::vector<LoadEntry_t> &entries,
+      const size_t thread_num = 1)  //
+      -> ReturnCode
+  {
+    assert(thread_num > 0);
+
+    if (entries.empty()) return kSuccess;
+
+    Node_t *new_root;
+    auto &&iter = entries.cbegin();
+    if (thread_num == 1) {
+      // bulkloading with a single thread
+      new_root = BulkloadWithSingleThread(iter, entries.cend());
+    } else {
+      // bulkloading with multi-threads
+      std::vector<std::future<Node_t *>> threads{};
+      threads.reserve(thread_num);
+
+      // prepare a lambda function for bulkloading
+      auto loader = [&](std::promise<Node_t *> p,  //
+                        size_t n,                  //
+                        typename std::vector<LoadEntry_t>::const_iterator iter) {
+        auto *partial_root = BulkloadWithSingleThread(iter, iter + n);
+        p.set_value(partial_root);
+      };
+
+      // create threads to construct partial BTrees
+      const size_t rec_num = entries.size();
+      for (size_t i = 0; i < thread_num; ++i) {
+        // create a partial BTree
+        std::promise<Node_t *> p{};
+        threads.emplace_back(p.get_future());
+        const size_t n = (rec_num + i) / thread_num;
+        std::thread{loader, std::move(p), n, iter}.detach();
+
+        // forward the iterator to the next begin position
+        iter += n;
+      }
+
+      // wait for the worker threads to create BzTrees
+      std::vector<Node_t *> partial_trees{};
+      partial_trees.reserve(thread_num);
+      for (auto &&future : threads) {
+        partial_trees.emplace_back(future.get());
+      }
+      auto &&p_iter = partial_trees.cbegin();
+      new_root = BulkloadInnerNode(p_iter, partial_trees.cend());
+    }
+
+    // set a new root
+    root_ = new_root;
+    // auto *old_root = root_.exchange(new_root, std::memory_order_release);
+
+    return kSuccess;
+  }
+
  private:
   /*################################################################################################
    * Internal constants
@@ -494,6 +555,56 @@ class BTreePCL
     root_ = new Node_t{l_node, r_node};
     auto *node = l_node->GetValidSplitNode(key);
     return node;
+  }
+
+  /**
+   * @brief Bulkload specified kay/payload pairs with a single thread.
+   *
+   * @param iter the begin position of target records.
+   * @param iter_end the end position of target records.
+   * @return the root node of a created BzTree.
+   */
+  auto
+  BulkloadWithSingleThread(  //
+      typename std::vector<LoadEntry_t>::const_iterator &iter,
+      const typename std::vector<LoadEntry_t>::const_iterator &iter_end)  //
+      -> Node_t *
+  {
+    std::vector<Node_t *> new_nodes{};
+
+    while (iter < iter_end) {
+      // load records into a leaf node
+      auto *node = new Node_t{true};
+      node->template Bulkload<Payload>(iter, iter_end);
+      if (!new_nodes.empty()) {
+        auto *new_node = new_nodes.back();
+        new_node->SetNextNode(node);
+      }
+      new_nodes.emplace_back(node);
+    }
+    auto &&new_iter = new_nodes.cbegin();
+    return BulkloadInnerNode(new_iter, new_nodes.cend());
+  }
+
+  auto
+  BulkloadInnerNode(typename std::vector<Node_t *>::const_iterator &iter,
+                    const typename std::vector<Node_t *>::const_iterator &iter_end)  //
+      -> Node_t *
+  {
+    std::vector<Node_t *> new_nodes;
+    while (iter < iter_end) {
+      // load records into a leaf node
+      auto *node = new Node_t{false};
+      node->BulkloadInnerNode(iter, iter_end);
+      if (!new_nodes.empty()) {
+        auto *new_node = new_nodes.back();
+        new_node->SetNextNode(node);
+      }
+      new_nodes.emplace_back(node);
+    }
+    if (new_nodes.size() == 1) return new_nodes[0];
+    auto &&new_iter = new_nodes.cbegin();
+    return BulkloadInnerNode(new_iter, new_nodes.cend());
   }
 
   /**
