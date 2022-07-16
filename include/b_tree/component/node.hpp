@@ -207,6 +207,17 @@ class PessimisticNode
   }
 
   /**
+   * @return pointer of next node
+   */
+  [[nodiscard]] constexpr auto
+  HasNextNode()  //
+      -> bool
+  {
+    if (next_ == nullptr) return false;
+    return true;
+  }
+
+  /**
    * @return pointer of next node with shared lock
    */
   [[nodiscard]] constexpr auto
@@ -539,6 +550,7 @@ class PessimisticNode
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       if (rc == kKeyAlreadyDeleted) {
         meta_array_[pos].is_deleted = 0;
+        if (pos == record_count_ - 1) high_meta_.is_deleted = 0;
         deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
       }
     }
@@ -594,6 +606,7 @@ class PessimisticNode
     if (rc == kKeyAlreadyDeleted) {
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       meta_array_[pos].is_deleted = 0;
+      if (pos == record_count_ - 1) high_meta_.is_deleted = 0;
       deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
       mutex_.Unlock();
       return kCompleted;
@@ -684,6 +697,7 @@ class PessimisticNode
 
     // update a header
     meta_array_[pos].is_deleted = 1;
+    if (pos == record_count_ - 1) high_meta_.is_deleted = 1;
     deleted_size_ += meta_array_[pos].total_length + kMetaLen;
 
     const auto used_size = kMetaLen * record_count_ + block_size_ - deleted_size_;
@@ -883,17 +897,18 @@ class PessimisticNode
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    */
-  template <class Payload>
+  template <class Entry, class Payload>
   void
   BulkloadLeafNode(  //
-      typename std::vector<BulkloadEntry<Key, Payload>>::const_iterator &iter,
-      const typename std::vector<BulkloadEntry<Key, Payload>>::const_iterator &iter_end)
+      typename std::vector<Entry>::const_iterator &iter,
+      const typename std::vector<Entry>::const_iterator &iter_end)
   {
     // extract and insert entries for the leaf node
     size_t node_size = kHeaderLength;
     auto offset = kPageSize;
     while (iter < iter_end) {
-      const auto key_len = iter->GetKeyLength();
+      const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
+      // const auto key_len = iter->GetKeyLength();
       const auto rec_len = key_len + sizeof(Payload);
 
       // check whether the node has sufficient space
@@ -901,11 +916,12 @@ class PessimisticNode
       if (node_size > kPageSize - kMinFreeSpaceSize) break;
 
       // insert an entry to the leaf node
-      auto tmp_offset = SetPayload(offset, iter->GetPayload());
-      tmp_offset = SetKey(tmp_offset, iter->GetKey(), key_len);
+      auto tmp_offset = SetPayload(offset, payload);
+      tmp_offset = SetKey(tmp_offset, key, key_len);
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
       offset -= rec_len;
 
+      block_size_ += rec_len;
       ++record_count_;
       ++iter;
     }
@@ -943,6 +959,7 @@ class PessimisticNode
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
       offset -= rec_len;
 
+      block_size_ += rec_len;
       ++record_count_;
       ++iter;
     }
@@ -1180,6 +1197,29 @@ class PessimisticNode
     }
 
     return offset;
+  }
+
+  /**
+   * @brief Parse an entry of bulkload according to key's type.
+   *
+   * @tparam Payload a payload type.
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: a target payload.
+   * @retval 3rd: the length of a target key.
+   */
+  template <class Payload, class Entry>
+  constexpr auto
+  ParseEntry(const Entry &entry)  //
+      -> std::tuple<Key, Payload, size_t>
+  {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return entry;
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, payload, sizeof(Key)};
+    }
   }
 
   /*################################################################################################

@@ -36,10 +36,7 @@ namespace dbgroup::index::b_tree
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
  */
-template <template <class Key, class Comp> class Node,
-          class Key,
-          class Payload,
-          class Comp = ::std::less<Key>>
+template <class Key, class Payload, class Comp = ::std::less<Key>>
 class BTreePCL
 {
  public:
@@ -47,10 +44,9 @@ class BTreePCL
    * Type aliases
    *##################################################################################*/
 
-  using Node_t = Node<Key, Comp>;
+  using Node_t = component::PessimisticNode<Key, Comp>;
   using NodeRC = component::NodeRC;
   using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-  using LoadEntry_t = BulkloadEntry<Key, Payload>;
 
   /**
    * @brief A class for representing an iterator of scan results.
@@ -104,6 +100,7 @@ class BTreePCL
     operator++()
     {
       ++current_pos_;
+      if (node_->GetMetadata(current_pos_).is_deleted) ++current_pos_;
     }
 
     /*##################################################################################
@@ -121,11 +118,15 @@ class BTreePCL
         -> bool
     {
       while (true) {
+        while (current_pos_ < record_count_ && node_->GetMetadata(current_pos_).is_deleted) {
+          current_pos_++;
+        }
         if (current_pos_ < record_count_) return true;
         if (is_end_) {
           node_->ReleaseSharedLock();
           return false;
         }
+        if (!node_->HasNextNode()) return false;
         node_ = node_->GetNextNodeForRead();
         current_pos_ = 0;
         std::tie(is_end_, record_count_) = node_->SearchEndPositionFor(end_key_);
@@ -327,7 +328,8 @@ class BTreePCL
   auto
   Update(  //
       const Key &key,
-      const Payload &payload)  //
+      const Payload &payload,
+      const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key, !kDelOps);
@@ -347,7 +349,7 @@ class BTreePCL
    * @retval kKeyNotExist otherwise.
    */
   auto
-  Delete(const Key &key)  //
+  Delete(const Key &key, const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key, kDelOps);
@@ -355,9 +357,10 @@ class BTreePCL
     return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
   }
 
+  template <class Entry>
   auto
   Bulkload(  //
-      std::vector<LoadEntry_t> &entries,
+      std::vector<Entry> &entries,
       const size_t thread_num = 1)  //
       -> ReturnCode
   {
@@ -369,7 +372,7 @@ class BTreePCL
     auto &&iter = entries.cbegin();
     if (thread_num == 1) {
       // bulkloading with a single thread
-      new_root = BulkloadWithSingleThread(iter, entries.cend());
+      new_root = BulkloadWithSingleThread<Entry>(iter, entries.cend());
     } else {
       // bulkloading with multi-threads
       std::vector<std::future<Node_t *>> threads{};
@@ -378,8 +381,8 @@ class BTreePCL
       // prepare a lambda function for bulkloading
       auto loader = [&](std::promise<Node_t *> p,  //
                         size_t n,                  //
-                        typename std::vector<LoadEntry_t>::const_iterator iter) {
-        auto *partial_root = BulkloadWithSingleThread(iter, iter + n);
+                        typename std::vector<Entry>::const_iterator iter) {
+        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n);
         p.set_value(partial_root);
       };
 
@@ -564,10 +567,11 @@ class BTreePCL
    * @param iter_end the end position of target records.
    * @return the root node of a created BTree.
    */
+  template <class Entry>
   auto
   BulkloadWithSingleThread(  //
-      typename std::vector<LoadEntry_t>::const_iterator &iter,
-      const typename std::vector<LoadEntry_t>::const_iterator &iter_end)  //
+      typename std::vector<Entry>::const_iterator &iter,
+      const typename std::vector<Entry>::const_iterator &iter_end)  //
       -> Node_t *
   {
     std::vector<Node_t *> next_level_nodes{};
@@ -575,7 +579,7 @@ class BTreePCL
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template BulkloadLeafNode<Payload>(iter, iter_end);
+      node->template BulkloadLeafNode<Entry, Payload>(iter, iter_end);
       if (!next_level_nodes.empty()) {
         auto *left_node = next_level_nodes.back();
         left_node->SetNextNode(node);
