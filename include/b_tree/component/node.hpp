@@ -550,7 +550,6 @@ class PessimisticNode
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       if (rc == kKeyAlreadyDeleted) {
         meta_array_[pos].is_deleted = 0;
-        if (pos == record_count_ - 1) high_meta_.is_deleted = 0;
         deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
       }
     }
@@ -606,7 +605,6 @@ class PessimisticNode
     if (rc == kKeyAlreadyDeleted) {
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       meta_array_[pos].is_deleted = 0;
-      if (pos == record_count_ - 1) high_meta_.is_deleted = 0;
       deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
       mutex_.Unlock();
       return kCompleted;
@@ -697,7 +695,6 @@ class PessimisticNode
 
     // update a header
     meta_array_[pos].is_deleted = 1;
-    if (pos == record_count_ - 1) high_meta_.is_deleted = 1;
     deleted_size_ += meta_array_[pos].total_length + kMetaLen;
 
     const auto used_size = kMetaLen * record_count_ + block_size_ - deleted_size_;

@@ -1,6 +1,5 @@
 #include "b_tree/b_tree_pcl.hpp"
 #include "external/index-fixtures/index_fixture_multi_thread.hpp"
-#include "gtest/gtest.h"
 
 namespace dbgroup::index::b_tree
 {
