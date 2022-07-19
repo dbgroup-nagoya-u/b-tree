@@ -329,7 +329,7 @@ class BTreePCL
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key, !kDelOps);
@@ -349,7 +349,7 @@ class BTreePCL
    * @retval kKeyNotExist otherwise.
    */
   auto
-  Delete(const Key &key, const size_t key_len = sizeof(Key))  //
+  Delete(const Key &key, [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key, kDelOps);
@@ -405,14 +405,12 @@ class BTreePCL
       for (auto &&future : threads) {
         partial_trees.emplace_back(future.get());
       }
-      auto &&p_iter = partial_trees.cbegin();
-      new_root = BulkloadInnerNode(p_iter, partial_trees.cend());
+      new_root = BulkloadInnerNode(partial_trees);
     }
 
     // set a new root
     root_ = new_root;
-    // auto *old_root = root_.exchange(new_root, std::memory_order_release);
-
+    entries.clear();
     return kSuccess;
   }
 
@@ -575,7 +573,6 @@ class BTreePCL
       -> Node_t *
   {
     std::vector<Node_t *> next_level_nodes{};
-
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
@@ -586,16 +583,16 @@ class BTreePCL
       }
       next_level_nodes.emplace_back(node);
     }
-    auto &&new_iter = next_level_nodes.cbegin();
-    return BulkloadInnerNode(new_iter, next_level_nodes.cend());
+    return BulkloadInnerNode(next_level_nodes);
   }
 
   auto
-  BulkloadInnerNode(typename std::vector<Node_t *>::const_iterator &iter,
-                    const typename std::vector<Node_t *>::const_iterator &iter_end)  //
+  BulkloadInnerNode(std::vector<Node_t *> &entries)  //
       -> Node_t *
   {
     std::vector<Node_t *> next_level_nodes;
+    auto &&iter = entries.cbegin();
+    const auto &iter_end = entries.cend();
     while (iter < iter_end) {
       // load records into a inner node
       auto *node = new Node_t{false};
@@ -606,9 +603,9 @@ class BTreePCL
       }
       next_level_nodes.emplace_back(node);
     }
+    entries.clear();
     if (next_level_nodes.size() == 1) return next_level_nodes[0];
-    auto &&new_iter = next_level_nodes.cbegin();
-    return BulkloadInnerNode(new_iter, next_level_nodes.cend());
+    return BulkloadInnerNode(next_level_nodes);
   }
 
   /**
