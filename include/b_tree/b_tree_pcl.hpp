@@ -579,7 +579,7 @@ class BTreePCL
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template BulkloadLeafNode<Entry, Payload>(iter, iter_end);
+      node->template Bulkload<Entry, Payload>(iter, iter_end);
       if (!next_level_nodes.empty()) {
         auto *left_node = next_level_nodes.back();
         left_node->SetNextNode(node);
@@ -599,7 +599,7 @@ class BTreePCL
     while (iter < iter_end) {
       // load records into a inner node
       auto *node = new Node_t{false};
-      node->BulkloadInnerNode(iter, iter_end);
+      node->Bulkload(iter, iter_end);
       if (!next_level_nodes.empty()) {
         auto *left_node = next_level_nodes.back();
         left_node->SetNextNode(node);

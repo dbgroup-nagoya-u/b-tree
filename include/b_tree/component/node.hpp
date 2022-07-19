@@ -896,7 +896,7 @@ class PessimisticNode
    */
   template <class Entry, class Payload>
   void
-  BulkloadLeafNode(  //
+  Bulkload(  //
       typename std::vector<Entry>::const_iterator &iter,
       const typename std::vector<Entry>::const_iterator &iter_end)
   {
@@ -918,7 +918,6 @@ class PessimisticNode
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
       offset -= rec_len;
 
-      block_size_ += rec_len;
       ++record_count_;
       ++iter;
     }
@@ -927,6 +926,8 @@ class PessimisticNode
     const auto high_meta = meta_array_[record_count_ - 1];
     const auto high_key_len = high_meta.key_length;
     high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
+    offset -= high_key_len;
+    block_size_ = kPageSize - offset;
   }
 
   /**
@@ -936,7 +937,7 @@ class PessimisticNode
    * @param iter_end the end position of target records.
    */
   void
-  BulkloadInnerNode(  //
+  Bulkload(  //
       typename std::vector<PessimisticNode *>::const_iterator &iter,
       const typename std::vector<PessimisticNode *>::const_iterator &iter_end)
   {
@@ -952,11 +953,10 @@ class PessimisticNode
 
       // insert an entry to the inner node
       auto tmp_offset = SetPayload(offset, *iter);
-      if (key_len != 0) tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
+      tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
       offset -= rec_len;
 
-      block_size_ += rec_len;
       ++record_count_;
       ++iter;
     }
@@ -965,6 +965,8 @@ class PessimisticNode
     const auto high_meta = meta_array_[record_count_ - 1];
     const auto high_key_len = high_meta.key_length;
     high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
+    offset -= high_key_len;
+    block_size_ = kPageSize - offset;
   }
 
  private:
