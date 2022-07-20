@@ -132,11 +132,8 @@ class PessimisticNode
         kMetaLen * r_node->record_count_ + r_node->block_size_ - r_node->deleted_size_;
 
     const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
-    if (!can_merge) {
-      r_node->mutex_.Unlock();
-      mutex_.Unlock();
-    }
 
+    if (!can_merge) r_node->mutex_.Unlock();
     return can_merge;
   }
 
