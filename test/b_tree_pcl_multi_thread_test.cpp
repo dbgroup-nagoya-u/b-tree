@@ -26,8 +26,17 @@ namespace dbgroup::index::test
 template <class K, class V, class C>
 using BTreePCL = ::dbgroup::index::b_tree::BTreePCL<K, V, C>;
 
-using TestTargets = ::testing::Types<  //
-    IndexInfo<BTreePCL, UInt8, UInt8>  // fixed-length keys
+using TestTargets = ::testing::Types<        //
+    IndexInfo<BTreePCL, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePCL, UInt8, Int8>,        // fixed-length keys with append-mode
+    IndexInfo<BTreePCL, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePCL, UInt4, Int8>,        // small keys with append-mode
+    IndexInfo<BTreePCL, UInt8, UInt4>,       // small payloads with append-mode
+    IndexInfo<BTreePCL, UInt4, UInt4>,       // small keys/payloads with append-mode
+    IndexInfo<BTreePCL, Var, UInt8>,         // variable-length keys
+    IndexInfo<BTreePCL, Var, Int8>,          // variable-length keys with append-mode
+    IndexInfo<BTreePCL, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePCL, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 
