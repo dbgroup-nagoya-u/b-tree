@@ -32,6 +32,7 @@ add_subdirectory(${CMAKE_CURRENT_BINARY_DIR}/googletest-src
 
 set(B_TREE_TEST_THREAD_NUM "8" CACHE STRING "The number of worker threads for testing.")
 set(B_TREE_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(B_TREE_TEST_EXEC_NUM "1E5" CACHE STRING "The number of executions per a thread.")
 
 #--------------------------------------------------------------------------------------#
 # Build Unit Tests
@@ -48,6 +49,7 @@ function(ADD_B_TREE_TEST B_TREE_TEST_TARGET)
   )
   target_compile_definitions(${B_TREE_TEST_TARGET} PRIVATE
     B_TREE_TEST_THREAD_NUM=${B_TREE_TEST_THREAD_NUM}
+    INDEX_FIXTURE_EXEC_NUM_PER_THREAD=${B_TREE_TEST_EXEC_NUM}
   )
   target_compile_options(${B_TREE_TEST_TARGET} PRIVATE
     -Wall
