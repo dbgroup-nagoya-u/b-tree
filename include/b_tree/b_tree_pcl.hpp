@@ -202,7 +202,10 @@ class BTreePCL
    * @brief Destroy the BTreePCL object.
    *
    */
-  ~BTreePCL() = default;
+  ~BTreePCL()  //
+  {
+    DeleteChildren(root_);
+  }
 
   /*####################################################################################
    * Public read APIs
@@ -431,6 +434,26 @@ class BTreePCL
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
+  /**
+   * @brief Delete child nodes recursively.
+   *
+   * Note that this function assumes that there are no other threads in operation.
+   *
+   * @param node a target node.
+   */
+  static void
+  DeleteChildren(Node_t *node)
+  {
+    if (!node->IsLeaf()) {
+      // delete children nodes recursively
+      for (size_t i = 0; i < node->GetRecordCount(); ++i) {
+        auto *child_node = node->GetChildForRead(i);
+        DeleteChildren(child_node);
+      }
+    }
+
+    delete node;
+  }
 
   /**
    * @brief Get root node with shared lock
