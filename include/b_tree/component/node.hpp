@@ -880,7 +880,6 @@ class PessimisticNode
   Bulkload(  //
       typename std::vector<Entry>::const_iterator &iter,
       const typename std::vector<Entry>::const_iterator &iter_end,
-      const bool is_rightmost,
       PessimisticNode *l_node = nullptr)
   {
     // extract and insert entries for the leaf node
@@ -905,15 +904,13 @@ class PessimisticNode
       ++iter;
     }
 
-    // set a highest key if needed
-    if (iter < iter_end || !is_rightmost) {
-      const auto high_meta = meta_array_[record_count_ - 1];
-      const auto high_key_len = high_meta.key_length;
-      high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
-      offset -= high_key_len;
-    }
-
+    // set a highest key
+    const auto high_meta = meta_array_[record_count_ - 1];
+    const auto high_key_len = high_meta.key_length;
+    high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
+    offset -= high_key_len;
     block_size_ = kPageSize - offset;
+
     // set this node to next node of l_node
     if (l_node) l_node->next_ = this;
   }
@@ -943,7 +940,7 @@ class PessimisticNode
 
       // insert an entry to the inner node
       auto tmp_offset = SetPayload(offset, *iter);
-      if (key_len) tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
+      tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
       meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
       offset -= rec_len;
 
@@ -998,8 +995,8 @@ class PessimisticNode
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
   {
-    if (high_meta_.key_length == 0) return true;  // the rightmost node
-    if (!end_key) return false;                   // perform full scan
+    if (!next_) return true;     // the rightmost node
+    if (!end_key) return false;  // perform full scan
     return !Comp{}(GetKey(high_meta_), end_key->first);
   }
 
