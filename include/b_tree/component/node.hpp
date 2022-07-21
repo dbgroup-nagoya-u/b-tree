@@ -204,17 +204,6 @@ class PessimisticNode
   }
 
   /**
-   * @return pointer of next node
-   */
-  [[nodiscard]] constexpr auto
-  HasNextNode()  //
-      -> bool
-  {
-    if (next_ == nullptr) return false;
-    return true;
-  }
-
-  /**
    * @return pointer of next node with shared lock
    */
   [[nodiscard]] constexpr auto
@@ -224,12 +213,6 @@ class PessimisticNode
     next_->mutex_.LockShared();
     mutex_.UnlockShared();
     return next_;
-  }
-
-  void
-  SetNextNode(PessimisticNode *node)  //
-  {
-    next_ = node;
   }
 
   [[nodiscard]] constexpr auto
@@ -890,12 +873,14 @@ class PessimisticNode
    * @tparam Payload a target payload class.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
+   * @param l_node the left node of this node.
    */
   template <class Entry, class Payload>
   void
   Bulkload(  //
       typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end)
+      const typename std::vector<Entry>::const_iterator &iter_end,
+      PessimisticNode *l_node = nullptr)
   {
     // extract and insert entries for the leaf node
     size_t node_size = kHeaderLength;
@@ -925,6 +910,9 @@ class PessimisticNode
     high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
     offset -= high_key_len;
     block_size_ = kPageSize - offset;
+
+    // set this node to next node of l_node
+    if (l_node) l_node->next_ = this;
   }
 
   /**
@@ -932,11 +920,13 @@ class PessimisticNode
    *
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
+   * @param l_node the left node of this node.
    */
   void
   Bulkload(  //
       typename std::vector<PessimisticNode *>::const_iterator &iter,
-      const typename std::vector<PessimisticNode *>::const_iterator &iter_end)
+      const typename std::vector<PessimisticNode *>::const_iterator &iter_end,
+      PessimisticNode *l_node = nullptr)
   {
     size_t node_size = kHeaderLength;
     auto offset = kPageSize;
@@ -964,6 +954,9 @@ class PessimisticNode
     high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
     offset -= high_key_len;
     block_size_ = kPageSize - offset;
+
+    // set this node to next node of l_node
+    if (l_node) l_node->next_ = this;
   }
 
  private:
@@ -1002,8 +995,8 @@ class PessimisticNode
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
   {
-    if (high_meta_.key_length == 0) return true;  // the rightmost node
-    if (!end_key) return false;                   // perform full scan
+    if (!next_) return true;     // the rightmost node
+    if (!end_key) return false;  // perform full scan
     return !Comp{}(GetKey(high_meta_), end_key->first);
   }
 

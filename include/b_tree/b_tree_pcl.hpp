@@ -126,7 +126,6 @@ class BTreePCL
           node_->ReleaseSharedLock();
           return false;
         }
-        if (!node_->HasNextNode()) return false;
         node_ = node_->GetNextNodeForRead();
         current_pos_ = 0;
         std::tie(is_end_, record_count_) = node_->SearchEndPositionFor(end_key_);
@@ -408,12 +407,11 @@ class BTreePCL
       for (auto &&future : threads) {
         partial_trees.emplace_back(future.get());
       }
-      new_root = BulkloadInnerNode(partial_trees);
+      new_root = ConstructUpperLayer(partial_trees);
     }
 
     // set a new root
     root_ = new_root;
-    entries.clear();
     return kSuccess;
   }
 
@@ -447,7 +445,7 @@ class BTreePCL
     if (!node->IsLeaf()) {
       // delete children nodes recursively
       for (size_t i = 0; i < node->GetRecordCount(); ++i) {
-        auto *child_node = node->GetChildForRead(i);
+        auto *child_node = node->template GetPayload<Node_t *>(i);
         DeleteChildren(child_node);
       }
     }
@@ -595,40 +593,35 @@ class BTreePCL
       const typename std::vector<Entry>::const_iterator &iter_end)  //
       -> Node_t *
   {
-    std::vector<Node_t *> next_level_nodes{};
+    std::vector<Node_t *> nodes{};
+    Node_t *l_node = nullptr;
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template Bulkload<Entry, Payload>(iter, iter_end);
-      if (!next_level_nodes.empty()) {
-        auto *left_node = next_level_nodes.back();
-        left_node->SetNextNode(node);
-      }
-      next_level_nodes.emplace_back(node);
+      node->template Bulkload<Entry, Payload>(iter, iter_end, l_node);
+      nodes.emplace_back(node);
+      l_node = node;
     }
-    return BulkloadInnerNode(next_level_nodes);
+    return ConstructUpperLayer(nodes);
   }
 
   auto
-  BulkloadInnerNode(std::vector<Node_t *> &entries)  //
+  ConstructUpperLayer(std::vector<Node_t *> &entries)  //
       -> Node_t *
   {
-    std::vector<Node_t *> next_level_nodes;
+    std::vector<Node_t *> nodes;
     auto &&iter = entries.cbegin();
     const auto &iter_end = entries.cend();
+    Node_t *l_node = nullptr;
     while (iter < iter_end) {
       // load records into a inner node
       auto *node = new Node_t{false};
-      node->Bulkload(iter, iter_end);
-      if (!next_level_nodes.empty()) {
-        auto *left_node = next_level_nodes.back();
-        left_node->SetNextNode(node);
-      }
-      next_level_nodes.emplace_back(node);
+      node->Bulkload(iter, iter_end, l_node);
+      nodes.emplace_back(node);
+      l_node = node;
     }
-    entries.clear();
-    if (next_level_nodes.size() == 1) return next_level_nodes[0];
-    return BulkloadInnerNode(next_level_nodes);
+    if (nodes.size() == 1) return nodes[0];
+    return ConstructUpperLayer(nodes);
   }
 
   /**
@@ -691,20 +684,20 @@ class BTreePCL
     }
 
     // check the right-sibling node has enough capacity for merging
-    auto *right_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
-    if (!node->CanMerge(right_node)) {
+    auto *r_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
+    if (!node->CanMerge(r_node)) {
       parent->ReleaseExclusiveLock();
       return;
     }
 
     // perform merging
     if (node->IsLeaf()) {
-      node->template Merge<Payload>(right_node);
+      node->template Merge<Payload>(r_node);
     } else {
-      node->template Merge<Node_t *>(right_node);
+      node->template Merge<Node_t *>(r_node);
     }
     parent->DeleteChild(node, pos + 1);
-    delete right_node;
+    delete r_node;
   }
 
   /*####################################################################################
