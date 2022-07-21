@@ -383,19 +383,20 @@ class BTreePCL
       // prepare a lambda function for bulkloading
       auto loader = [&](std::promise<Node_t *> p,  //
                         size_t n,                  //
-                        typename std::vector<Entry>::const_iterator iter) {
-        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n);
+                        typename std::vector<Entry>::const_iterator iter, bool is_rightmost) {
+        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n, is_rightmost);
         p.set_value(partial_root);
       };
 
       // create threads to construct partial BTrees
       const size_t rec_num = entries.size();
+      const auto rightmost_id = thread_num - 1;
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BTree
         std::promise<Node_t *> p{};
         threads.emplace_back(p.get_future());
         const size_t n = (rec_num + i) / thread_num;
-        std::thread{loader, std::move(p), n, iter}.detach();
+        std::thread{loader, std::move(p), n, iter, i == rightmost_id}.detach();
 
         // forward the iterator to the next begin position
         iter += n;
@@ -590,7 +591,8 @@ class BTreePCL
   auto
   BulkloadWithSingleThread(  //
       typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end)  //
+      const typename std::vector<Entry>::const_iterator &iter_end,
+      const bool is_rightmost = true)  //
       -> Node_t *
   {
     std::vector<Node_t *> nodes{};
@@ -598,10 +600,11 @@ class BTreePCL
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template Bulkload<Entry, Payload>(iter, iter_end, l_node);
+      node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
     }
+    if (nodes.size() == 1) return nodes[0];
     return ConstructUpperLayer(nodes);
   }
 
