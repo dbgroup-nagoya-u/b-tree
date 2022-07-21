@@ -68,6 +68,5 @@ endfunction()
 # add unit tests to build targets
 ADD_B_TREE_TEST("metadata_test")
 ADD_B_TREE_TEST("node_test")
-ADD_B_TREE_TEST("b_tree_test1")
-ADD_B_TREE_TEST("b_tree_test2")
+ADD_B_TREE_TEST("b_tree_test")
 ADD_B_TREE_TEST("b_tree_pcl_multi_thread_test")
