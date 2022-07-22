@@ -117,8 +117,8 @@ class BTreePCL
         -> bool
     {
       while (true) {
-        while (current_pos_ < record_count_ && node_->GetMetadata(current_pos_).is_deleted) {
-          current_pos_++;
+        while (current_pos_ + 1 <= record_count_ && node_->GetMetadata(current_pos_ + 1).is_deleted) {
+          ++current_pos_;
         }
         if (current_pos_ < record_count_) return true;
         if (is_end_) {
