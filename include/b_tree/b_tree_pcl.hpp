@@ -65,11 +65,7 @@ class BTreePCL
         size_t pos,
         const std::optional<std::pair<const Key &, bool>> end_key,
         bool is_end)
-        : node_{node},
-          record_count_{count},
-          current_pos_{pos},
-          end_key_{std::move(end_key)},
-          is_end_{is_end}
+        : node_{node}, end_pos_{count}, pos_{pos}, end_key_{std::move(end_key)}, is_end_{is_end}
     {
     }
 
@@ -93,13 +89,13 @@ class BTreePCL
     operator*() const  //
         -> std::pair<Key, Payload>
     {
-      return node_->template GetRecord<Payload>(current_pos_);
+      return node_->template GetRecord<Payload>(pos_);
     }
 
     constexpr void
     operator++()
     {
-      ++current_pos_;
+      ++pos_;
     }
 
     /*##################################################################################
@@ -117,17 +113,17 @@ class BTreePCL
         -> bool
     {
       while (true) {
-        while (current_pos_ + 1 <= record_count_ && node_->GetMetadata(current_pos_ + 1).is_deleted) {
-          ++current_pos_;
+        while (pos_ < end_pos_ && node_->GetMetadata(pos_).is_deleted) {
+          ++pos_;
         }
-        if (current_pos_ < record_count_) return true;
+        if (pos_ < end_pos_) return true;
         if (is_end_) {
           node_->ReleaseSharedLock();
           return false;
         }
         node_ = node_->GetNextNodeForRead();
-        current_pos_ = 0;
-        std::tie(is_end_, record_count_) = node_->SearchEndPositionFor(end_key_);
+        pos_ = 0;
+        std::tie(is_end_, end_pos_) = node_->SearchEndPositionFor(end_key_);
       }
     }
 
@@ -138,7 +134,7 @@ class BTreePCL
     GetKey() const  //
         -> Key
     {
-      return node_->GetKey(current_pos_);
+      return node_->GetKey(pos_);
     }
 
     /**
@@ -148,7 +144,7 @@ class BTreePCL
     GetPayload() const  //
         -> Payload
     {
-      return node_->template GetPayload<Payload>(current_pos_);
+      return node_->template GetPayload<Payload>(pos_);
     }
 
    private:
@@ -156,10 +152,10 @@ class BTreePCL
     Node_t *node_{nullptr};
 
     /// the number of records in this node.
-    size_t record_count_{0};
+    size_t end_pos_{0};
 
     /// the position of a current record.
-    size_t current_pos_{0};
+    size_t pos_{0};
 
     /// the end key given from a user.
     std::optional<std::pair<const Key &, bool>> end_key_{};
@@ -350,7 +346,9 @@ class BTreePCL
    * @retval kKeyNotExist otherwise.
    */
   auto
-  Delete(const Key &key, [[maybe_unused]] const size_t key_len = sizeof(Key))  //
+  Delete(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key, kDelOps);
@@ -382,19 +380,20 @@ class BTreePCL
       // prepare a lambda function for bulkloading
       auto loader = [&](std::promise<Node_t *> p,  //
                         size_t n,                  //
-                        typename std::vector<Entry>::const_iterator iter) {
-        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n);
+                        typename std::vector<Entry>::const_iterator iter, bool is_rightmost) {
+        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n, is_rightmost);
         p.set_value(partial_root);
       };
 
       // create threads to construct partial BTrees
       const size_t rec_num = entries.size();
+      const auto rightmost_id = thread_num - 1;
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BTree
         std::promise<Node_t *> p{};
         threads.emplace_back(p.get_future());
         const size_t n = (rec_num + i) / thread_num;
-        std::thread{loader, std::move(p), n, iter}.detach();
+        std::thread{loader, std::move(p), n, iter, i == rightmost_id}.detach();
 
         // forward the iterator to the next begin position
         iter += n;
@@ -589,7 +588,8 @@ class BTreePCL
   auto
   BulkloadWithSingleThread(  //
       typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end)  //
+      const typename std::vector<Entry>::const_iterator &iter_end,
+      const bool is_rightmost = true)  //
       -> Node_t *
   {
     std::vector<Node_t *> nodes{};
@@ -597,10 +597,11 @@ class BTreePCL
     while (iter < iter_end) {
       // load records into a leaf node
       auto *node = new Node_t{true};
-      node->template Bulkload<Entry, Payload>(iter, iter_end, l_node);
+      node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
     }
+    if (nodes.size() == 1) return nodes[0];
     return ConstructUpperLayer(nodes);
   }
 
