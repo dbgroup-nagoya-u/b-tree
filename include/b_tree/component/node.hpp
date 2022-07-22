@@ -998,8 +998,8 @@ class PessimisticNode
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
   {
-    if (high_meta_.key_length == 0) return true;  // the rightmost node
-    if (!end_key) return false;                   // perform full scan
+    if (!next_) return true;     // the rightmost node
+    if (!end_key) return false;  // perform full scan
     return !Comp{}(GetKey(high_meta_), end_key->first);
   }
 
