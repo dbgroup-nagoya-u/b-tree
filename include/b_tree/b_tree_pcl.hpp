@@ -100,7 +100,6 @@ class BTreePCL
     operator++()
     {
       ++current_pos_;
-      if (node_->GetMetadata(current_pos_).is_deleted) ++current_pos_;
     }
 
     /*##################################################################################
