@@ -21,6 +21,7 @@
 #include <atomic>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "common.hpp"
 #include "lock/pessimistic_lock.hpp"
@@ -131,11 +132,8 @@ class PessimisticNode
         kMetaLen * r_node->record_count_ + r_node->block_size_ - r_node->deleted_size_;
 
     const auto can_merge = kPageSize - (kHeaderLength + kMinFreeSpaceSize) > l_size + r_size;
-    if (!can_merge) {
-      r_node->mutex_.Unlock();
-      mutex_.Unlock();
-    }
 
+    if (!can_merge) r_node->mutex_.Unlock();
     return can_merge;
   }
 
@@ -865,6 +863,105 @@ class PessimisticNode
     next_ = r_node->next_;
   }
 
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
+
+  /**
+   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   *
+   * @tparam Payload a target payload class.
+   * @param iter the begin position of target records.
+   * @param iter_end the end position of target records.
+   * @param l_node the left node of this node.
+   */
+  template <class Entry, class Payload>
+  void
+  Bulkload(  //
+      typename std::vector<Entry>::const_iterator &iter,
+      const typename std::vector<Entry>::const_iterator &iter_end,
+      const bool is_rightmost,
+      PessimisticNode *l_node = nullptr)
+  {
+    // extract and insert entries for the leaf node
+    size_t node_size = kHeaderLength;
+    auto offset = kPageSize;
+    while (iter < iter_end) {
+      const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
+      // const auto key_len = iter->GetKeyLength();
+      const auto rec_len = key_len + sizeof(Payload);
+
+      // check whether the node has sufficient space
+      node_size += rec_len + sizeof(Metadata);
+      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+
+      // insert an entry to the leaf node
+      auto tmp_offset = SetPayload(offset, payload);
+      tmp_offset = SetKey(tmp_offset, key, key_len);
+      meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
+      offset -= rec_len;
+
+      ++record_count_;
+      ++iter;
+    }
+
+    // set a highest key if needed
+    if (iter < iter_end || !is_rightmost) {
+      const auto high_meta = meta_array_[record_count_ - 1];
+      const auto high_key_len = high_meta.key_length;
+      high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
+      offset -= high_key_len;
+    }
+
+    block_size_ = kPageSize - offset;
+    // set this node to next node of l_node
+    if (l_node) l_node->next_ = this;
+  }
+
+  /**
+   * @brief Create a inner node with the maximum number of records for bulkloading.
+   *
+   * @param iter the begin position of target records.
+   * @param iter_end the end position of target records.
+   * @param l_node the left node of this node.
+   */
+  void
+  Bulkload(  //
+      typename std::vector<PessimisticNode *>::const_iterator &iter,
+      const typename std::vector<PessimisticNode *>::const_iterator &iter_end,
+      PessimisticNode *l_node = nullptr)
+  {
+    size_t node_size = kHeaderLength;
+    auto offset = kPageSize;
+    while (iter < iter_end) {
+      const auto key_len = (*iter)->high_meta_.key_length;
+      const auto rec_len = key_len + sizeof(PessimisticNode *);
+
+      // check whether the node has sufficient space
+      node_size += rec_len + sizeof(Metadata);
+      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+
+      // insert an entry to the inner node
+      auto tmp_offset = SetPayload(offset, *iter);
+      if (key_len) tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
+      meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
+      offset -= rec_len;
+
+      ++record_count_;
+      ++iter;
+    }
+
+    // set a highest key
+    const auto high_meta = meta_array_[record_count_ - 1];
+    const auto high_key_len = high_meta.key_length;
+    high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
+    offset -= high_key_len;
+    block_size_ = kPageSize - offset;
+
+    // set this node to next node of l_node
+    if (l_node) l_node->next_ = this;
+  }
+
  private:
   /*################################################################################################
    * Internal getter/setters
@@ -901,8 +998,8 @@ class PessimisticNode
   IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> bool
   {
-    if (high_meta_.key_length == 0) return true;  // the rightmost node
-    if (!end_key) return false;                   // perform full scan
+    if (!next_) return true;     // the rightmost node
+    if (!end_key) return false;  // perform full scan
     return !Comp{}(GetKey(high_meta_), end_key->first);
   }
 
@@ -1092,6 +1189,29 @@ class PessimisticNode
     }
 
     return offset;
+  }
+
+  /**
+   * @brief Parse an entry of bulkload according to key's type.
+   *
+   * @tparam Payload a payload type.
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: a target payload.
+   * @retval 3rd: the length of a target key.
+   */
+  template <class Payload, class Entry>
+  constexpr auto
+  ParseEntry(const Entry &entry)  //
+      -> std::tuple<Key, Payload, size_t>
+  {
+    if constexpr (IsVariableLengthData<Key>()) {
+      return entry;
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, payload, sizeof(Key)};
+    }
   }
 
   /*################################################################################################
