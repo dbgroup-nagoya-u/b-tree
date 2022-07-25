@@ -1184,8 +1184,9 @@ class PessimisticNode
     // copy records from the given node
     for (size_t i = begin_pos; i < end_pos; ++i) {
       const auto target_meta = orig_node->meta_array_[i];
-      if (!target_meta.is_deleted)
+      if (!target_meta.is_deleted) {
         offset = CopyRecordFrom<Payload>(orig_node, target_meta, rec_count++, offset);
+      }
     }
 
     return offset;

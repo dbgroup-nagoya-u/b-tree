@@ -367,7 +367,7 @@ class BTreePCL
 
     if (entries.empty()) return kSuccess;
 
-    Node_t *new_root;
+    Node_t *new_root{};
     auto &&iter = entries.cbegin();
     if (thread_num == 1) {
       // bulkloading with a single thread

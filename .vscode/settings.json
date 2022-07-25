@@ -57,6 +57,7 @@
     "GLOG",
     "gtest",
     "libgflags",
+    "mimalloc",
     "NOLINT",
     "pthread",
     "Wextra"

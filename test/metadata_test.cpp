@@ -94,7 +94,7 @@ TEST_F(MetadataFixture, SetTotalLengthDefaultMetadataGetUpdatedTotalLength)
  * Operator tests
  *------------------------------------------------------------------------------------------------*/
 
-TEST_F(MetadataFixture, EQWithSameMetadatasReturnTrue)
+TEST_F(MetadataFixture, EQWithSameMetadataReturnTrue)
 {
   const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
@@ -102,7 +102,7 @@ TEST_F(MetadataFixture, EQWithSameMetadatasReturnTrue)
   EXPECT_TRUE(meta_a == meta_b);
 }
 
-TEST_F(MetadataFixture, EQWithDifferentMetadatasReturnFalse)
+TEST_F(MetadataFixture, EQWithDifferentMetadataReturnFalse)
 {
   const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{};
@@ -110,7 +110,7 @@ TEST_F(MetadataFixture, EQWithDifferentMetadatasReturnFalse)
   EXPECT_FALSE(meta_a == meta_b);
 }
 
-TEST_F(MetadataFixture, NEQWithSameMetadatasReturnFalse)
+TEST_F(MetadataFixture, NEQWithSameMetadataReturnFalse)
 {
   const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
@@ -118,7 +118,7 @@ TEST_F(MetadataFixture, NEQWithSameMetadatasReturnFalse)
   EXPECT_FALSE(meta_a != meta_b);
 }
 
-TEST_F(MetadataFixture, NEQWithDifferentMetadatasReturnTrue)
+TEST_F(MetadataFixture, NEQWithDifferentMetadataReturnTrue)
 {
   const Metadata meta_a{kExpectedOffset, kExpectedKeyLength, kExpectedTotalLength};
   const Metadata meta_b{};

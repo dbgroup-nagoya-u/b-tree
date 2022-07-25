@@ -354,12 +354,10 @@ class NodeFixture : public testing::Test
 using KeyPayloadPairs = ::testing::Types<  //
     KeyPayload<UInt8, UInt8>,              // fixed keys and in-place payloads
     KeyPayload<Var, UInt8>,                // variable keys and in-place payloads
-    // KeyPayload<UInt8, Var>,                // fixed keys and variable payloads
-    // KeyPayload<Var, Var>,                  // variable keys/payloads
-    KeyPayload<Ptr, Ptr>,         // pointer keys/payloads
-    KeyPayload<UInt8, Original>,  // original class payloads
-    KeyPayload<UInt8, Int8>,      // fixed keys and appended payloads
-    KeyPayload<Var, Int8>         // variable keys and appended payloads
+    KeyPayload<Ptr, Ptr>,                  // pointer keys/payloads
+    KeyPayload<UInt8, Original>,           // original class payloads
+    KeyPayload<UInt8, Int8>,               // fixed keys and appended payloads
+    KeyPayload<Var, Int8>                  // variable keys and appended payloads
     >;
 TYPED_TEST_SUITE(NodeFixture, KeyPayloadPairs);
 
