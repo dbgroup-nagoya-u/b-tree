@@ -328,26 +328,6 @@ class BTreePCL
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
-  /**
-   * @brief Delete child nodes recursively.
-   *
-   * Note that this function assumes that there are no other threads in operation.
-   *
-   * @param node a target node.
-   */
-  static void
-  DeleteChildren(Node_t *node)
-  {
-    if (!node->IsLeaf()) {
-      // delete children nodes recursively
-      for (size_t i = 0; i < node->GetRecordCount(); ++i) {
-        auto *child_node = node->template GetPayload<Node_t *>(i);
-        DeleteChildren(child_node);
-      }
-    }
-
-    delete node;
-  }
 
   /**
    * @brief Get root node with shared lock
@@ -395,6 +375,45 @@ class BTreePCL
    * @brief Search a leaf node that may have a target key.
    *
    * @param key a search key.
+   * @param closed a flag for indicating closed/open-interval.
+   * @return a stack of traversed nodes.
+   */
+  [[nodiscard]] auto
+  SearchLeafNodeForRead(  //
+      const Key &key,
+      const bool range_is_closed)  //
+      -> Node_t *
+  {
+    auto *node = GetRootForRead();
+    while (!node->IsLeaf()) {
+      const auto pos = node->SearchChild(key, range_is_closed);
+      node = node->GetChildForRead(pos);
+    }
+
+    return node;
+  }
+
+  /**
+   * @brief Search a leftmost leaf node.
+   *
+   * @return a stack of traversed nodes.
+   */
+  [[nodiscard]] auto
+  SearchLeftmostLeaf()  //
+      -> Node_t *
+  {
+    auto *node = GetRootForRead();
+    while (!node->IsLeaf()) {
+      node = node->GetChildForRead(0);
+    }
+
+    return node;
+  }
+
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * @param key a search key.
    * @param ops_is_del a flag for indicating a target operation.
    * @return a target leaf node.
    */
@@ -425,39 +444,51 @@ class BTreePCL
   }
 
   /**
-   * @brief Search a leaf node that may have a target key.
+   * @brief Delete child nodes recursively.
    *
-   * @param key a search key.
-   * @param closed a flag for indicating closed/open-interval.
-   * @return a stack of traversed nodes.
+   * Note that this function assumes that there are no other threads in operation.
+   *
+   * @param node a target node.
    */
-  [[nodiscard]] auto
-  SearchLeafNodeForRead(  //
-      const Key &key,
-      const bool range_is_closed)  //
-      -> Node_t *
+  static void
+  DeleteChildren(Node_t *node)
   {
-    auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, range_is_closed);
-      node = node->GetChildForRead(pos);
+    if (!node->IsLeaf()) {
+      // delete children nodes recursively
+      for (size_t i = 0; i < node->GetRecordCount(); ++i) {
+        auto *child_node = node->template GetPayload<Node_t *>(i);
+        DeleteChildren(child_node);
+      }
     }
 
-    return node;
+    delete node;
   }
 
-  [[nodiscard]] auto
-  TryShrinkTree() -> Node_t *
+  /*####################################################################################
+   * Internal structure modification operations
+   *##################################################################################*/
+
+  /**
+   * @brief Split a given node
+   *
+   * @tparam Value a payload type of given node
+   * @param l_node a node to be split
+   * @param parent a parent node of the l_node
+   * @param pos the position of the l_node
+   */
+  void
+  Split(  //
+      Node_t *l_node,
+      Node_t *parent,
+      const size_t pos)
   {
-    // a root node cannot be merged
-    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
-      // if a root node has only one child, shrink a tree
-      auto *child = root_->template GetPayload<Node_t *>(0);
-      child->AcquireExclusiveLock();
-      delete root_;
-      root_ = child;
+    auto *r_node = new Node_t{l_node->IsLeaf()};
+    if (l_node->IsLeaf()) {
+      l_node->template Split<Payload>(r_node);
+    } else {
+      l_node->template Split<Node_t *>(r_node);
     }
-    return root_;
+    parent->InsertChild(l_node, r_node, pos);
   }
 
   [[nodiscard]] auto
@@ -474,6 +505,60 @@ class BTreePCL
     auto *node = l_node->GetValidSplitNode(key);
     return node;
   }
+
+  /**
+   * @brief Merge given nodes
+   *
+   * @param node a node to be merged
+   * @param parent a parent node of the node
+   * @param pos the position of the node
+   */
+  void
+  Merge(  //
+      Node_t *node,
+      Node_t *parent,
+      const size_t pos)
+  {
+    // check there is a right-sibling node
+    if (pos == parent->GetRecordCount() - 1) {
+      parent->ReleaseExclusiveLock();
+      return;
+    }
+
+    // check the right-sibling node has enough capacity for merging
+    auto *r_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
+    if (!node->CanMerge(r_node)) {
+      parent->ReleaseExclusiveLock();
+      return;
+    }
+
+    // perform merging
+    if (node->IsLeaf()) {
+      node->template Merge<Payload>(r_node);
+    } else {
+      node->template Merge<Node_t *>(r_node);
+    }
+    parent->DeleteChild(node, pos + 1);
+    delete r_node;
+  }
+
+  [[nodiscard]] auto
+  TryShrinkTree() -> Node_t *
+  {
+    // a root node cannot be merged
+    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
+      // if a root node has only one child, shrink a tree
+      auto *child = root_->template GetPayload<Node_t *>(0);
+      child->AcquireExclusiveLock();
+      delete root_;
+      root_ = child;
+    }
+    return root_;
+  }
+
+  /*####################################################################################
+   * Internal bulkload utilities
+   *##################################################################################*/
 
   /**
    * @brief Bulkload specified kay/payload pairs with a single thread.
@@ -520,82 +605,6 @@ class BTreePCL
     }
     if (nodes.size() == 1) return nodes[0];
     return ConstructUpperLayer(nodes);
-  }
-
-  /**
-   * @brief Search a leftmost leaf node.
-   *
-   * @return a stack of traversed nodes.
-   */
-  [[nodiscard]] auto
-  SearchLeftmostLeaf()  //
-      -> Node_t *
-  {
-    auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
-      node = node->GetChildForRead(0);
-    }
-
-    return node;
-  }
-
-  /**
-   * @brief Split a given node
-   *
-   * @tparam Value a payload type of given node
-   * @param l_node a node to be split
-   * @param parent a parent node of the l_node
-   * @param pos the position of the l_node
-   */
-  void
-  Split(  //
-      Node_t *l_node,
-      Node_t *parent,
-      const size_t pos)
-  {
-    auto *r_node = new Node_t{l_node->IsLeaf()};
-    if (l_node->IsLeaf()) {
-      l_node->template Split<Payload>(r_node);
-    } else {
-      l_node->template Split<Node_t *>(r_node);
-    }
-    parent->InsertChild(l_node, r_node, pos);
-  }
-
-  /**
-   * @brief Merge given nodes
-   *
-   * @param node a node to be merged
-   * @param parent a parent node of the node
-   * @param pos the position of the node
-   */
-  void
-  Merge(  //
-      Node_t *node,
-      Node_t *parent,
-      const size_t pos)
-  {
-    // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
-
-    // check the right-sibling node has enough capacity for merging
-    auto *r_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
-    if (!node->CanMerge(r_node)) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
-
-    // perform merging
-    if (node->IsLeaf()) {
-      node->template Merge<Payload>(r_node);
-    } else {
-      node->template Merge<Node_t *>(r_node);
-    }
-    parent->DeleteChild(node, pos + 1);
-    delete r_node;
   }
 
   /*####################################################################################

@@ -45,11 +45,10 @@ class PessimisticNode
    *##################################################################################*/
 
   using Lock = ::dbgroup::lock::PessimisticLock;
-  using K = Key;
 
-  /*################################################################################################
+  /*####################################################################################
    * Public constructors/destructors
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /**
    * @brief Construct a new node object
@@ -118,6 +117,37 @@ class PessimisticNode
     ::operator delete(p);
   }
 
+  /*####################################################################################
+   * Public getters for header information
+   *##################################################################################*/
+
+  /**
+   * @return true if this is a leaf node
+   * @return false otherwise
+   */
+  [[nodiscard]] constexpr auto
+  IsLeaf() const  //
+      -> bool
+  {
+    return is_leaf_;
+  }
+
+  [[nodiscard]] constexpr auto
+  HasSufficientSpace(const bool ops_is_del)  //
+      -> bool
+  {
+    constexpr auto kMetaLen = sizeof(Metadata);
+    constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+    constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + kMetaLen;
+
+    // check if the node has sufficient space
+    const auto size = kMetaLen * record_count_ + block_size_;
+    const auto has_sufficient_space =
+        (!ops_is_del && (size <= kPageSize - (kHeaderLength + kRecLen)))
+        || (ops_is_del && (size - deleted_size_ >= kRecLen + kMinUsedSpaceSize));
+    return has_sufficient_space;
+  }
+
   /**
    * @return true r_node can be merged into this node
    * @return false otherwise
@@ -138,20 +168,133 @@ class PessimisticNode
     return can_merge;
   }
 
-  /*################################################################################################
-   * Public getters
-   *##############################################################################################*/
-
   /**
-   * @return true if this is a leaf node
-   * @return false otherwise
+   * @return the number of records in this node.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
-      -> bool
+  GetRecordCount() const  //
+      -> size_t
   {
-    return is_leaf_;
+    return record_count_;
   }
+
+  /**
+   * @return pointer of next node with shared lock
+   */
+  [[nodiscard]] constexpr auto
+  GetNextNodeForRead()  //
+      -> PessimisticNode *
+  {
+    next_->mutex_.LockShared();
+    mutex_.UnlockShared();
+    return next_;
+  }
+
+  /**
+   * @return pointer of next node with exclusive lock
+   */
+  [[nodiscard]] auto
+  GetValidSplitNode(const Key &key)  //
+      -> PessimisticNode *
+  {
+    const auto &high_key = GetHighKey();
+    if (!high_key || !Comp{}(high_key.value(), key)) {
+      next_->mutex_.Unlock();
+      return this;
+    }
+    mutex_.Unlock();
+    return next_;
+  }
+
+  /**
+   * @return a high key in this node
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> std::optional<Key>
+  {
+    if (high_meta_.key_length == 0) return std::nullopt;
+    return GetKey(high_meta_);
+  }
+
+  /*####################################################################################
+   * Public getters for records
+   *##################################################################################*/
+
+  /**
+   * @param position the position of record metadata to be get.
+   * @return Metadata: record metadata.
+   */
+  [[nodiscard]] constexpr auto
+  GetMetadata(const size_t position) const  //
+      -> Metadata
+  {
+    return meta_array_[position];
+  }
+
+  /**
+   * @param pos the position of a target record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey(const size_t pos) const  //
+      -> Key
+  {
+    return GetKey(meta_array_[pos]);
+  }
+
+  /**
+   * @tparam Payload a class of payload.
+   * @param pos the position of a target record.
+   * @return a payload in a target record.
+   */
+  template <class Payload>
+  [[nodiscard]] auto
+  GetPayload(const size_t pos) const  //
+      -> Payload
+  {
+    Payload payload{};
+    memcpy(&payload, GetPayloadAddr(meta_array_[pos]), sizeof(Payload));
+    return payload;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetChildForRead(const size_t pos)  //
+      -> PessimisticNode *
+  {
+    auto *child = GetPayload<PessimisticNode *>(pos);
+    child->mutex_.LockShared();
+    mutex_.UnlockShared();
+    return child;
+  }
+
+  [[nodiscard]] constexpr auto
+  GetChildForWrite(  //
+      const size_t pos,
+      const bool ops_is_del,
+      const bool unlock_parent = true)  //
+      -> std::pair<PessimisticNode *, bool>
+  {
+    auto *child = GetPayload<PessimisticNode *>(pos);
+    child->mutex_.Lock();
+
+    // check if the node has sufficient space
+    const auto should_smo = !child->HasSufficientSpace(ops_is_del);
+    if (!should_smo && unlock_parent) mutex_.Unlock();
+    return {child, should_smo};
+  }
+
+  template <class Payload>
+  [[nodiscard]] auto
+  GetRecord(const size_t pos) const  //
+      -> std::pair<Key, Payload>
+  {
+    return {GetKey(pos), GetPayload<Payload>(pos)};
+  }
+
+  /*####################################################################################
+   * Public lock management APIs
+   *##################################################################################*/
 
   void
   AcquireSharedLock()
@@ -178,177 +321,9 @@ class PessimisticNode
     mutex_.Unlock();
   }
 
-  /**
-   * @return the number of records in this node.
-   */
-  [[nodiscard]] constexpr auto
-  GetRecordCount() const  //
-      -> size_t
-  {
-    return record_count_;
-  }
-
-  /**
-   * @return pointer of next node with exclusive lock
-   */
-  [[nodiscard]] auto
-  GetValidSplitNode(const Key &key)  //
-      -> PessimisticNode *
-  {
-    const auto &high_key = GetHighKey();
-    if (!high_key || !Comp{}(high_key.value(), key)) {
-      next_->mutex_.Unlock();
-      return this;
-    }
-    mutex_.Unlock();
-    return next_;
-  }
-
-  /**
-   * @return pointer of next node with shared lock
-   */
-  [[nodiscard]] constexpr auto
-  GetNextNodeForRead()  //
-      -> PessimisticNode *
-  {
-    next_->mutex_.LockShared();
-    mutex_.UnlockShared();
-    return next_;
-  }
-
-  [[nodiscard]] constexpr auto
-  GetChildForRead(const size_t pos)  //
-      -> PessimisticNode *
-  {
-    auto *child = GetPayload<PessimisticNode *>(pos);
-    child->mutex_.LockShared();
-    mutex_.UnlockShared();
-    return child;
-  }
-
-  [[nodiscard]] constexpr auto
-  HasSufficientSpace(const bool ops_is_del)  //
-      -> bool
-  {
-    constexpr auto kMetaLen = sizeof(Metadata);
-    constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + kMetaLen;
-
-    // check if the node has sufficient space
-    const auto size = kMetaLen * record_count_ + block_size_;
-    const auto has_sufficient_space =
-        (!ops_is_del && (size <= kPageSize - (kHeaderLength + kRecLen)))
-        || (ops_is_del && (size - deleted_size_ >= kRecLen + kMinUsedSpaceSize));
-    return has_sufficient_space;
-  }
-
-  [[nodiscard]] constexpr auto
-  GetChildForWrite(  //
-      const size_t pos,
-      const bool ops_is_del,
-      const bool unlock_parent = true)  //
-      -> std::pair<PessimisticNode *, bool>
-  {
-    auto *child = GetPayload<PessimisticNode *>(pos);
-    child->mutex_.Lock();
-
-    // check if the node has sufficient space
-    const auto should_smo = !child->HasSufficientSpace(ops_is_del);
-    if (!should_smo && unlock_parent) mutex_.Unlock();
-    return {child, should_smo};
-  }
-
-  /**
-   * @param position the position of record metadata to be get.
-   * @return Metadata: record metadata.
-   */
-  [[nodiscard]] constexpr auto
-  GetMetadata(const size_t position) const  //
-      -> Metadata
-  {
-    return meta_array_[position];
-  }
-
-  /**
-   * @param meta metadata of a corresponding record.
-   * @return a key in a target record.
-   */
-  [[nodiscard]] auto
-  GetKey(const Metadata meta) const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
-    } else {
-      Key key{};
-      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
-    }
-  }
-
-  /**
-   * @param pos the position of a target record.
-   * @return a key in a target record.
-   */
-  [[nodiscard]] auto
-  GetKey(const size_t pos) const  //
-      -> Key
-  {
-    return GetKey(meta_array_[pos]);
-  }
-
-  /**
-   * @return a high key in this node
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> std::optional<Key>
-  {
-    if (high_meta_.key_length == 0) return std::nullopt;
-    return GetKey(high_meta_);
-  }
-
-  /**
-   * @tparam Payload a class of payload.
-   * @param meta metadata of a corresponding record.
-   * @return a payload in a target record.
-   */
-  template <class Payload>
-  [[nodiscard]] auto
-  GetPayload(const Metadata meta) const  //
-      -> Payload
-  {
-    Payload payload{};
-    memcpy(&payload, GetPayloadAddr(meta), sizeof(Payload));
-    return payload;
-  }
-
-  /**
-   * @tparam Payload a class of payload.
-   * @param pos the position of a target record.
-   * @return a payload in a target record.
-   */
-  template <class Payload>
-  [[nodiscard]] auto
-  GetPayload(const size_t pos) const  //
-      -> Payload
-  {
-    Payload payload{};
-    memcpy(&payload, GetPayloadAddr(meta_array_[pos]), sizeof(Payload));
-    return payload;
-  }
-
-  template <class Payload>
-  [[nodiscard]] auto
-  GetRecord(const size_t pos) const  //
-      -> std::pair<Key, Payload>
-  {
-    return {GetKey(pos), GetPayload<Payload>(pos)};
-  }
-
-  /*################################################################################################
-   * Public APIs
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
 
   /**
    * @brief Get the position of a specified key by using binary search. If there is no
@@ -865,7 +840,7 @@ class PessimisticNode
   }
 
   /*####################################################################################
-   * Public bulkload API
+   * Public bulkload APIs
    *##################################################################################*/
 
   /**
@@ -964,9 +939,47 @@ class PessimisticNode
   }
 
  private:
-  /*################################################################################################
-   * Internal getter/setters
-   *##############################################################################################*/
+  /*####################################################################################
+   * Internal getter for header information
+   *##################################################################################*/
+
+  /**
+   * @param end_key a pair of a target key and its closed/open-interval flag.
+   * @retval true if this node is a rightmost node for the given key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+      -> bool
+  {
+    if (!next_) return true;     // the rightmost node
+    if (!end_key) return false;  // perform full scan
+    return !Comp{}(GetKey(high_meta_), end_key->first);
+  }
+
+  /**
+   * @retval true if this node does not have sufficient free space.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  GetSpaceStatus(const size_t new_record_size) const  //
+      -> NodeRC
+  {
+    constexpr auto kMetaLen = sizeof(Metadata);
+
+    // check whether the node has space for a new record
+    auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_record_size;
+    if (total_size <= kPageSize - kHeaderLength) return kHasSpace;
+
+    // the node needs any SMO
+    return (total_size - deleted_size_ > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
+               ? kNeedSplit
+               : kNeedConsolidation;
+  }
+
+  /*####################################################################################
+   * Internal getter/setters for records
+   *##################################################################################*/
 
   /**
    * @param meta metadata of a corresponding record.
@@ -981,6 +994,23 @@ class PessimisticNode
 
   /**
    * @param meta metadata of a corresponding record.
+   * @return a key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey(const Metadata meta) const  //
+      -> Key
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetKeyAddr(meta));
+    } else {
+      Key key{};
+      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
+      return key;
+    }
+  }
+
+  /**
+   * @param meta metadata of a corresponding record.
    * @return an address of a target payload.
    */
   [[nodiscard]] constexpr auto
@@ -991,17 +1021,18 @@ class PessimisticNode
   }
 
   /**
-   * @param end_key a pair of a target key and its closed/open-interval flag.
-   * @retval true if this node is a rightmost node for the given key.
-   * @retval false otherwise.
+   * @tparam Payload a class of payload.
+   * @param meta metadata of a corresponding record.
+   * @return a payload in a target record.
    */
+  template <class Payload>
   [[nodiscard]] auto
-  IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
-      -> bool
+  GetPayload(const Metadata meta) const  //
+      -> Payload
   {
-    if (!next_) return true;     // the rightmost node
-    if (!end_key) return false;  // perform full scan
-    return !Comp{}(GetKey(high_meta_), end_key->first);
+    Payload payload{};
+    memcpy(&payload, GetPayloadAddr(meta), sizeof(Payload));
+    return payload;
   }
 
   /**
@@ -1049,29 +1080,9 @@ class PessimisticNode
     return offset;
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Internal utility functions
-   *##############################################################################################*/
-
-  /**
-   * @retval true if this node does not have sufficient free space.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] constexpr auto
-  GetSpaceStatus(const size_t new_record_size) const  //
-      -> NodeRC
-  {
-    constexpr auto kMetaLen = sizeof(Metadata);
-
-    // check whether the node has space for a new record
-    auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_record_size;
-    if (total_size <= kPageSize - kHeaderLength) return kHasSpace;
-
-    // the node needs any SMO
-    return (total_size - deleted_size_ > kPageSize - (kHeaderLength + kMinFreeSpaceSize))
-               ? kNeedSplit
-               : kNeedConsolidation;
-  }
+   *##################################################################################*/
 
   /**
    * @brief Copy a key from a given node.
@@ -1216,9 +1227,9 @@ class PessimisticNode
     }
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Internal member variables
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /// a flag to indicate whether this node is a leaf or internal node.
   uint64_t is_leaf_ : 1;
