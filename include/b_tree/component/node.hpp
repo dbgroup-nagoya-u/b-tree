@@ -75,7 +75,7 @@ class PessimisticNode
 
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
-    const auto l_key_len = l_high_meta.key_length;
+    const auto l_key_len = l_high_meta.key_len;
     const auto l_rec_len = l_key_len + kPayLen;
     auto offset = SetPayload(kPageSize, l_node);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
@@ -213,7 +213,7 @@ class PessimisticNode
   GetHighKey() const  //
       -> std::optional<Key>
   {
-    if (high_meta_.key_length == 0) return std::nullopt;
+    if (high_meta_.key_len == 0) return std::nullopt;
     return GetKey(high_meta_);
   }
 
@@ -506,7 +506,7 @@ class PessimisticNode
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       if (rc == kKeyAlreadyDeleted) {
         meta_array_[pos].is_deleted = 0;
-        deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
+        deleted_size_ -= meta_array_[pos].rec_len + kMetaLen;
       }
     }
 
@@ -561,7 +561,7 @@ class PessimisticNode
     if (rc == kKeyAlreadyDeleted) {
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
       meta_array_[pos].is_deleted = 0;
-      deleted_size_ -= meta_array_[pos].total_length + kMetaLen;
+      deleted_size_ -= meta_array_[pos].rec_len + kMetaLen;
       mutex_.Unlock();
       return kCompleted;
     }
@@ -651,7 +651,7 @@ class PessimisticNode
 
     // update a header
     meta_array_[pos].is_deleted = 1;
-    deleted_size_ += meta_array_[pos].total_length + kMetaLen;
+    deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
 
     const auto used_size = kMetaLen * record_count_ + block_size_ - deleted_size_;
 
@@ -677,7 +677,7 @@ class PessimisticNode
   {
     constexpr auto kPayLen = sizeof(PessimisticNode *);
     const auto l_high_meta = l_node->high_meta_;
-    const auto key_len = l_high_meta.key_length;
+    const auto key_len = l_high_meta.key_len;
     const auto rec_len = key_len + kPayLen;
 
     // insert a right child by updating an original record
@@ -718,7 +718,7 @@ class PessimisticNode
     // update payload
     memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPayLen);
 
-    const auto key_len = meta_array_[pos - 1].key_length;
+    const auto key_len = meta_array_[pos - 1].key_len;
 
     // delete metadata
     memmove(&(meta_array_[pos - 1]), &(meta_array_[pos]), sizeof(Metadata) * (record_count_ - pos));
@@ -783,10 +783,10 @@ class PessimisticNode
       const auto target_meta = meta_array_[pos++];
       if (!target_meta.is_deleted) {
         offset = temp_node_->template CopyRecordFrom<Payload>(this, target_meta, l_count++, offset);
-        used_size += target_meta.total_length + kMetaLen;
+        used_size += target_meta.rec_len + kMetaLen;
       }
     }
-    const auto sep_key_len = meta_array_[pos - 1].key_length;
+    const auto sep_key_len = meta_array_[pos - 1].key_len;
     temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
 
     // copy right half records to a right node
@@ -884,7 +884,7 @@ class PessimisticNode
     // set a highest key if needed
     if (iter < iter_end || !is_rightmost) {
       const auto high_meta = meta_array_[record_count_ - 1];
-      const auto high_key_len = high_meta.key_length;
+      const auto high_key_len = high_meta.key_len;
       high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
       offset -= high_key_len;
     }
@@ -910,7 +910,7 @@ class PessimisticNode
     size_t node_size = kHeaderLength;
     auto offset = kPageSize;
     while (iter < iter_end) {
-      const auto key_len = (*iter)->high_meta_.key_length;
+      const auto key_len = (*iter)->high_meta_.key_len;
       const auto rec_len = key_len + sizeof(PessimisticNode *);
 
       // check whether the node has sufficient space
@@ -929,7 +929,7 @@ class PessimisticNode
 
     // set a highest key
     const auto high_meta = meta_array_[record_count_ - 1];
-    const auto high_key_len = high_meta.key_length;
+    const auto high_key_len = high_meta.key_len;
     high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
     offset -= high_key_len;
     block_size_ = kPageSize - offset;
@@ -1017,7 +1017,7 @@ class PessimisticNode
   GetPayloadAddr(const Metadata meta) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.offset + meta.key_length);
+    return ShiftAddr(this, meta.offset + meta.key_len);
   }
 
   /**
@@ -1101,7 +1101,7 @@ class PessimisticNode
   {
     // copy a record from the given node
     if constexpr (IsVarLenData<Key>()) {
-      const auto key_len = meta.key_length;
+      const auto key_len = meta.key_len;
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
     } else {
@@ -1154,7 +1154,7 @@ class PessimisticNode
   {
     // copy a record from the given node
     if constexpr (IsVarLenData<Key>()) {
-      const auto rec_len = meta.total_length;
+      const auto rec_len = meta.rec_len;
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
     } else {
