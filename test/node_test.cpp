@@ -194,7 +194,7 @@ class NodeFixture : public testing::Test
     EXPECT_EQ(expected_rc, rc);
     if (expect_success) {
       EXPECT_TRUE(IsEqual<PayloadComp>(payloads_[expected_id], payload));
-      if constexpr (IsVariableLengthData<Payload>()) {
+      if constexpr (IsVarLenData<Payload>()) {
         ::operator delete(payload);
       }
     }

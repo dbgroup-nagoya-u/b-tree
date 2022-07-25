@@ -231,7 +231,7 @@ class PessimisticNode
       -> bool
   {
     constexpr auto kMetaLen = sizeof(Metadata);
-    constexpr auto kKeyLen = (IsVariableLengthData<Key>()) ? kMaxVarDataSize : sizeof(Key);
+    constexpr auto kKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
     constexpr auto kRecLen = kKeyLen + sizeof(PessimisticNode *) + kMetaLen;
 
     // check if the node has sufficient space
@@ -277,7 +277,7 @@ class PessimisticNode
   GetKey(const Metadata meta) const  //
       -> Key
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return reinterpret_cast<Key>(GetKeyAddr(meta));
     } else {
       Key key{};
@@ -1018,7 +1018,7 @@ class PessimisticNode
       [[maybe_unused]] const size_t key_len)  //
       -> size_t
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), key, key_len);
     } else {
@@ -1089,7 +1089,7 @@ class PessimisticNode
       -> size_t
   {
     // copy a record from the given node
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       const auto key_len = meta.key_length;
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
@@ -1142,7 +1142,7 @@ class PessimisticNode
       -> size_t
   {
     // copy a record from the given node
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       const auto rec_len = meta.total_length;
       offset -= rec_len;
       memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
@@ -1208,7 +1208,7 @@ class PessimisticNode
   ParseEntry(const Entry &entry)  //
       -> std::tuple<Key, Payload, size_t>
   {
-    if constexpr (IsVariableLengthData<Key>()) {
+    if constexpr (IsVarLenData<Key>()) {
       return entry;
     } else {
       const auto &[key, payload] = entry;

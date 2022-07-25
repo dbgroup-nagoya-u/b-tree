@@ -9,7 +9,7 @@ namespace dbgroup::index::b_tree
  */
 template <>
 constexpr auto
-IsVariableLengthData<char *>()  //
+IsVarLenData<char *>()  //
     -> bool
 {
   return true;

@@ -78,7 +78,7 @@ namespace dbgroup::index::b_tree
  */
 template <>
 constexpr auto
-IsVariableLengthData<char *>()  //
+IsVarLenData<char *>()  //
     -> bool
 {
   return true;
@@ -89,7 +89,7 @@ constexpr auto
 GetDataLength()  //
     -> size_t
 {
-  if constexpr (IsVariableLengthData<T>()) {
+  if constexpr (IsVarLenData<T>()) {
     return kVarDataLength;
   } else {
     return sizeof(T);
@@ -102,7 +102,7 @@ PrepareTestData(  //
     T *data_array,
     const size_t data_num)
 {
-  if constexpr (IsVariableLengthData<T>()) {
+  if constexpr (IsVarLenData<T>()) {
     // variable-length data
     for (size_t i = 0; i < data_num; ++i) {
       auto *data = reinterpret_cast<char *>(::operator new(kVarDataLength));

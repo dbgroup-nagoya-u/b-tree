@@ -71,7 +71,7 @@ struct CompareAsCString {
  */
 template <class T>
 constexpr auto
-IsVariableLengthData()  //
+IsVarLenData()  //
     -> bool
 {
   static_assert(std::is_trivially_copyable_v<T>);
@@ -95,11 +95,11 @@ constexpr size_t kMinFreeSpaceSize = B_TREE_MIN_FREE_SPACE_SIZE;
 constexpr size_t kMinUsedSpaceSize = B_TREE_MIN_USED_SPACE_SIZE;
 
 /// The maximum size of variable-length data
-constexpr size_t kMaxVarDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
+constexpr size_t kMaxVarLenDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
 
 // Check whether the specified page size is valid
 static_assert(kPageSize % kWordSize == 0);
-static_assert(kMaxVarDataSize * 2 < kPageSize);
+static_assert(kMaxVarLenDataSize * 2 < kPageSize);
 
 }  // namespace dbgroup::index::b_tree
 

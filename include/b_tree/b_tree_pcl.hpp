@@ -59,15 +59,7 @@ class BTreePCL
    * @brief Construct a new BTreePCL object.
    *
    */
-  explicit BTreePCL()
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      static_assert(sizeof(component::Metadata) + kMaxVarDataSize + sizeof(Payload)
-                    < (kPageSize / 2));
-    } else {
-      static_assert(sizeof(component::Metadata) + sizeof(Key) + sizeof(Payload) < (kPageSize / 2));
-    }
-  };
+  BTreePCL() = default;
 
   BTreePCL(const BTreePCL &) = delete;
   BTreePCL(BTreePCL &&) = delete;
@@ -305,14 +297,33 @@ class BTreePCL
    * Internal constants
    *##############################################################################################*/
 
-  // an expected maximum height of a tree.
+  /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
-  // a flag for indicating closed-interval
+  /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
 
-  // a flag for indicating delete operations
+  /// a flag for indicating delete operations
   static constexpr bool kDelOps = true;
+
+  /// the length of metadata.
+  static constexpr size_t kMetaLen = sizeof(component::Metadata);
+
+  /// the expected maximum length of keys.
+  static constexpr size_t kExpMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+
+  /// the expected maximum length of records.
+  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + sizeof(Payload) + kMetaLen;
+
+  /// the expected minimum block size in a certain node.
+  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLength + kExpMaxKeyLen;
+
+  /*####################################################################################
+   * Static assertions
+   *##################################################################################*/
+
+  // Each node must have space for at least two records.
+  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
 
   /*####################################################################################
    * Internal utility functions
