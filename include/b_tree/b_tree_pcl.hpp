@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "component/node.hpp"
+#include "component/record_iterator.hpp"
 
 namespace dbgroup::index::b_tree
 {
@@ -31,7 +32,6 @@ namespace dbgroup::index::b_tree
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
- * @tparam Node a class of stored nodes.
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
@@ -44,125 +44,12 @@ class BTreePCL
    * Type aliases
    *##################################################################################*/
 
+  using K = Key;
+  using V = Payload;
   using Node_t = component::PessimisticNode<Key, Comp>;
+  using BTreePCL_t = BTreePCL<Key, Payload, Comp>;
+  using RecordIterator_t = component::RecordIterator<BTreePCL_t>;
   using NodeRC = component::NodeRC;
-  using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
-
-  /**
-   * @brief A class for representing an iterator of scan results.
-   *
-   */
-  class RecordIterator
-  {
-   public:
-    /*##################################################################################
-     * Public constructors and assignment operators
-     *################################################################################*/
-
-    RecordIterator(  //
-        Node_t *node,
-        size_t count,
-        size_t pos,
-        const std::optional<std::pair<const Key &, bool>> end_key,
-        bool is_end)
-        : node_{node}, end_pos_{count}, pos_{pos}, end_key_{std::move(end_key)}, is_end_{is_end}
-    {
-    }
-
-    RecordIterator(const RecordIterator &) = delete;
-    RecordIterator(RecordIterator &&) = delete;
-
-    auto operator=(const RecordIterator &) -> RecordIterator & = delete;
-    auto operator=(RecordIterator &&) -> RecordIterator & = delete;
-
-    /*##################################################################################
-     * Public destructors
-     *################################################################################*/
-
-    ~RecordIterator() = default;
-
-    /*##################################################################################
-     * Public operators for iterators
-     *################################################################################*/
-
-    auto
-    operator*() const  //
-        -> std::pair<Key, Payload>
-    {
-      return node_->template GetRecord<Payload>(pos_);
-    }
-
-    constexpr void
-    operator++()
-    {
-      ++pos_;
-    }
-
-    /*##################################################################################
-     * Public getters
-     *################################################################################*/
-
-    /**
-     * @brief Check if there are any records left.
-     *
-     * @retval true if there are any records or next node left.
-     * @retval false otherwise.
-     */
-    [[nodiscard]] auto
-    HasNext()  //
-        -> bool
-    {
-      while (true) {
-        while (pos_ < end_pos_ && node_->GetMetadata(pos_).is_deleted) {
-          ++pos_;
-        }
-        if (pos_ < end_pos_) return true;
-        if (is_end_) {
-          node_->ReleaseSharedLock();
-          return false;
-        }
-        node_ = node_->GetNextNodeForRead();
-        pos_ = 0;
-        std::tie(is_end_, end_pos_) = node_->SearchEndPositionFor(end_key_);
-      }
-    }
-
-    /**
-     * @return a Key of a current record
-     */
-    [[nodiscard]] auto
-    GetKey() const  //
-        -> Key
-    {
-      return node_->GetKey(pos_);
-    }
-
-    /**
-     * @return a payload of a current record
-     */
-    [[nodiscard]] auto
-    GetPayload() const  //
-        -> Payload
-    {
-      return node_->template GetPayload<Payload>(pos_);
-    }
-
-   private:
-    /// the pointer to a node that includes partial scan results.
-    Node_t *node_{nullptr};
-
-    /// the number of records in this node.
-    size_t end_pos_{0};
-
-    /// the position of a current record.
-    size_t pos_{0};
-
-    /// the end key given from a user.
-    std::optional<std::pair<const Key &, bool>> end_key_{};
-
-    /// a flag for indicating a current node is rightmost in scan-range.
-    bool is_end_{false};
-  };
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -236,7 +123,7 @@ class BTreePCL
   Scan(  //
       const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
-      -> RecordIterator
+      -> RecordIterator_t
   {
     Node_t *node{};
     size_t begin_pos = 0;
@@ -251,7 +138,7 @@ class BTreePCL
     }
 
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-    return RecordIterator{node, end_pos, begin_pos, end_key, is_end};
+    return RecordIterator_t{node, end_pos, begin_pos, end_key, is_end};
   }
 
   /*####################################################################################
