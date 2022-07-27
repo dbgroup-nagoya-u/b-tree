@@ -1,4 +1,22 @@
+/*
+ * Copyright 2022 Database Group, Nagoya University
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "b_tree/b_tree_pcl.hpp"
+
+// organization libraries
 #include "external/index-fixtures/index_fixture.hpp"
 
 namespace dbgroup::index::b_tree
@@ -9,7 +27,7 @@ namespace dbgroup::index::b_tree
  */
 template <>
 constexpr auto
-IsVariableLengthData<char *>()  //
+IsVarLenData<char *>()  //
     -> bool
 {
   return true;
@@ -20,24 +38,18 @@ IsVariableLengthData<char *>()  //
 namespace dbgroup::index::test
 {
 /*######################################################################################
- * API implementation status
- *####################################################################################*/
-
-/*######################################################################################
  * Preparation for typed testing
  *####################################################################################*/
+
 template <class K, class V, class C>
 using BTreePCL = ::dbgroup::index::b_tree::BTreePCL<K, V, C>;
 
 using TestTargets = ::testing::Types<        //
     IndexInfo<BTreePCL, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePCL, UInt8, Int8>,        // fixed-length keys with append-mode
     IndexInfo<BTreePCL, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePCL, UInt4, Int8>,        // small keys with append-mode
-    IndexInfo<BTreePCL, UInt8, UInt4>,       // small payloads with append-mode
-    IndexInfo<BTreePCL, UInt4, UInt4>,       // small keys/payloads with append-mode
+    IndexInfo<BTreePCL, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePCL, UInt4, UInt4>,       // small keys/payloads
     IndexInfo<BTreePCL, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreePCL, Var, Int8>,          // variable-length keys with append-mode
     IndexInfo<BTreePCL, Ptr, Ptr>,           // pointer keys/payloads
     IndexInfo<BTreePCL, Original, Original>  // original class keys/payloads
     >;
@@ -48,4 +60,5 @@ TYPED_TEST_SUITE(IndexFixture, TestTargets);
  *####################################################################################*/
 
 #include "external/index-fixtures/index_fixture_test_definitions.hpp"
+
 }  // namespace dbgroup::index::test

@@ -1,6 +1,6 @@
 
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,24 @@
 #ifndef B_TREE_COMPONENT_METADATA_HPP
 #define B_TREE_COMPONENT_METADATA_HPP
 
+// local sources
 #include "common.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
 /**
- * @brief A struct to represent record metadata.
+ * @brief A struct for representing record metadata.
  *
  */
 struct Metadata {
-  /*################################################################################################
-   * Public constructors/destructors
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public constructors and assignment operators
+   *##################################################################################*/
+
+  /**
+   * @brief Construct an empty object.
+   *
+   */
   constexpr Metadata() : is_deleted{}, offset{} {};
 
   /**
@@ -39,34 +45,53 @@ struct Metadata {
   constexpr Metadata(  //
       const size_t offset,
       const size_t key_length,
-      const size_t total_length)
+      const size_t record_length)
       : is_deleted{0},
         offset{static_cast<uint32_t>(offset)},
-        key_length{static_cast<uint16_t>(key_length)},
-        total_length{static_cast<uint16_t>(total_length)}
+        key_len{static_cast<uint16_t>(key_length)},
+        rec_len{static_cast<uint16_t>(record_length)}
   {
   }
 
-  ~Metadata() = default;
-
   constexpr Metadata(const Metadata &) = default;
-  constexpr auto operator=(const Metadata &) -> Metadata & = default;
   constexpr Metadata(Metadata &&) = default;
+
+  constexpr auto operator=(const Metadata &) -> Metadata & = default;
   constexpr auto operator=(Metadata &&) -> Metadata & = default;
 
-  /*################################################################################################
-   * Public operators
-   *##############################################################################################*/
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
 
+  /**
+   * @brief Destroy the Metadata object.
+   *
+   */
+  ~Metadata() = default;
+
+  /*####################################################################################
+   * Public operators
+   *##################################################################################*/
+
+  /**
+   * @param comp a metadata to be compared.
+   * @retval true if a given metadata is equivalent with this one.
+   * @retval false otherwise.
+   */
   constexpr auto
   operator==(const Metadata &comp) const  //
       -> bool
   {
-    return offset == comp.offset             //
-           && key_length == comp.key_length  //
-           && total_length == comp.total_length;
+    return offset == comp.offset       //
+           && key_len == comp.key_len  //
+           && rec_len == comp.rec_len;
   }
 
+  /**
+   * @param comp a metadata to be compared.
+   * @retval true if a given metadata is different from this one.
+   * @retval false otherwise.
+   */
   constexpr auto
   operator!=(const Metadata &comp) const  //
       -> bool
@@ -74,20 +99,21 @@ struct Metadata {
     return !(*this == comp);
   }
 
-  /*################################################################################################
+  /*####################################################################################
    * Internal member variables
-   *##############################################################################################*/
+   *##################################################################################*/
 
+  /// a flag for indicating a corresponding record is deleted.
   uint32_t is_deleted : 1;
 
   /// an offset to a corresponding record.
   uint32_t offset : 31;
 
   /// the length of a key in a corresponding record.
-  uint16_t key_length{};
+  uint16_t key_len{};
 
   /// the total length of a corresponding record.
-  uint16_t total_length{};
+  uint16_t rec_len{};
 };
 
 }  // namespace dbgroup::index::b_tree::component

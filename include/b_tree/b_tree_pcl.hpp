@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,16 +22,17 @@
 #include <thread>
 #include <vector>
 
+// local sources
 #include "component/node.hpp"
+#include "component/record_iterator.hpp"
 
 namespace dbgroup::index::b_tree
 {
 /**
- * @brief A class for representing Btree with variable-length keys.
+ * @brief A class for representing B+trees with pessimistic coarse-grained locking.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
- * @tparam Node a class of stored nodes.
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
@@ -44,125 +45,19 @@ class BTreePCL
    * Type aliases
    *##################################################################################*/
 
+  using K = Key;
+  using V = Payload;
   using Node_t = component::PessimisticNode<Key, Comp>;
+  using BTreePCL_t = BTreePCL<Key, Payload, Comp>;
+  using RecordIterator_t = component::RecordIterator<BTreePCL_t>;
   using NodeRC = component::NodeRC;
-  using NodeStack = std::vector<std::pair<Node_t *, size_t>>;
 
-  /**
-   * @brief A class for representing an iterator of scan results.
-   *
-   */
-  class RecordIterator
-  {
-   public:
-    /*##################################################################################
-     * Public constructors and assignment operators
-     *################################################################################*/
-
-    RecordIterator(  //
-        Node_t *node,
-        size_t count,
-        size_t pos,
-        const std::optional<std::pair<const Key &, bool>> end_key,
-        bool is_end)
-        : node_{node}, end_pos_{count}, pos_{pos}, end_key_{std::move(end_key)}, is_end_{is_end}
-    {
-    }
-
-    RecordIterator(const RecordIterator &) = delete;
-    RecordIterator(RecordIterator &&) = delete;
-
-    auto operator=(const RecordIterator &) -> RecordIterator & = delete;
-    auto operator=(RecordIterator &&) -> RecordIterator & = delete;
-
-    /*##################################################################################
-     * Public destructors
-     *################################################################################*/
-
-    ~RecordIterator() = default;
-
-    /*##################################################################################
-     * Public operators for iterators
-     *################################################################################*/
-
-    auto
-    operator*() const  //
-        -> std::pair<Key, Payload>
-    {
-      return node_->template GetRecord<Payload>(pos_);
-    }
-
-    constexpr void
-    operator++()
-    {
-      ++pos_;
-    }
-
-    /*##################################################################################
-     * Public getters
-     *################################################################################*/
-
-    /**
-     * @brief Check if there are any records left.
-     *
-     * @retval true if there are any records or next node left.
-     * @retval false otherwise.
-     */
-    [[nodiscard]] auto
-    HasNext()  //
-        -> bool
-    {
-      while (true) {
-        while (pos_ < end_pos_ && node_->GetMetadata(pos_).is_deleted) {
-          ++pos_;
-        }
-        if (pos_ < end_pos_) return true;
-        if (is_end_) {
-          node_->ReleaseSharedLock();
-          return false;
-        }
-        node_ = node_->GetNextNodeForRead();
-        pos_ = 0;
-        std::tie(is_end_, end_pos_) = node_->SearchEndPositionFor(end_key_);
-      }
-    }
-
-    /**
-     * @return a Key of a current record
-     */
-    [[nodiscard]] auto
-    GetKey() const  //
-        -> Key
-    {
-      return node_->GetKey(pos_);
-    }
-
-    /**
-     * @return a payload of a current record
-     */
-    [[nodiscard]] auto
-    GetPayload() const  //
-        -> Payload
-    {
-      return node_->template GetPayload<Payload>(pos_);
-    }
-
-   private:
-    /// the pointer to a node that includes partial scan results.
-    Node_t *node_{nullptr};
-
-    /// the number of records in this node.
-    size_t end_pos_{0};
-
-    /// the position of a current record.
-    size_t pos_{0};
-
-    /// the end key given from a user.
-    std::optional<std::pair<const Key &, bool>> end_key_{};
-
-    /// a flag for indicating a current node is rightmost in scan-range.
-    bool is_end_{false};
-  };
+  // aliases for bulkloading
+  template <class Entry>
+  using BulkIter = typename std::vector<Entry>::const_iterator;
+  using BulkResult = std::pair<size_t, std::vector<Node_t *>>;
+  using BulkPromise = std::promise<BulkResult>;
+  using BulkFuture = std::future<BulkResult>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -172,15 +67,7 @@ class BTreePCL
    * @brief Construct a new BTreePCL object.
    *
    */
-  explicit BTreePCL()
-  {
-    if constexpr (IsVariableLengthData<Key>()) {
-      static_assert(sizeof(component::Metadata) + kMaxVarDataSize + sizeof(Payload)
-                    < (kPageSize / 2));
-    } else {
-      static_assert(sizeof(component::Metadata) + sizeof(Key) + sizeof(Payload) < (kPageSize / 2));
-    }
-  };
+  BTreePCL() = default;
 
   BTreePCL(const BTreePCL &) = delete;
   BTreePCL(BTreePCL &&) = delete;
@@ -221,7 +108,7 @@ class BTreePCL
     Payload payload{};
     const auto rc = node->Read(key, payload);
 
-    if (rc == NodeRC::kCompleted) return payload;
+    if (rc == kSuccess) return payload;
     return std::nullopt;
   }
 
@@ -236,7 +123,7 @@ class BTreePCL
   Scan(  //
       const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
-      -> RecordIterator
+      -> RecordIterator_t
   {
     Node_t *node{};
     size_t begin_pos = 0;
@@ -251,7 +138,7 @@ class BTreePCL
     }
 
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-    return RecordIterator{node, end_pos, begin_pos, end_key, is_end};
+    return RecordIterator_t{node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
@@ -277,8 +164,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    node->template Write<Payload>(key, key_len, payload);
+    auto *node = SearchLeafNodeForWrite(key);
+    node->Write(key, key_len, payload);
     return kSuccess;
   }
 
@@ -303,9 +190,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    auto rc = node->template Insert<Payload>(key, key_len, payload);
-    return (rc == NodeRC::kCompleted) ? kSuccess : kKeyExist;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Insert(key, key_len, payload);
   }
 
   /**
@@ -329,9 +215,8 @@ class BTreePCL
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    const auto rc = node->template Update<Payload>(key, payload);
-    return (rc == NodeRC::kCompleted) ? kSuccess : kKeyNotExist;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Update(key, payload);
   }
 
   /**
@@ -351,11 +236,26 @@ class BTreePCL
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, kDelOps);
-    const auto rc = node->Delete(key);
-    return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Delete(key);
   }
 
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs.
+   *
+   * This function bulkloads given entries into this index. The entries are assumed to
+   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
+   * variable-length keys). Note that keys in records are assumed to be unique and
+   * sorted.
+   *
+   * @param entries vector of entries to be bulkloaded.
+   * @param thread_num the number of threads to perform bulkloading.
+   * @return kSuccess.
+   */
   template <class Entry>
   auto
   Bulkload(  //
@@ -364,25 +264,23 @@ class BTreePCL
       -> ReturnCode
   {
     assert(thread_num > 0);
+    assert(entries.size() >= thread_num);
 
     if (entries.empty()) return kSuccess;
 
-    Node_t *new_root;
+    std::vector<Node_t *> nodes{};
     auto &&iter = entries.cbegin();
     if (thread_num == 1) {
       // bulkloading with a single thread
-      new_root = BulkloadWithSingleThread<Entry>(iter, entries.cend());
+      nodes = BulkloadWithSingleThread<Entry>(iter, entries.size()).second;
     } else {
       // bulkloading with multi-threads
-      std::vector<std::future<Node_t *>> threads{};
-      threads.reserve(thread_num);
+      std::vector<BulkFuture> futures{};
+      futures.reserve(thread_num);
 
       // prepare a lambda function for bulkloading
-      auto loader = [&](std::promise<Node_t *> p,  //
-                        size_t n,                  //
-                        typename std::vector<Entry>::const_iterator iter, bool is_rightmost) {
-        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n, is_rightmost);
-        p.set_value(partial_root);
+      auto loader = [&](BulkPromise p, BulkIter<Entry> iter, size_t n, bool is_rightmost) {
+        p.set_value(BulkloadWithSingleThread<Entry>(iter, n, is_rightmost));
       };
 
       // create threads to construct partial BTrees
@@ -390,46 +288,229 @@ class BTreePCL
       const auto rightmost_id = thread_num - 1;
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BTree
-        std::promise<Node_t *> p{};
-        threads.emplace_back(p.get_future());
+        BulkPromise p{};
+        futures.emplace_back(p.get_future());
         const size_t n = (rec_num + i) / thread_num;
-        std::thread{loader, std::move(p), n, iter, i == rightmost_id}.detach();
+        std::thread{loader, std::move(p), iter, n, i == rightmost_id}.detach();
 
         // forward the iterator to the next begin position
         iter += n;
       }
 
       // wait for the worker threads to create BTrees
-      std::vector<Node_t *> partial_trees{};
+      std::vector<BulkResult> partial_trees{};
       partial_trees.reserve(thread_num);
-      for (auto &&future : threads) {
+      size_t height = 1;
+      for (auto &&future : futures) {
         partial_trees.emplace_back(future.get());
+        const auto partial_height = partial_trees.back().first;
+        height = (partial_height > height) ? partial_height : height;
       }
-      new_root = ConstructUpperLayer(partial_trees);
+
+      // align the height of partial trees
+      nodes.reserve(kInnerNodeCap * thread_num);
+      for (auto &&[p_height, p_nodes] : partial_trees) {
+        while (p_height < height) {  // NOLINT
+          ConstructUpperLayer(p_nodes);
+          ++p_height;
+        }
+        nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
+      }
     }
 
-    // set a new root
-    root_ = new_root;
+    // create upper layers until a root node is created
+    while (nodes.size() > 1) {
+      ConstructUpperLayer(nodes);
+    }
+    root_ = nodes.front();
+
     return kSuccess;
   }
 
  private:
-  /*################################################################################################
+  /*####################################################################################
    * Internal constants
-   *##############################################################################################*/
+   *##################################################################################*/
 
-  // an expected maximum height of a tree.
+  /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
-  // a flag for indicating closed-interval
+  /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
 
-  // a flag for indicating delete operations
+  /// a flag for indicating delete operations
   static constexpr bool kDelOps = true;
+
+  /// the length of payloads.
+  static constexpr size_t kPayLen = sizeof(Payload);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(Node_t *);
+
+  /// the length of metadata.
+  static constexpr size_t kMetaLen = sizeof(component::Metadata);
+
+  /// the length of a header in each node page.
+  static constexpr size_t kHeaderLen = sizeof(Node_t);
+
+  /// the expected maximum length of keys.
+  static constexpr size_t kExpMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+
+  /// the expected maximum length of payloads (including child pointers).
+  static constexpr size_t kExpMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
+
+  /// the expected maximum length of records.
+  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + kExpMaxPayLen + kMetaLen;
+
+  /// the expected minimum block size in a certain node.
+  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLen + kExpMaxKeyLen;
+
+  /// the expected capacity of leaf nodes for bulkloading.
+  static constexpr size_t kLeafNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPayLen);
+
+  /// the expected capacity of internal nodes for bulkloading.
+  static constexpr size_t kInnerNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPtrLen);
 
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
+
+  /**
+   * @retval true if a target key class is trivially copyable.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] static constexpr auto
+  IsValidKeyType()  //
+      -> bool
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+    } else {
+      return std::is_trivially_copyable_v<Key>;
+    }
+  }
+
+  /**
+   * @return a root node with a shared lock.
+   */
+  [[nodiscard]] auto
+  GetRootForRead()  //
+      -> Node_t *
+  {
+    mutex_.LockS();  // tree-latch
+
+    auto *node = root_;
+    node->LockS();  // root-latch
+
+    mutex_.UnlockS();  // tree-unlatch
+    return node;
+  }
+
+  /**
+   * @brief Get a root node with a shared lock with an intent-exclusive lock.
+   *
+   * This function performs SMOs for a root node if required.
+   *
+   * @return a root node or a valid child node if a root node is split.
+   */
+  [[nodiscard]] auto
+  GetRootForWrite(const Key &key)  //
+      -> Node_t *
+  {
+    mutex_.LockSIX();  // tree-latch
+    root_->LockSIX();  // root-latch
+
+    // check this tree requires SMOs
+    ShrinkTreeIfNeeded();
+    auto *node = (root_->NeedSplit(kExpMaxRecLen)) ? RootSplit(key) : root_;
+
+    mutex_.UnlockSIX();
+    return node;
+  }
+
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * This function uses only shared locks, and a returned leaf node is also locked with
+   * a shared lock.
+   *
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed/open-interval.
+   * @return a leaf node that may have a target key.
+   */
+  [[nodiscard]] auto
+  SearchLeafNodeForRead(  //
+      const Key &key,
+      const bool is_closed)  //
+      -> Node_t *
+  {
+    auto *node = GetRootForRead();
+    while (!node->IsLeaf()) {
+      const auto pos = node->SearchChild(key, is_closed);
+      node = node->GetChildForRead(pos);
+    }
+
+    return node;
+  }
+
+  /**
+   * @brief Search a leftmost leaf node.
+   *
+   * This function uses only shared locks, and a returned leaf node is also locked with
+   * a shared lock.
+   *
+   * @return a leftmost leaf node.
+   */
+  [[nodiscard]] auto
+  SearchLeftmostLeaf()  //
+      -> Node_t *
+  {
+    auto *node = GetRootForRead();
+    while (!node->IsLeaf()) {
+      node = node->GetChildForRead(0);
+    }
+
+    return node;
+  }
+
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * This function performs SMOs if internal nodes on the way should be modified. This
+   * function uses SIX and X locks for modifying trees, and a returned leaf node is
+   * locked by an exclusive lock.
+   *
+   * @param key a search key.
+   * @return a leaf node that may have a target key.
+   */
+  [[nodiscard]] auto
+  SearchLeafNodeForWrite(const Key &key)  //
+      -> Node_t *
+  {
+    auto *node = GetRootForWrite(key);
+    while (!node->IsLeaf()) {
+      // search a child node
+      const auto pos = node->SearchChild(key, kClosed);
+      auto *child = node->GetChildForWrite(pos);
+
+      // perform internal SMOs eagerly
+      if (child->NeedSplit(kExpMaxRecLen)) {
+        Split(child, node, pos);
+        child = child->GetValidSplitNode(key);
+      } else if (child->NeedMerge()) {
+        Merge(child, node, pos);
+      } else {
+        node->UnlockSIX();
+      }
+
+      // go down to the next level
+      node = child;
+    }
+
+    node->UpgradeToX();
+    return node;
+  }
+
   /**
    * @brief Delete child nodes recursively.
    *
@@ -451,203 +532,16 @@ class BTreePCL
     delete node;
   }
 
-  /**
-   * @brief Get root node with shared lock
-   * @return root
-   */
-  [[nodiscard]] auto
-  GetRootForRead()  //
-      -> Node_t *
-  {
-    mutex_.LockShared();         // tree-latch
-    root_->AcquireSharedLock();  // root-latch
-    mutex_.UnlockShared();       // tree-unlatch
-    return root_;
-  }
+  /*####################################################################################
+   * Internal structure modification operations
+   *##################################################################################*/
 
   /**
-   * @brief Get root node with exclusive lock
-   * @return root
-   */
-  [[nodiscard]] auto
-  GetRootForWrite(  //
-      const Key &key,
-      const bool ops_is_del)  //
-      -> Node_t *
-  {
-    mutex_.Lock();                  // tree-latch
-    root_->AcquireExclusiveLock();  // root-latch
-
-    // check if the root has sufficient space
-    Node_t *node{};
-    if (root_->HasSufficientSpace(ops_is_del)) {
-      node = root_;
-    } else if (ops_is_del) {
-      node = TryShrinkTree();
-    } else {
-      node = RootSplit(key);
-    }
-
-    mutex_.Unlock();
-
-    return node;
-  }
-
-  /**
-   * @brief Search a leaf node that may have a target key.
+   * @brief Split a given node.
    *
-   * @param key a search key.
-   * @param ops_is_del a flag for indicating a target operation.
-   * @return a target leaf node.
-   */
-  [[nodiscard]] auto
-  SearchLeafNodeForWrite(  //
-      const Key &key,
-      const bool ops_is_del)  //
-      -> Node_t *
-  {
-    auto *node = GetRootForWrite(key, ops_is_del);
-    while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, kClosed);
-      auto [child, should_smo] = node->GetChildForWrite(pos, ops_is_del);
-
-      // SMO eagerly
-      if (should_smo) {
-        if (ops_is_del) {
-          Merge(child, node, pos);
-        } else {
-          Split(child, node, pos);
-          child = child->GetValidSplitNode(key);
-        }
-      }
-      node = child;
-    }
-
-    return node;
-  }
-
-  /**
-   * @brief Search a leaf node that may have a target key.
-   *
-   * @param key a search key.
-   * @param closed a flag for indicating closed/open-interval.
-   * @return a stack of traversed nodes.
-   */
-  [[nodiscard]] auto
-  SearchLeafNodeForRead(  //
-      const Key &key,
-      const bool range_is_closed)  //
-      -> Node_t *
-  {
-    auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, range_is_closed);
-      node = node->GetChildForRead(pos);
-    }
-
-    return node;
-  }
-
-  [[nodiscard]] auto
-  TryShrinkTree() -> Node_t *
-  {
-    // a root node cannot be merged
-    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
-      // if a root node has only one child, shrink a tree
-      auto *child = root_->template GetPayload<Node_t *>(0);
-      child->AcquireExclusiveLock();
-      delete root_;
-      root_ = child;
-    }
-    return root_;
-  }
-
-  [[nodiscard]] auto
-  RootSplit(const Key &key) -> Node_t *
-  {
-    auto *l_node = root_;
-    auto *r_node = new Node_t{l_node->IsLeaf()};
-    if (l_node->IsLeaf()) {
-      l_node->template Split<Payload>(r_node);
-    } else {
-      l_node->template Split<Node_t *>(r_node);
-    }
-    root_ = new Node_t{l_node, r_node};
-    auto *node = l_node->GetValidSplitNode(key);
-    return node;
-  }
-
-  /**
-   * @brief Bulkload specified kay/payload pairs with a single thread.
-   *
-   * @param iter the begin position of target records.
-   * @param iter_end the end position of target records.
-   * @return the root node of a created BTree.
-   */
-  template <class Entry>
-  auto
-  BulkloadWithSingleThread(  //
-      typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end,
-      const bool is_rightmost = true)  //
-      -> Node_t *
-  {
-    std::vector<Node_t *> nodes{};
-    Node_t *l_node = nullptr;
-    while (iter < iter_end) {
-      // load records into a leaf node
-      auto *node = new Node_t{true};
-      node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
-      nodes.emplace_back(node);
-      l_node = node;
-    }
-    if (nodes.size() == 1) return nodes[0];
-    return ConstructUpperLayer(nodes);
-  }
-
-  auto
-  ConstructUpperLayer(std::vector<Node_t *> &entries)  //
-      -> Node_t *
-  {
-    std::vector<Node_t *> nodes;
-    auto &&iter = entries.cbegin();
-    const auto &iter_end = entries.cend();
-    Node_t *l_node = nullptr;
-    while (iter < iter_end) {
-      // load records into a inner node
-      auto *node = new Node_t{false};
-      node->Bulkload(iter, iter_end, l_node);
-      nodes.emplace_back(node);
-      l_node = node;
-    }
-    if (nodes.size() == 1) return nodes[0];
-    return ConstructUpperLayer(nodes);
-  }
-
-  /**
-   * @brief Search a leftmost leaf node.
-   *
-   * @return a stack of traversed nodes.
-   */
-  [[nodiscard]] auto
-  SearchLeftmostLeaf()  //
-      -> Node_t *
-  {
-    auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
-      node = node->GetChildForRead(0);
-    }
-
-    return node;
-  }
-
-  /**
-   * @brief Split a given node
-   *
-   * @tparam Value a payload type of given node
-   * @param l_node a node to be split
-   * @param parent a parent node of the l_node
-   * @param pos the position of the l_node
+   * @param l_node a node to be split.
+   * @param parent a parent node of `l_node`.
+   * @param pos the position of `l_node` in its parent node.
    */
   void
   Split(  //
@@ -655,59 +549,176 @@ class BTreePCL
       Node_t *parent,
       const size_t pos)
   {
+    parent->UpgradeToX();
     auto *r_node = new Node_t{l_node->IsLeaf()};
-    if (l_node->IsLeaf()) {
-      l_node->template Split<Payload>(r_node);
-    } else {
-      l_node->template Split<Node_t *>(r_node);
-    }
+    l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
   }
 
   /**
-   * @brief Merge given nodes
+   * @brief Split a root node and install a new root node into this tree.
    *
-   * @param node a node to be merged
-   * @param parent a parent node of the node
-   * @param pos the position of the node
+   * @param key a search key.
+   * @return one of the split child nodes that includes a given key.
+   */
+  [[nodiscard]] auto
+  RootSplit(const Key &key)  //
+      -> Node_t *
+  {
+    mutex_.UpgradeToX();
+
+    auto *l_node = root_;
+    auto *r_node = new Node_t{l_node->IsLeaf()};
+    l_node->Split(r_node);
+    root_ = new Node_t{l_node, r_node};
+
+    mutex_.DowngradeToSIX();
+    return l_node->GetValidSplitNode(key);
+  }
+
+  /**
+   * @brief Merge a given node with its right-sibling node if possible.
+   *
+   * @param l_node a node to be merged.
+   * @param parent a parent node of `l_node`.
+   * @param pos the position of `l_node` in its parent node.
    */
   void
   Merge(  //
-      Node_t *node,
+      Node_t *l_node,
       Node_t *parent,
-      const size_t pos)
+      const size_t l_pos)
   {
-    // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
-
-    // check the right-sibling node has enough capacity for merging
-    auto *r_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
-    if (!node->CanMerge(r_node)) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
+    // check there is a mergeable sibling node
+    auto *r_node = parent->GetMergeableRightChild(l_node, l_pos);
+    if (r_node == nullptr) return;
 
     // perform merging
-    if (node->IsLeaf()) {
-      node->template Merge<Payload>(r_node);
-    } else {
-      node->template Merge<Node_t *>(r_node);
-    }
-    parent->DeleteChild(node, pos + 1);
+    parent->UpgradeToX();
+    l_node->Merge(r_node);
+    parent->DeleteChild(l_node, l_pos);
     delete r_node;
   }
+
+  /**
+   * @brief Remove a root node that has only one child node.
+   *
+   */
+  void
+  ShrinkTreeIfNeeded()
+  {
+    while (root_->GetRecordCount() == 1 && !root_->IsLeaf()) {
+      mutex_.UpgradeToX();
+
+      // if a root node has only one child, shrink a tree
+      auto *child = root_->template GetPayload<Node_t *>(0);
+      child->LockSIX();
+      delete root_;
+      root_ = child;
+
+      mutex_.DowngradeToSIX();
+    }
+  }
+
+  /*####################################################################################
+   * Internal bulkload utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs with a single thread.
+   *
+   * Note that this function does not create a root node. The main process must create a
+   * root node by using the nodes constructed by this function.
+   *
+   * @param iter the begin position of target records.
+   * @param n the number of entries to be bulkloaded.
+   * @param is_rightmost a flag for indicating a constructed tree is rightmost one.
+   * @retval 1st: the height of a constructed tree.
+   * @retval 2nd: constructed nodes in the top layer.
+   */
+  template <class Entry>
+  auto
+  BulkloadWithSingleThread(  //
+      BulkIter<Entry> &iter,
+      const size_t n,
+      const bool is_rightmost = true)  //
+      -> BulkResult
+  {
+    // reserve space for nodes in the leaf layer
+    std::vector<Node_t *> nodes{};
+    nodes.reserve((n / kLeafNodeCap) + 1);
+
+    // load records into a leaf node
+    const auto &iter_end = iter + n;
+    Node_t *l_node = nullptr;
+    while (iter < iter_end) {
+      auto *node = new Node_t{true};
+      node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
+      nodes.emplace_back(node);
+      l_node = node;
+    }
+
+    // construct index layers
+    size_t height = 1;
+    if (nodes.size() > 1) {
+      // continue until the number of internal nodes is sufficiently small
+      do {
+        ++height;
+      } while (ConstructUpperLayer(nodes));
+    }
+
+    return {height, std::move(nodes)};
+  }
+
+  /**
+   * @brief Construct internal nodes based on given child nodes.
+   *
+   * @param child_nodes child nodes in a lower layer.
+   * @retval true if constructed nodes cannot be contained in a single node.
+   * @retval false otherwise.
+   */
+  auto
+  ConstructUpperLayer(std::vector<Node_t *> &child_nodes)  //
+      -> bool
+  {
+    // reserve space for nodes in the upper layer
+    std::vector<Node_t *> nodes{};
+    nodes.reserve((child_nodes.size() / kInnerNodeCap) + 1);
+
+    // load child nodes into a inner node
+    auto &&iter = child_nodes.cbegin();
+    const auto &iter_end = child_nodes.cend();
+    while (iter < iter_end) {
+      auto *node = new Node_t{false};
+      node->Bulkload(iter, iter_end);
+      nodes.emplace_back(node);
+    }
+
+    child_nodes = std::move(nodes);
+    return child_nodes.size() > kInnerNodeCap;
+  }
+
+  /*####################################################################################
+   * Static assertions
+   *##################################################################################*/
+
+  // target keys must be trivially copyable.
+  static_assert(IsValidKeyType());
+
+  // target payloads must be trivially copyable.
+  static_assert(std::is_trivially_copyable_v<Payload>);
+
+  // Each node must have space for at least two records.
+  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
 
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
-  /// root node of B+tree
+  /// a root node of this tree.
   Node_t *root_ = new Node_t{true};
 
-  /// mutex for root
+  /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};
 };
 }  // namespace dbgroup::index::b_tree
