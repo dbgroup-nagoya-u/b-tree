@@ -41,12 +41,6 @@ class PessimisticNode
 {
  public:
   /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  using Lock = ::dbgroup::lock::PessimisticLock;
-
-  /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
 
@@ -149,7 +143,9 @@ class PessimisticNode
     if (total_size - deleted_size_ > kMaxUsedSpaceSize) return true;
 
     // this node has enough space but cleaning up is required
+    mutex_.UpgradeToX();
     CleanUp();
+    mutex_.DowngradeToSIX();
     return false;
   }
 
@@ -166,7 +162,9 @@ class PessimisticNode
     if (deleted_size_ <= kMaxDeletedSpaceSize) return false;
 
     // this node has a lot of dead space
+    mutex_.UpgradeToX();
     CleanUp();
+    mutex_.DowngradeToSIX();
     return false;
   }
 
@@ -198,8 +196,8 @@ class PessimisticNode
   GetNextNodeForRead()  //
       -> PessimisticNode *
   {
-    next_->mutex_.LockShared();
-    mutex_.UnlockShared();
+    next_->mutex_.LockS();
+    mutex_.UnlockS();
     return next_;
   }
 
@@ -214,8 +212,8 @@ class PessimisticNode
     const auto &high_key = GetHighKey();
     if (!high_key || Comp{}(*high_key, key)) {
       node = next_;
-      node->mutex_.Lock();
-      mutex_.Unlock();
+      node->mutex_.LockSIX();
+      mutex_.UnlockSIX();
     }
 
     return node;
@@ -265,8 +263,8 @@ class PessimisticNode
       -> PessimisticNode *
   {
     auto *child = GetPayload<PessimisticNode *>(pos);
-    child->mutex_.LockShared();
-    mutex_.UnlockShared();
+    child->mutex_.LockS();
+    mutex_.UnlockS();
     return child;
   }
 
@@ -275,7 +273,7 @@ class PessimisticNode
       -> PessimisticNode *
   {
     auto *child = GetPayload<PessimisticNode *>(pos);
-    child->mutex_.Lock();
+    child->mutex_.LockSIX();
     return child;
   }
 
@@ -289,15 +287,15 @@ class PessimisticNode
     const auto r_pos = l_pos + 1;
     if (r_pos == record_count_) {
       // a rightmost node is cannot be merged
-      mutex_.Unlock();
+      mutex_.UnlockSIX();
       return nullptr;
     }
 
     // check the right-sibling node has enough capacity for merging
     auto *r_node = GetChildForWrite(r_pos);
     if (!l_node->CanMerge(r_node)) {
-      mutex_.Unlock();
-      r_node->mutex_.Unlock();
+      mutex_.UnlockSIX();
+      r_node->mutex_.UnlockSIX();
       return nullptr;
     }
 
@@ -324,28 +322,34 @@ class PessimisticNode
    *##################################################################################*/
 
   void
-  AcquireSharedLock()
+  LockS()
   {
-    mutex_.LockShared();
+    mutex_.LockS();
   }
 
   auto
-  ReleaseSharedLock()  //
+  UnlockS()  //
       -> void
   {
-    mutex_.UnlockShared();
+    mutex_.UnlockS();
   }
 
   void
-  AcquireExclusiveLock()
+  LockSIX()
   {
-    mutex_.Lock();
+    mutex_.LockSIX();
   }
 
   void
-  ReleaseExclusiveLock()
+  UnlockSIX()
   {
-    mutex_.Unlock();
+    mutex_.UnlockSIX();
+  }
+
+  void
+  UpgradeToX()
+  {
+    mutex_.UpgradeToX();
   }
 
   /*####################################################################################
@@ -471,7 +475,7 @@ class PessimisticNode
       rc = kSuccess;
     }
 
-    mutex_.UnlockShared();
+    mutex_.UnlockS();
     return rc;
   }
 
@@ -513,7 +517,7 @@ class PessimisticNode
       memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
     }
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
   }
 
   /**
@@ -555,7 +559,7 @@ class PessimisticNode
       rc = kKeyExist;
     }
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
     return rc;
   }
 
@@ -594,7 +598,7 @@ class PessimisticNode
       rc = kSuccess;
     }
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
     return rc;
   }
 
@@ -625,7 +629,7 @@ class PessimisticNode
       rc = kSuccess;
     }
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
     return rc;
   }
 
@@ -658,7 +662,7 @@ class PessimisticNode
     ++record_count_;
     block_size_ += rec_len;
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
   }
 
   /**
@@ -682,7 +686,7 @@ class PessimisticNode
     --record_count_;
     deleted_size_ += del_rec_len;
 
-    mutex_.Unlock();
+    mutex_.UnlockX();
   }
 
   /*####################################################################################
@@ -698,6 +702,8 @@ class PessimisticNode
   Split(PessimisticNode *r_node)
   {
     const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
+
+    mutex_.UpgradeToX();
 
     // copy left half records to a temporal node
     size_t offset = kPageSize;
@@ -737,6 +743,8 @@ class PessimisticNode
 
     // reset a temp node
     temp_node_->record_count_ = 0;
+
+    mutex_.DowngradeToSIX();
   }
 
   /**
@@ -747,6 +755,8 @@ class PessimisticNode
   void
   Merge(const PessimisticNode *r_node)
   {
+    mutex_.UpgradeToX();
+
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
 
@@ -771,6 +781,8 @@ class PessimisticNode
 
     // reset a temp node
     temp_node_->record_count_ = 0;
+
+    mutex_.DowngradeToSIX();
   }
 
   /*####################################################################################
@@ -1221,7 +1233,7 @@ class PessimisticNode
   uint64_t : 0;
 
   /// the latch this node.
-  Lock mutex_{};
+  ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// the pointer to the next node.
   PessimisticNode *next_{nullptr};

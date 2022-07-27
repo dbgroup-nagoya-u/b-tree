@@ -377,12 +377,12 @@ class BTreePCL
   GetRootForRead()  //
       -> Node_t *
   {
-    mutex_.LockShared();  // tree-latch
+    mutex_.LockS();  // tree-latch
 
     auto *node = root_;
-    node->AcquireSharedLock();  // root-latch
+    node->LockS();  // root-latch
 
-    mutex_.UnlockShared();  // tree-unlatch
+    mutex_.UnlockS();  // tree-unlatch
     return node;
   }
 
@@ -394,14 +394,14 @@ class BTreePCL
   GetRootForWrite(const Key &key)  //
       -> Node_t *
   {
-    mutex_.Lock();                  // tree-latch
-    root_->AcquireExclusiveLock();  // root-latch
+    mutex_.LockSIX();  // tree-latch
+    root_->LockSIX();  // root-latch
 
     // check this tree requires SMOs
     ShrinkTreeIfNeeded();
     auto *node = (root_->NeedSplit(kExpMaxRecLen)) ? RootSplit(key) : root_;
 
-    mutex_.Unlock();
+    mutex_.UnlockSIX();
     return node;
   }
 
@@ -467,13 +467,14 @@ class BTreePCL
       } else if (child->NeedMerge()) {
         Merge(child, node, pos);
       } else {
-        node->ReleaseExclusiveLock();
+        node->UnlockSIX();
       }
 
       // go down to the next level
       node = child;
     }
 
+    node->UpgradeToX();
     return node;
   }
 
@@ -515,6 +516,7 @@ class BTreePCL
       Node_t *parent,
       const size_t pos)
   {
+    parent->UpgradeToX();
     auto *r_node = new Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
@@ -524,11 +526,14 @@ class BTreePCL
   RootSplit(const Key &key)  //
       -> Node_t *
   {
+    mutex_.UpgradeToX();
+
     auto *l_node = root_;
     auto *r_node = new Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     root_ = new Node_t{l_node, r_node};
 
+    mutex_.DowngradeToSIX();
     return l_node->GetValidSplitNode(key);
   }
 
@@ -550,6 +555,7 @@ class BTreePCL
     if (r_node == nullptr) return;
 
     // perform merging
+    parent->UpgradeToX();
     l_node->Merge(r_node);
     parent->DeleteChild(l_node, l_pos);
     delete r_node;
@@ -559,11 +565,15 @@ class BTreePCL
   ShrinkTreeIfNeeded()
   {
     while (root_->GetRecordCount() == 1 && !root_->IsLeaf()) {
+      mutex_.UpgradeToX();
+
       // if a root node has only one child, shrink a tree
       auto *child = root_->template GetPayload<Node_t *>(0);
-      child->AcquireExclusiveLock();
+      child->LockSIX();
       delete root_;
       root_ = child;
+
+      mutex_.DowngradeToSIX();
     }
   }
 

@@ -106,7 +106,7 @@ class RecordIterator
 
       // check this node is rightmost for a given end key
       if (is_end_) {
-        node_->ReleaseSharedLock();
+        node_->UnlockS();
         return false;
       }
 
