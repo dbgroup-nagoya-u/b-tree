@@ -1,6 +1,6 @@
 
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ namespace dbgroup::index::b_tree::component
 {
 
 /*######################################################################################
- * Internal enum and classes
+ * Internal enum and constants
  *####################################################################################*/
 
 /**
@@ -40,43 +40,14 @@ enum NodeRC {
   kKeyNotInserted = -6,
   kKeyAlreadyDeleted,
   kKeyAlreadyInserted,
-  kNeedConsolidation,
+  kNeedCleanUp,
   kNeedSplit,
   kNeedMerge,
 };
 
-/**
- * @brief A flag to distinguish leaf/internal nodes.
- *
- */
-enum NodeType : uint16_t {
-  kInternal = 0,
-  kLeaf,
-};
-
-constexpr size_t kAlignMask = ~7UL;
-
 /*######################################################################################
  * Internal utility functions
  *####################################################################################*/
-
-/**
- * @tparam Compare a comparator class.
- * @tparam T a target class.
- * @param obj_1 an object to be compared.
- * @param obj_2 another object to be compared.
- * @retval true if given objects are equivalent.
- * @retval false if given objects are different.
- */
-template <class Compare, class T>
-constexpr auto
-IsEqual(  //
-    const T &obj_1,
-    const T &obj_2)  //
-    -> bool
-{
-  return !Compare{}(obj_1, obj_2) && !Compare{}(obj_2, obj_1);
-}
 
 /**
  * @brief Shift a memory address by byte offsets.
@@ -93,12 +64,6 @@ ShiftAddr(  //
 {
   return static_cast<std::byte *>(const_cast<void *>(addr)) + offset;
 }
-
-/*##################################################################################################
- * Internal constants
- *################################################################################################*/
-
-constexpr uintptr_t kNullPtr = 0;
 
 }  // namespace dbgroup::index::b_tree::component
 

@@ -1,6 +1,6 @@
 
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,17 +26,7 @@
 namespace dbgroup::index::b_tree
 {
 /*######################################################################################
- * Global constants
- *####################################################################################*/
-
-/// Assumes that one word is represented by 8 bytes.
-constexpr size_t kWordSize = sizeof(uintptr_t);
-
-/// Header length in bytes.
-constexpr size_t kHeaderLength = 32;
-
-/*######################################################################################
- * Utility enum and classes
+ * Global enum and constants
  *####################################################################################*/
 
 /**
@@ -48,6 +38,10 @@ enum ReturnCode {
   kKeyNotExist = -2,
   kKeyExist,
 };
+
+/*######################################################################################
+ * Utility classes
+ *####################################################################################*/
 
 /**
  * @brief Compare binary keys as CString. The end of every key must be '\\0'.
@@ -63,6 +57,10 @@ struct CompareAsCString {
     return strcmp(static_cast<const char *>(a), static_cast<const char *>(b)) < 0;
   }
 };
+
+/*######################################################################################
+ * Utility functions
+ *####################################################################################*/
 
 /**
  * @tparam T a target class.
@@ -96,10 +94,6 @@ constexpr size_t kMinUsedSpaceSize = B_TREE_MIN_USED_SPACE_SIZE;
 
 /// The maximum size of variable-length data
 constexpr size_t kMaxVarLenDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
-
-// Check whether the specified page size is valid
-static_assert(kPageSize % kWordSize == 0);
-static_assert(kMaxVarLenDataSize * 2 < kPageSize);
 
 }  // namespace dbgroup::index::b_tree
 

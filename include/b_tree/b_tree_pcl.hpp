@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,7 +100,7 @@ class BTreePCL
     Payload payload{};
     const auto rc = node->Read(key, payload);
 
-    if (rc == NodeRC::kCompleted) return payload;
+    if (rc == kSuccess) return payload;
     return std::nullopt;
   }
 
@@ -156,8 +156,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    node->template Write<Payload>(key, key_len, payload);
+    auto *node = SearchLeafNodeForWrite(key);
+    node->Write(key, key_len, payload);
     return kSuccess;
   }
 
@@ -182,9 +182,8 @@ class BTreePCL
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    auto rc = node->template Insert<Payload>(key, key_len, payload);
-    return (rc == NodeRC::kCompleted) ? kSuccess : kKeyExist;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Insert(key, key_len, payload);
   }
 
   /**
@@ -208,9 +207,8 @@ class BTreePCL
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, !kDelOps);
-    const auto rc = node->template Update<Payload>(key, payload);
-    return (rc == NodeRC::kCompleted) ? kSuccess : kKeyNotExist;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Update(key, payload);
   }
 
   /**
@@ -230,10 +228,13 @@ class BTreePCL
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key, kDelOps);
-    const auto rc = node->Delete(key);
-    return (rc == NodeRC::kKeyNotInserted) ? kKeyNotExist : kSuccess;
+    auto *node = SearchLeafNodeForWrite(key);
+    return node->Delete(key);
   }
+
+  /*####################################################################################
+   * Public bulkload API
+   *##################################################################################*/
 
   template <class Entry>
   auto
@@ -293,9 +294,9 @@ class BTreePCL
   }
 
  private:
-  /*################################################################################################
+  /*####################################################################################
    * Internal constants
-   *##############################################################################################*/
+   *##################################################################################*/
 
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
@@ -306,17 +307,29 @@ class BTreePCL
   /// a flag for indicating delete operations
   static constexpr bool kDelOps = true;
 
+  /// the length of payloads.
+  static constexpr size_t kPayLen = sizeof(Payload);
+
+  /// the length of child pointers.
+  static constexpr size_t kPtrLen = sizeof(Node_t *);
+
   /// the length of metadata.
   static constexpr size_t kMetaLen = sizeof(component::Metadata);
+
+  /// the length of a header in each node page.
+  static constexpr size_t kHeaderLen = sizeof(Node_t);
 
   /// the expected maximum length of keys.
   static constexpr size_t kExpMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
 
+  /// the expected maximum length of payloads (including child pointers).
+  static constexpr size_t kExpMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
+
   /// the expected maximum length of records.
-  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + sizeof(Payload) + kMetaLen;
+  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + kExpMaxPayLen + kMetaLen;
 
   /// the expected minimum block size in a certain node.
-  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLength + kExpMaxKeyLen;
+  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLen + kExpMaxKeyLen;
 
   /*####################################################################################
    * Static assertions
@@ -337,10 +350,13 @@ class BTreePCL
   GetRootForRead()  //
       -> Node_t *
   {
-    mutex_.LockShared();         // tree-latch
-    root_->AcquireSharedLock();  // root-latch
-    mutex_.UnlockShared();       // tree-unlatch
-    return root_;
+    mutex_.LockShared();  // tree-latch
+
+    auto *node = root_;
+    node->AcquireSharedLock();  // root-latch
+
+    mutex_.UnlockShared();  // tree-unlatch
+    return node;
   }
 
   /**
@@ -348,26 +364,17 @@ class BTreePCL
    * @return root
    */
   [[nodiscard]] auto
-  GetRootForWrite(  //
-      const Key &key,
-      const bool ops_is_del)  //
+  GetRootForWrite(const Key &key)  //
       -> Node_t *
   {
     mutex_.Lock();                  // tree-latch
     root_->AcquireExclusiveLock();  // root-latch
 
-    // check if the root has sufficient space
-    Node_t *node{};
-    if (root_->HasSufficientSpace(ops_is_del)) {
-      node = root_;
-    } else if (ops_is_del) {
-      node = TryShrinkTree();
-    } else {
-      node = RootSplit(key);
-    }
+    // check this tree requires SMOs
+    ShrinkTreeIfNeeded();
+    auto *node = (root_->NeedSplit(kExpMaxRecLen)) ? RootSplit(key) : root_;
 
     mutex_.Unlock();
-
     return node;
   }
 
@@ -375,18 +382,18 @@ class BTreePCL
    * @brief Search a leaf node that may have a target key.
    *
    * @param key a search key.
-   * @param closed a flag for indicating closed/open-interval.
+   * @param is_closed a flag for indicating closed/open-interval.
    * @return a stack of traversed nodes.
    */
   [[nodiscard]] auto
   SearchLeafNodeForRead(  //
       const Key &key,
-      const bool range_is_closed)  //
+      const bool is_closed)  //
       -> Node_t *
   {
     auto *node = GetRootForRead();
     while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, range_is_closed);
+      const auto pos = node->SearchChild(key, is_closed);
       node = node->GetChildForRead(pos);
     }
 
@@ -414,29 +421,29 @@ class BTreePCL
    * @brief Search a leaf node that may have a target key.
    *
    * @param key a search key.
-   * @param ops_is_del a flag for indicating a target operation.
    * @return a target leaf node.
    */
   [[nodiscard]] auto
-  SearchLeafNodeForWrite(  //
-      const Key &key,
-      const bool ops_is_del)  //
+  SearchLeafNodeForWrite(const Key &key)  //
       -> Node_t *
   {
-    auto *node = GetRootForWrite(key, ops_is_del);
+    auto *node = GetRootForWrite(key);
     while (!node->IsLeaf()) {
+      // search a child node
       const auto pos = node->SearchChild(key, kClosed);
-      auto [child, should_smo] = node->GetChildForWrite(pos, ops_is_del);
+      auto *child = node->GetChildForWrite(pos);
 
-      // SMO eagerly
-      if (should_smo) {
-        if (ops_is_del) {
-          Merge(child, node, pos);
-        } else {
-          Split(child, node, pos);
-          child = child->GetValidSplitNode(key);
-        }
+      // perform internal SMOs eagerly
+      if (child->NeedSplit(kExpMaxRecLen)) {
+        Split(child, node, pos);
+        child = child->GetValidSplitNode(key);
+      } else if (child->NeedMerge()) {
+        Merge(child, node, pos);
+      } else {
+        node->ReleaseExclusiveLock();
       }
+
+      // go down to the next level
       node = child;
     }
 
@@ -471,7 +478,6 @@ class BTreePCL
   /**
    * @brief Split a given node
    *
-   * @tparam Value a payload type of given node
    * @param l_node a node to be split
    * @param parent a parent node of the l_node
    * @param pos the position of the l_node
@@ -483,77 +489,55 @@ class BTreePCL
       const size_t pos)
   {
     auto *r_node = new Node_t{l_node->IsLeaf()};
-    if (l_node->IsLeaf()) {
-      l_node->template Split<Payload>(r_node);
-    } else {
-      l_node->template Split<Node_t *>(r_node);
-    }
+    l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
   }
 
   [[nodiscard]] auto
-  RootSplit(const Key &key) -> Node_t *
+  RootSplit(const Key &key)  //
+      -> Node_t *
   {
     auto *l_node = root_;
     auto *r_node = new Node_t{l_node->IsLeaf()};
-    if (l_node->IsLeaf()) {
-      l_node->template Split<Payload>(r_node);
-    } else {
-      l_node->template Split<Node_t *>(r_node);
-    }
+    l_node->Split(r_node);
     root_ = new Node_t{l_node, r_node};
-    auto *node = l_node->GetValidSplitNode(key);
-    return node;
+
+    return l_node->GetValidSplitNode(key);
   }
 
   /**
-   * @brief Merge given nodes
+   * @brief Merge a given node with its right-sibling node if possible.
    *
-   * @param node a node to be merged
-   * @param parent a parent node of the node
-   * @param pos the position of the node
+   * @param l_node a node to be merged.
+   * @param parent a parent node of `l_node`.
+   * @param pos the position of `l_node`.
    */
   void
   Merge(  //
-      Node_t *node,
+      Node_t *l_node,
       Node_t *parent,
-      const size_t pos)
+      const size_t l_pos)
   {
-    // check there is a right-sibling node
-    if (pos == parent->GetRecordCount() - 1) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
-
-    // check the right-sibling node has enough capacity for merging
-    auto *r_node = parent->GetChildForWrite(pos + 1, kDelOps, false).first;
-    if (!node->CanMerge(r_node)) {
-      parent->ReleaseExclusiveLock();
-      return;
-    }
+    // check there is a mergeable sibling node
+    auto *r_node = parent->GetMergeableRightChild(l_node, l_pos);
+    if (r_node == nullptr) return;
 
     // perform merging
-    if (node->IsLeaf()) {
-      node->template Merge<Payload>(r_node);
-    } else {
-      node->template Merge<Node_t *>(r_node);
-    }
-    parent->DeleteChild(node, pos + 1);
+    l_node->Merge(r_node);
+    parent->DeleteChild(l_node, l_pos);
     delete r_node;
   }
 
-  [[nodiscard]] auto
-  TryShrinkTree() -> Node_t *
+  void
+  ShrinkTreeIfNeeded()
   {
-    // a root node cannot be merged
-    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
+    while (root_->GetRecordCount() == 1 && !root_->IsLeaf()) {
       // if a root node has only one child, shrink a tree
       auto *child = root_->template GetPayload<Node_t *>(0);
       child->AcquireExclusiveLock();
       delete root_;
       root_ = child;
     }
-    return root_;
   }
 
   /*####################################################################################
