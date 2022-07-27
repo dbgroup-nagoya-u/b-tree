@@ -40,8 +40,11 @@ option(B_TREE_TEST_OVERRIDE_MIMALLOC "Override entire memory allocation with mim
 # Build Unit Tests
 #--------------------------------------------------------------------------------------#
 
-# define function to add unit tests in the same format
+if(${B_TREE_TEST_OVERRIDE_MIMALLOC})
+  find_package(mimalloc 1.7 REQUIRED)
+endif()
 
+# define function to add unit tests in the same format
 function(ADD_B_TREE_TEST B_TREE_TEST_TARGET)
   add_executable(${B_TREE_TEST_TARGET}
     "${CMAKE_CURRENT_SOURCE_DIR}/${B_TREE_TEST_TARGET}.cpp"
