@@ -372,19 +372,6 @@ class BTreePCL
   static constexpr size_t kInnerNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPtrLen);
 
   /*####################################################################################
-   * Static assertions
-   *##################################################################################*/
-
-  // target keys must be trivially copyable.
-  static_assert(IsValidKeyType());
-
-  // target payloads must be trivially copyable.
-  static_assert(std::is_trivially_copyable_v<Payload>);
-
-  // Each node must have space for at least two records.
-  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
-
-  /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
 
@@ -710,6 +697,19 @@ class BTreePCL
     child_nodes = std::move(nodes);
     return child_nodes.size() > kInnerNodeCap;
   }
+
+  /*####################################################################################
+   * Static assertions
+   *##################################################################################*/
+
+  // target keys must be trivially copyable.
+  static_assert(IsValidKeyType());
+
+  // target payloads must be trivially copyable.
+  static_assert(std::is_trivially_copyable_v<Payload>);
+
+  // Each node must have space for at least two records.
+  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
 
   /*####################################################################################
    * Internal member variables
