@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Database Group, Nagoya University
+ * Copyright 2022 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,11 +46,11 @@ class RecordIterator
 
   RecordIterator(  //
       Node *node,
-      size_t count,
       size_t pos,
-      const std::optional<std::pair<const Key &, bool>> end_key,
+      size_t end_pos,
+      std::optional<std::pair<const Key &, bool>> end_key,
       bool is_end)
-      : node_{node}, end_pos_{count}, pos_{pos}, end_key_{std::move(end_key)}, is_end_{is_end}
+      : node_{node}, pos_{pos}, end_pos_{end_pos}, end_key_{std::move(end_key)}, is_end_{is_end}
   {
   }
 
@@ -98,14 +98,19 @@ class RecordIterator
       -> bool
   {
     while (true) {
-      while (pos_ < end_pos_ && node_->GetMetadata(pos_).is_deleted) {
-        ++pos_;
+      // check records remain in this node
+      while (pos_ < end_pos_ && node_->RecordIsDeleted(pos_)) {
+        ++pos_;  // skip deleted records
       }
       if (pos_ < end_pos_) return true;
+
+      // check this node is rightmost for a given end key
       if (is_end_) {
         node_->ReleaseSharedLock();
         return false;
       }
+
+      // go to the next node
       node_ = node_->GetNextNodeForRead();
       pos_ = 0;
       std::tie(is_end_, end_pos_) = node_->SearchEndPositionFor(end_key_);
@@ -140,11 +145,11 @@ class RecordIterator
   /// the pointer to a node that includes partial scan results.
   Node *node_{nullptr};
 
-  /// the number of records in this node.
-  size_t end_pos_{0};
-
   /// the position of a current record.
   size_t pos_{0};
+
+  /// the end position of records in this node.
+  size_t end_pos_{0};
 
   /// the end key given from a user.
   std::optional<std::pair<const Key &, bool>> end_key_{};

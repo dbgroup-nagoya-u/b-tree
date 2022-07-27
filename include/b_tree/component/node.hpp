@@ -237,17 +237,6 @@ class PessimisticNode
    *##################################################################################*/
 
   /**
-   * @param position the position of record metadata to be get.
-   * @return Metadata: record metadata.
-   */
-  [[nodiscard]] constexpr auto
-  GetMetadata(const size_t position) const  //
-      -> Metadata
-  {
-    return meta_array_[position];
-  }
-
-  /**
    * @param pos the position of a target record.
    * @return a key in a target record.
    */
@@ -313,6 +302,13 @@ class PessimisticNode
     }
 
     return r_node;
+  }
+
+  [[nodiscard]] auto
+  RecordIsDeleted(const size_t pos) const  //
+      -> bool
+  {
+    return meta_array_[pos].is_deleted;
   }
 
   template <class Payload>

@@ -130,7 +130,7 @@ class BTreePCL
     }
 
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-    return RecordIterator_t{node, end_pos, begin_pos, end_key, is_end};
+    return RecordIterator_t{node, begin_pos, end_pos, end_key, is_end};
   }
 
   /*####################################################################################
