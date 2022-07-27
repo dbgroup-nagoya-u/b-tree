@@ -18,19 +18,24 @@
 #ifndef B_TREE_COMPONENT_METADATA_HPP
 #define B_TREE_COMPONENT_METADATA_HPP
 
+// local sources
 #include "common.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
 /**
- * @brief A struct to represent record metadata.
+ * @brief A struct for representing record metadata.
  *
  */
 struct Metadata {
   /*####################################################################################
-   * Public constructors/destructors
+   * Public constructors and assignment operators
    *##################################################################################*/
 
+  /**
+   * @brief Construct an empty object.
+   *
+   */
   constexpr Metadata() : is_deleted{}, offset{} {};
 
   /**
@@ -48,17 +53,31 @@ struct Metadata {
   {
   }
 
-  ~Metadata() = default;
-
   constexpr Metadata(const Metadata &) = default;
-  constexpr auto operator=(const Metadata &) -> Metadata & = default;
   constexpr Metadata(Metadata &&) = default;
+
+  constexpr auto operator=(const Metadata &) -> Metadata & = default;
   constexpr auto operator=(Metadata &&) -> Metadata & = default;
+
+  /*####################################################################################
+   * Public destructors
+   *##################################################################################*/
+
+  /**
+   * @brief Destroy the Metadata object.
+   *
+   */
+  ~Metadata() = default;
 
   /*####################################################################################
    * Public operators
    *##################################################################################*/
 
+  /**
+   * @param comp a metadata to be compared.
+   * @retval true if a given metadata is equivalent with this one.
+   * @retval false otherwise.
+   */
   constexpr auto
   operator==(const Metadata &comp) const  //
       -> bool
@@ -68,6 +87,11 @@ struct Metadata {
            && rec_len == comp.rec_len;
   }
 
+  /**
+   * @param comp a metadata to be compared.
+   * @retval true if a given metadata is different from this one.
+   * @retval false otherwise.
+   */
   constexpr auto
   operator!=(const Metadata &comp) const  //
       -> bool

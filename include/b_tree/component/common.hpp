@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>
 
+// local sources
 #include "b_tree/utility.hpp"
 
 namespace dbgroup::index::b_tree::component
@@ -31,7 +32,7 @@ namespace dbgroup::index::b_tree::component
  *####################################################################################*/
 
 /**
- * @brief Internal return codes to represent results of node modification.
+ * @brief Internal return codes for representing results of node modification.
  *
  */
 enum NodeRC {
@@ -54,7 +55,7 @@ enum NodeRC {
  *
  * @param addr an original address.
  * @param offset an offset to shift.
- * @return void* a shifted address.
+ * @return a shifted address.
  */
 constexpr auto
 ShiftAddr(  //

@@ -23,15 +23,19 @@
 #include <utility>
 #include <vector>
 
-#include "common.hpp"
+// organization libraries
 #include "lock/pessimistic_lock.hpp"
+
+// local sources
+#include "common.hpp"
 #include "metadata.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
 
 /**
- * @brief A class to represent nodes in Btree.
+ * @brief A class for representing nodes in B+trees with pessimistic coarse-grained
+ * locking.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
@@ -45,23 +49,23 @@ class PessimisticNode
    *##################################################################################*/
 
   /**
-   * @brief Construct a new node object
+   * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed
+   * @param is_leaf a flag to indicate whether a leaf node is constructed.
    */
-  explicit PessimisticNode(const bool is_leaf)
+  constexpr explicit PessimisticNode(const bool is_leaf)
       : is_leaf_{static_cast<uint64_t>(is_leaf)}, record_count_{0}, block_size_{0}, deleted_size_{0}
   {
   }
 
   /**
-   * @brief Construct a new node object when root split
+   * @brief Construct a new root node.
    *
-   * @param l_node a left child node which is previous root
-   * @param r_node a right child node which is split into
+   * @param l_node a left child node which is the previous root node.
+   * @param r_node a right child node.
    */
   PessimisticNode(  //
-      PessimisticNode *l_node,
+      const PessimisticNode *l_node,
       const PessimisticNode *r_node)  //
       : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
   {
@@ -118,8 +122,8 @@ class PessimisticNode
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node
-   * @return false otherwise
+   * @return true if this is a leaf node.
+   * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsLeaf() const  //
@@ -169,10 +173,11 @@ class PessimisticNode
   }
 
   /**
-   * @return true r_node can be merged into this node
-   * @return false otherwise
+   * @param r_node a right-sibling node to be merged.
+   * @retval true if `r_node` can be merged into this node.
+   * @retval false otherwise.
    */
-  auto
+  [[nodiscard]] auto
   CanMerge(PessimisticNode *r_node) const  //
       -> bool
   {
@@ -190,7 +195,7 @@ class PessimisticNode
   }
 
   /**
-   * @return pointer of next node with shared lock
+   * @return the next node with a shared lock.
    */
   [[nodiscard]] auto
   GetNextNodeForRead()  //
@@ -202,7 +207,12 @@ class PessimisticNode
   }
 
   /**
-   * @return pointer of next node with exclusive lock
+   * @brief Get a split node that includes a target key.
+   *
+   * The returned node is locked with an SIX lock and the other is unlocked.
+   *
+   * @param key a search key.
+   * @return this node or a right sibling one.
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
@@ -220,7 +230,8 @@ class PessimisticNode
   }
 
   /**
-   * @return a high key in this node
+   * @retval a highest key in this node if exist.
+   * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
   GetHighKey() const  //
@@ -258,6 +269,14 @@ class PessimisticNode
     return GetPayload<Payload>(meta_array_[pos]);
   }
 
+  /**
+   * @brief Get a child node in a given position.
+   *
+   * The returned child node is locked with a shared lock and this node is unlocked.
+   *
+   * @param pos the position of a child node.
+   * @return the child node with a shared lock.
+   */
   [[nodiscard]] constexpr auto
   GetChildForRead(const size_t pos)  //
       -> PessimisticNode *
@@ -268,6 +287,12 @@ class PessimisticNode
     return child;
   }
 
+  /**
+   * @brief Get a child node in a given position.
+   *
+   * @param pos the position of a child node.
+   * @return the child node with an SIX lock.
+   */
   [[nodiscard]] constexpr auto
   GetChildForWrite(const size_t pos)  //
       -> PessimisticNode *
@@ -277,6 +302,17 @@ class PessimisticNode
     return child;
   }
 
+  /**
+   * @brief Get a mergeable child node if exist.
+   *
+   * The returned child node is locked with an SIX lock. If there is no mergeable child
+   * node, this node is unlocked.
+   *
+   * @param l_node a left child node to be merged.
+   * @param l_pos the position of the left child node.
+   * @retval a mergeable child node if exist.
+   * @retval nullptr otherwise.
+   */
   [[nodiscard]] auto
   GetMergeableRightChild(  //
       const PessimisticNode *l_node,
@@ -302,6 +338,11 @@ class PessimisticNode
     return r_node;
   }
 
+  /**
+   * @param pos the position of a record.
+   * @retval true if the record is deleted.
+   * @retval false otherwise.
+   */
   [[nodiscard]] auto
   RecordIsDeleted(const size_t pos) const  //
       -> bool
@@ -309,6 +350,12 @@ class PessimisticNode
     return meta_array_[pos].is_deleted;
   }
 
+  /**
+   * @tparam Payload a class of payload.
+   * @param pos the position of a target record.
+   * @retval 1st: a key in a target record.
+   * @retval 2nd: a payload in a target record.
+   */
   template <class Payload>
   [[nodiscard]] auto
   GetRecord(const size_t pos) const  //
@@ -321,12 +368,20 @@ class PessimisticNode
    * Public lock management APIs
    *##################################################################################*/
 
+  /**
+   * @brief Acquire a shared lock for this node.
+   *
+   */
   void
   LockS()
   {
     mutex_.LockS();
   }
 
+  /**
+   * @brief Release the shared lock for this node.
+   *
+   */
   auto
   UnlockS()  //
       -> void
@@ -334,18 +389,30 @@ class PessimisticNode
     mutex_.UnlockS();
   }
 
+  /**
+   * @brief Acquire a shared lock with intent-exclusive locking for this node.
+   *
+   */
   void
   LockSIX()
   {
     mutex_.LockSIX();
   }
 
+  /**
+   * @brief Release the shared lock with intent-exclusive locking for this node.
+   *
+   */
   void
   UnlockSIX()
   {
     mutex_.UnlockSIX();
   }
 
+  /**
+   * @brief Upgrade the SIX lock to an exclusive lock for this node.
+   *
+   */
   void
   UpgradeToX()
   {
@@ -357,12 +424,14 @@ class PessimisticNode
    *##################################################################################*/
 
   /**
-   * @brief Get the position of a specified key by using binary search. If there is no
-   * specified key, this returns the minimum metadata position that is greater than the
-   * specified key
+   * @brief Get the position of a specified key by using binary search.
    *
-   * @param key a target key.
-   * @return the pair of record's existence and a computed position.
+   * If there is no specified key in this node, this returns the minimum position that
+   * is greater than the specified key.
+   *
+   * @param key a search key.
+   * @retval 1st: record's existence.
+   * @retval 2nd: the searched position.
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
@@ -388,18 +457,19 @@ class PessimisticNode
   }
 
   /**
-   * @brief Get the position of a specified key by using binary search. If there is no
-   * specified key, this returns the minimum metadata index that is greater than the
-   * specified key
+   * @brief Get a child node of a specified key by using binary search.
    *
-   * @param key a target key.
-   * @param range_is_closed a flag to indicate that a target key is included.
-   * @return the position of a specified key.
+   * If there is no specified key in this node, this returns the minimum position that
+   * is greater than the specified key.
+   *
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
   SearchChild(  //
       const Key &key,
-      const bool range_is_closed)  //
+      const bool is_closed)  //
       -> size_t
   {
     int64_t begin_pos = 0;
@@ -414,7 +484,7 @@ class PessimisticNode
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        if (!range_is_closed) ++pos;
+        if (!is_closed) ++pos;
         begin_pos = pos;
         break;
       }
@@ -490,9 +560,6 @@ class PessimisticNode
    * operation. If a specified key has been already inserted, this function perfroms an
    * update operation.
    *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
-   *
    * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
@@ -523,13 +590,9 @@ class PessimisticNode
   /**
    * @brief Insert a specified kay/payload pair.
    *
-   * This function performs a uniqueness check in its processing. If a specified key does
-   * not exist, this function insert a target payload into a target leaf node. If a
-   * specified key exists in a target leaf node, this function does nothing and returns
-   * kKeyAlreadyInserted as a return code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
+   * If a specified key does not exist, this function insert a target payload into a
+   * target leaf node. If a specified key exists in a target leaf node, this function
+   * does nothing and returns kKeyExist as a return code.
    *
    * @tparam Payload a class of payload.
    * @param key a target key to be written.
@@ -566,17 +629,12 @@ class PessimisticNode
   /**
    * @brief Update a target kay with a specified payload.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function update a target payload. If a specified key does not exist in
-   * a target leaf node, this function does nothing and returns kKeyNotInserted as a return
-   * code.
-   *
-   * Note that if a target key/payload is binary data, it is required to specify its
-   * length in bytes.
+   * If a specified key exist, this function update a target payload. If a specified key
+   * does not exist in a target leaf node, this function does nothing and returns
+   * kKeyNotExist as a return code.
    *
    * @tparam Payload a class of payload.
    * @param key a target key to be written.
-   * @param key_length the length of a target key.
    * @param payload a target payload to be written.
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyNotExist otherwise.
@@ -605,9 +663,9 @@ class PessimisticNode
   /**
    * @brief Delete a target key from the index.
    *
-   * This function performs a uniqueness check in its processing. If a specified key
-   * exist, this function deletes it. If a specified key does not exist in a leaf node,
-   * this function does nothing and returns kKeyNotInserted as a return code.
+   * If a specified key exist, this function deletes it. If a specified key does not
+   * exist in a leaf node, this function does nothing and returns kKeyNotExist as a
+   * return code.
    *
    * @tparam Payload a class of payload.
    * @param key a target key to be written.
@@ -634,11 +692,11 @@ class PessimisticNode
   }
 
   /**
-   * @brief Insert a new child node to this node.
+   * @brief Insert a new child node into this node.
    *
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
-   * @param pos the position of a left child node.
+   * @param pos the position of the left child node.
    */
   void
   InsertChild(  //
@@ -666,10 +724,10 @@ class PessimisticNode
   }
 
   /**
-   * @brief Delete child node in this node.
+   * @brief Delete a child node from this node.
    *
    * @param l_node a left child node.
-   * @param pos the position of a right child node.
+   * @param pos the position of the left child node.
    */
   void
   DeleteChild(  //
@@ -694,7 +752,7 @@ class PessimisticNode
    *##################################################################################*/
 
   /**
-   * @brief Split this node into right nodes.
+   * @brief Split this node into a right node.
    *
    * @param r_node a split right node.
    */
@@ -748,7 +806,7 @@ class PessimisticNode
   }
 
   /**
-   * @brief Merge given node into this node.
+   * @brief Merge a given node into this node.
    *
    * @param r_node a right node to be merged.
    */
@@ -792,10 +850,12 @@ class PessimisticNode
   /**
    * @brief Create a leaf node with the maximum number of records for bulkloading.
    *
+   * @tparam Entry a pair/tuple of keys and payloads.
    * @tparam Payload a target payload class.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @param l_node the left node of this node.
+   * @param is_rightmost a flag for indicating this node can be rightmost.
+   * @param l_node the left sibling node of this node.
    */
   template <class Entry, class Payload>
   void
@@ -913,6 +973,9 @@ class PessimisticNode
     return !Comp{}(high_key, end_key->first);
   }
 
+  /**
+   * @return Current usage of the record block.
+   */
   [[nodiscard]] auto
   GetUsedSize() const  //
       -> size_t
@@ -979,11 +1042,11 @@ class PessimisticNode
   }
 
   /**
-   * @brief Set a target key directly
+   * @brief Set a target key directly.
    *
-   * @param offset an offset to set a target key
-   * @param key a target key to be set
-   * @param key_len a target key length to be set
+   * @param offset an offset to the top of the record block.
+   * @param key a target key to be set.
+   * @param key_len the length of the key.
    */
   auto
   SetKey(  //
@@ -1004,12 +1067,11 @@ class PessimisticNode
   }
 
   /**
-   * @brief Set a target payload directly
+   * @brief Set a target payload directly.
    *
-   * @tparam Payload a class of payload
-   * @param offset an offset to set a target payload
-   * @param payload a target payload to be set
-   * @param pay_len a target payload length to be set
+   * @tparam Payload a class of payload.
+   * @param offset an offset to the top of the record block.
+   * @param payload a target payload to be set.
    */
   template <class Payload>
   auto
@@ -1027,6 +1089,15 @@ class PessimisticNode
    * Internal utility functions
    *##################################################################################*/
 
+  /**
+   * @brief Insert a given record into this node.
+   *
+   * @tparam Payload a class of payload.
+   * @param key a target key to be set.
+   * @param key_len the length of the key.
+   * @param payload a target payload to be set.
+   * @param pos an insertion position.
+   */
   template <class Payload>
   void
   InsertRecord(  //
@@ -1049,6 +1120,13 @@ class PessimisticNode
     block_size_ += rec_len;
   }
 
+  /**
+   * @brief Reuse the deleted record to insert a new record.
+   *
+   * @tparam Payload a class of payload.
+   * @param payload a target payload to be set.
+   * @param pos the position of the deleted record.
+   */
   template <class Payload>
   void
   ReuseRecord(  //
@@ -1067,7 +1145,6 @@ class PessimisticNode
   /**
    * @brief Clean up this node.
    *
-   * @tparam Payload a class of payload.
    */
   void
   CleanUp()
@@ -1094,7 +1171,7 @@ class PessimisticNode
    *
    * @param node an original node that has a target key.
    * @param meta the corresponding metadata of a target key.
-   * @param offset the current offset of this node.
+   * @param offset an offset to the top of the record block.
    * @return the updated offset value.
    */
   auto
@@ -1140,7 +1217,7 @@ class PessimisticNode
    *
    * @param orig_node an original node that has a target record.
    * @param meta the corresponding metadata of a target record.
-   * @param offset the current offset of this node.
+   * @param offset an offset to the top of the record block.
    * @return the updated offset value.
    */
   auto
@@ -1167,8 +1244,7 @@ class PessimisticNode
    * @param orig_node an original node that has target records.
    * @param begin_pos the begin position of target records.
    * @param end_pos the end position of target records.
-   * @param rec_count the current number of records in this node.
-   * @param offset the current offset of this node.
+   * @param offset an offset to the top of the record block.
    * @return the updated offset value.
    */
   auto
@@ -1217,7 +1293,7 @@ class PessimisticNode
    * Internal member variables
    *##################################################################################*/
 
-  /// a flag to indicate whether this node is a leaf or internal node.
+  /// a flag for indicating this node is a leaf or internal node.
   uint64_t is_leaf_ : 1;
 
   /// the number of records in this node.
@@ -1229,10 +1305,10 @@ class PessimisticNode
   /// the total byte length of deleted records in a node.
   uint64_t deleted_size_ : 16;
 
-  /// a black block for alignment.
+  /// a block for alignment.
   uint64_t : 0;
 
-  /// the latch this node.
+  /// a lock for concurrency controls.
   ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// the pointer to the next node.
@@ -1244,7 +1320,7 @@ class PessimisticNode
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
 
-  // temporary node for SMO
+  // a temporary node for SMOs.
   static thread_local inline std::unique_ptr<PessimisticNode> temp_node_ =  // NOLINT
       std::make_unique<PessimisticNode>(0);
 };

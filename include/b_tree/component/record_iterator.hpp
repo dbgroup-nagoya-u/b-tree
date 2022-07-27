@@ -20,6 +20,7 @@
 #include <optional>
 #include <utility>
 
+// local sources
 #include "common.hpp"
 
 namespace dbgroup::index::b_tree::component
@@ -44,13 +45,26 @@ class RecordIterator
    * Public constructors and assignment operators
    *##################################################################################*/
 
+  /**
+   * @brief Construct a new iterator object.
+   *
+   * @param node a node to be scanned.
+   * @param begin_pos the begin position for scanning in the node.
+   * @param end_pos the end position for scanning in the node.
+   * @param end_key a copied end key of this scan operation.
+   * @param is_end a flag for indicating the node is rightmost in this scan operation.
+   */
   RecordIterator(  //
       Node *node,
-      size_t pos,
+      size_t begin_pos,
       size_t end_pos,
       std::optional<std::pair<const Key &, bool>> end_key,
       bool is_end)
-      : node_{node}, pos_{pos}, end_pos_{end_pos}, end_key_{std::move(end_key)}, is_end_{is_end}
+      : node_{node},
+        pos_{begin_pos},
+        end_pos_{end_pos},
+        end_key_{std::move(end_key)},
+        is_end_{is_end}
   {
   }
 
@@ -64,12 +78,20 @@ class RecordIterator
    * Public destructors
    *##################################################################################*/
 
+  /**
+   * @brief Destroy the iterator object.
+   *
+   */
   ~RecordIterator() = default;
 
   /*####################################################################################
    * Public operators for iterators
    *##################################################################################*/
 
+  /**
+   * @retval 1st: a key indicated by the iterator.
+   * @retval 2nd: a payload indicated by the iterator.
+   */
   auto
   operator*() const  //
       -> std::pair<Key, Payload>
@@ -77,6 +99,10 @@ class RecordIterator
     return node_->template GetRecord<Payload>(pos_);
   }
 
+  /**
+   * @brief Forward the iterator.
+   *
+   */
   constexpr void
   operator++()
   {
@@ -90,7 +116,7 @@ class RecordIterator
   /**
    * @brief Check if there are any records left.
    *
-   * @retval true if there are any records or next node left.
+   * @retval true if there are still records to be scanned.
    * @retval false otherwise.
    */
   [[nodiscard]] auto
@@ -118,7 +144,7 @@ class RecordIterator
   }
 
   /**
-   * @return a Key of a current record
+   * @return a key indicated by the iterator.
    */
   [[nodiscard]] auto
   GetKey() const  //
@@ -128,7 +154,7 @@ class RecordIterator
   }
 
   /**
-   * @return a payload of a current record
+   * @return a payload indicated by the iterator.
    */
   [[nodiscard]] auto
   GetPayload() const  //
@@ -142,13 +168,13 @@ class RecordIterator
    * Internal member variables
    *##################################################################################*/
 
-  /// the pointer to a node that includes partial scan results.
+  /// a node that includes partial scan results.
   Node *node_{nullptr};
 
   /// the position of a current record.
   size_t pos_{0};
 
-  /// the end position of records in this node.
+  /// the end position of records in the node.
   size_t end_pos_{0};
 
   /// the end key given from a user.

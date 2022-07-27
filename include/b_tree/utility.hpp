@@ -30,7 +30,7 @@ namespace dbgroup::index::b_tree
  *####################################################################################*/
 
 /**
- * @brief Return codes for B_TREE.
+ * @brief Return codes for B+trees.
  *
  */
 enum ReturnCode {
@@ -40,59 +40,39 @@ enum ReturnCode {
 };
 
 /*######################################################################################
- * Utility classes
- *####################################################################################*/
-
-/**
- * @brief Compare binary keys as CString. The end of every key must be '\\0'.
- *
- */
-struct CompareAsCString {
-  constexpr auto
-  operator()(const void *a, const void *b) const noexcept  //
-      -> bool
-  {
-    if (a == nullptr) return false;
-    if (b == nullptr) return true;
-    return strcmp(static_cast<const char *>(a), static_cast<const char *>(b)) < 0;
-  }
-};
-
-/*######################################################################################
  * Utility functions
  *####################################################################################*/
 
 /**
  * @tparam T a target class.
  * @retval true if a target class is variable-length data.
- * @retval false if a target class is static-length data.
+ * @retval false if a target class is fixed-length data.
  */
 template <class T>
 constexpr auto
 IsVarLenData()  //
     -> bool
 {
-  static_assert(std::is_trivially_copyable_v<T>);
   return false;
 }
 
 /*######################################################################################
- * Tuning parameters for B-tree
+ * Tuning parameters for B+trees
  *####################################################################################*/
 
-/// The default page size of each node
+/// The default page size of each node.
 constexpr size_t kPageSize = B_TREE_PAGE_SIZE;
 
-/// The maximum size of deleted space size for invoking split
+/// The maximum size of deleted space size for invoking split.
 constexpr size_t kMaxDeletedSpaceSize = B_TREE_MAX_DELETED_SPACE_SIZE;
 
-/// The minimum size of free space size for invoking split
+/// The minimum size of free space size for invoking split.
 constexpr size_t kMinFreeSpaceSize = B_TREE_MIN_FREE_SPACE_SIZE;
 
-/// The minimum size of used space size for invoking merge
+/// The minimum size of used space size for invoking merge.
 constexpr size_t kMinUsedSpaceSize = B_TREE_MIN_USED_SPACE_SIZE;
 
-/// The maximum size of variable-length data
+/// The maximum size of variable-length data.
 constexpr size_t kMaxVarLenDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
 
 }  // namespace dbgroup::index::b_tree

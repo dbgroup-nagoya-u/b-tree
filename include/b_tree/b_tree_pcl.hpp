@@ -22,13 +22,14 @@
 #include <thread>
 #include <vector>
 
+// local sources
 #include "component/node.hpp"
 #include "component/record_iterator.hpp"
 
 namespace dbgroup::index::b_tree
 {
 /**
- * @brief A class for representing Btree with variable-length keys.
+ * @brief A class for representing B+trees with pessimistic coarse-grained locking.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
@@ -243,6 +244,18 @@ class BTreePCL
    * Public bulkload API
    *##################################################################################*/
 
+  /**
+   * @brief Bulkload specified kay/payload pairs.
+   *
+   * This function bulkloads given entries into this index. The entries are assumed to
+   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
+   * variable-length keys). Note that keys in records are assumed to be unique and
+   * sorted.
+   *
+   * @param entries vector of entries to be bulkloaded.
+   * @param thread_num the number of threads to perform bulkloading.
+   * @return kSuccess.
+   */
   template <class Entry>
   auto
   Bulkload(  //
@@ -362,6 +375,12 @@ class BTreePCL
    * Static assertions
    *##################################################################################*/
 
+  // target keys must be trivially copyable.
+  static_assert(IsValidKeyType());
+
+  // target payloads must be trivially copyable.
+  static_assert(std::is_trivially_copyable_v<Payload>);
+
   // Each node must have space for at least two records.
   static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
 
@@ -370,8 +389,22 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Get root node with shared lock
-   * @return root
+   * @retval true if a target key class is trivially copyable.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] static constexpr auto
+  IsValidKeyType()  //
+      -> bool
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+    } else {
+      return std::is_trivially_copyable_v<Key>;
+    }
+  }
+
+  /**
+   * @return a root node with a shared lock.
    */
   [[nodiscard]] auto
   GetRootForRead()  //
@@ -387,8 +420,11 @@ class BTreePCL
   }
 
   /**
-   * @brief Get root node with exclusive lock
-   * @return root
+   * @brief Get a root node with a shared lock with an intent-exclusive lock.
+   *
+   * This function performs SMOs for a root node if required.
+   *
+   * @return a root node or a valid child node if a root node is split.
    */
   [[nodiscard]] auto
   GetRootForWrite(const Key &key)  //
@@ -408,9 +444,12 @@ class BTreePCL
   /**
    * @brief Search a leaf node that may have a target key.
    *
+   * This function uses only shared locks, and a returned leaf node is also locked with
+   * a shared lock.
+   *
    * @param key a search key.
    * @param is_closed a flag for indicating closed/open-interval.
-   * @return a stack of traversed nodes.
+   * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
   SearchLeafNodeForRead(  //
@@ -430,7 +469,10 @@ class BTreePCL
   /**
    * @brief Search a leftmost leaf node.
    *
-   * @return a stack of traversed nodes.
+   * This function uses only shared locks, and a returned leaf node is also locked with
+   * a shared lock.
+   *
+   * @return a leftmost leaf node.
    */
   [[nodiscard]] auto
   SearchLeftmostLeaf()  //
@@ -447,8 +489,12 @@ class BTreePCL
   /**
    * @brief Search a leaf node that may have a target key.
    *
+   * This function performs SMOs if internal nodes on the way should be modified. This
+   * function uses SIX and X locks for modifying trees, and a returned leaf node is
+   * locked by an exclusive lock.
+   *
    * @param key a search key.
-   * @return a target leaf node.
+   * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
   SearchLeafNodeForWrite(const Key &key)  //
@@ -504,11 +550,11 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Split a given node
+   * @brief Split a given node.
    *
-   * @param l_node a node to be split
-   * @param parent a parent node of the l_node
-   * @param pos the position of the l_node
+   * @param l_node a node to be split.
+   * @param parent a parent node of `l_node`.
+   * @param pos the position of `l_node` in its parent node.
    */
   void
   Split(  //
@@ -522,6 +568,12 @@ class BTreePCL
     parent->InsertChild(l_node, r_node, pos);
   }
 
+  /**
+   * @brief Split a root node and install a new root node into this tree.
+   *
+   * @param key a search key.
+   * @return one of the split child nodes that includes a given key.
+   */
   [[nodiscard]] auto
   RootSplit(const Key &key)  //
       -> Node_t *
@@ -542,7 +594,7 @@ class BTreePCL
    *
    * @param l_node a node to be merged.
    * @param parent a parent node of `l_node`.
-   * @param pos the position of `l_node`.
+   * @param pos the position of `l_node` in its parent node.
    */
   void
   Merge(  //
@@ -561,6 +613,10 @@ class BTreePCL
     delete r_node;
   }
 
+  /**
+   * @brief Remove a root node that has only one child node.
+   *
+   */
   void
   ShrinkTreeIfNeeded()
   {
@@ -584,9 +640,14 @@ class BTreePCL
   /**
    * @brief Bulkload specified kay/payload pairs with a single thread.
    *
+   * Note that this function does not create a root node. The main process must create a
+   * root node by using the nodes constructed by this function.
+   *
    * @param iter the begin position of target records.
-   * @param iter_end the end position of target records.
-   * @return the root node of a created BTree.
+   * @param n the number of entries to be bulkloaded.
+   * @param is_rightmost a flag for indicating a constructed tree is rightmost one.
+   * @retval 1st: the height of a constructed tree.
+   * @retval 2nd: constructed nodes in the top layer.
    */
   template <class Entry>
   auto
@@ -654,10 +715,10 @@ class BTreePCL
    * Internal member variables
    *##################################################################################*/
 
-  /// root node of B+tree
+  /// a root node of this tree.
   Node_t *root_ = new Node_t{true};
 
-  /// mutex for root
+  /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};
 };
 }  // namespace dbgroup::index::b_tree
