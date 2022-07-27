@@ -51,6 +51,13 @@ class BTreePCL
   using RecordIterator_t = component::RecordIterator<BTreePCL_t>;
   using NodeRC = component::NodeRC;
 
+  // aliases for bulkloading
+  template <class Entry>
+  using BulkIter = typename std::vector<Entry>::const_iterator;
+  using BulkResult = std::pair<size_t, std::vector<Node_t *>>;
+  using BulkPromise = std::promise<BulkResult>;
+  using BulkFuture = std::future<BulkResult>;
+
   /*####################################################################################
    * Public constructors and assignment operators
    *##################################################################################*/
@@ -244,25 +251,23 @@ class BTreePCL
       -> ReturnCode
   {
     assert(thread_num > 0);
+    assert(entries.size() >= thread_num);
 
     if (entries.empty()) return kSuccess;
 
-    Node_t *new_root{};
+    std::vector<Node_t *> nodes{};
     auto &&iter = entries.cbegin();
     if (thread_num == 1) {
       // bulkloading with a single thread
-      new_root = BulkloadWithSingleThread<Entry>(iter, entries.cend());
+      nodes = BulkloadWithSingleThread<Entry>(iter, entries.size()).second;
     } else {
       // bulkloading with multi-threads
-      std::vector<std::future<Node_t *>> threads{};
-      threads.reserve(thread_num);
+      std::vector<BulkFuture> futures{};
+      futures.reserve(thread_num);
 
       // prepare a lambda function for bulkloading
-      auto loader = [&](std::promise<Node_t *> p,  //
-                        size_t n,                  //
-                        typename std::vector<Entry>::const_iterator iter, bool is_rightmost) {
-        auto *partial_root = BulkloadWithSingleThread<Entry>(iter, iter + n, is_rightmost);
-        p.set_value(partial_root);
+      auto loader = [&](BulkPromise p, BulkIter<Entry> iter, size_t n, bool is_rightmost) {
+        p.set_value(BulkloadWithSingleThread<Entry>(iter, n, is_rightmost));
       };
 
       // create threads to construct partial BTrees
@@ -270,26 +275,42 @@ class BTreePCL
       const auto rightmost_id = thread_num - 1;
       for (size_t i = 0; i < thread_num; ++i) {
         // create a partial BTree
-        std::promise<Node_t *> p{};
-        threads.emplace_back(p.get_future());
+        BulkPromise p{};
+        futures.emplace_back(p.get_future());
         const size_t n = (rec_num + i) / thread_num;
-        std::thread{loader, std::move(p), n, iter, i == rightmost_id}.detach();
+        std::thread{loader, std::move(p), iter, n, i == rightmost_id}.detach();
 
         // forward the iterator to the next begin position
         iter += n;
       }
 
       // wait for the worker threads to create BTrees
-      std::vector<Node_t *> partial_trees{};
+      std::vector<BulkResult> partial_trees{};
       partial_trees.reserve(thread_num);
-      for (auto &&future : threads) {
+      size_t height = 1;
+      for (auto &&future : futures) {
         partial_trees.emplace_back(future.get());
+        const auto partial_height = partial_trees.back().first;
+        height = (partial_height > height) ? partial_height : height;
       }
-      new_root = ConstructUpperLayer(partial_trees);
+
+      // align the height of partial trees
+      nodes.reserve(kInnerNodeCap * thread_num);
+      for (auto &&[p_height, p_nodes] : partial_trees) {
+        while (p_height < height) {  // NOLINT
+          ConstructUpperLayer(p_nodes);
+          ++p_height;
+        }
+        nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
+      }
     }
 
-    // set a new root
-    root_ = new_root;
+    // create upper layers until a root node is created
+    while (nodes.size() > 1) {
+      ConstructUpperLayer(nodes);
+    }
+    root_ = nodes.front();
+
     return kSuccess;
   }
 
@@ -330,6 +351,12 @@ class BTreePCL
 
   /// the expected minimum block size in a certain node.
   static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLen + kExpMaxKeyLen;
+
+  /// the expected capacity of leaf nodes for bulkloading.
+  static constexpr size_t kLeafNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPayLen);
+
+  /// the expected capacity of internal nodes for bulkloading.
+  static constexpr size_t kInnerNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPtrLen);
 
   /*####################################################################################
    * Static assertions
@@ -554,41 +581,63 @@ class BTreePCL
   template <class Entry>
   auto
   BulkloadWithSingleThread(  //
-      typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end,
+      BulkIter<Entry> &iter,
+      const size_t n,
       const bool is_rightmost = true)  //
-      -> Node_t *
+      -> BulkResult
   {
+    // reserve space for nodes in the leaf layer
     std::vector<Node_t *> nodes{};
+    nodes.reserve((n / kLeafNodeCap) + 1);
+
+    // load records into a leaf node
+    const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      // load records into a leaf node
       auto *node = new Node_t{true};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
     }
-    if (nodes.size() == 1) return nodes[0];
-    return ConstructUpperLayer(nodes);
+
+    // construct index layers
+    size_t height = 1;
+    if (nodes.size() > 1) {
+      // continue until the number of internal nodes is sufficiently small
+      do {
+        ++height;
+      } while (ConstructUpperLayer(nodes));
+    }
+
+    return {height, std::move(nodes)};
   }
 
+  /**
+   * @brief Construct internal nodes based on given child nodes.
+   *
+   * @param child_nodes child nodes in a lower layer.
+   * @retval true if constructed nodes cannot be contained in a single node.
+   * @retval false otherwise.
+   */
   auto
-  ConstructUpperLayer(std::vector<Node_t *> &entries)  //
-      -> Node_t *
+  ConstructUpperLayer(std::vector<Node_t *> &child_nodes)  //
+      -> bool
   {
-    std::vector<Node_t *> nodes;
-    auto &&iter = entries.cbegin();
-    const auto &iter_end = entries.cend();
-    Node_t *l_node = nullptr;
+    // reserve space for nodes in the upper layer
+    std::vector<Node_t *> nodes{};
+    nodes.reserve((child_nodes.size() / kInnerNodeCap) + 1);
+
+    // load child nodes into a inner node
+    auto &&iter = child_nodes.cbegin();
+    const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      // load records into a inner node
       auto *node = new Node_t{false};
-      node->Bulkload(iter, iter_end, l_node);
+      node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
-      l_node = node;
     }
-    if (nodes.size() == 1) return nodes[0];
-    return ConstructUpperLayer(nodes);
+
+    child_nodes = std::move(nodes);
+    return child_nodes.size() > kInnerNodeCap;
   }
 
   /*####################################################################################

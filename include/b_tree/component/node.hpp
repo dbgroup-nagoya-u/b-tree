@@ -791,41 +791,37 @@ class PessimisticNode
       typename std::vector<Entry>::const_iterator &iter,
       const typename std::vector<Entry>::const_iterator &iter_end,
       const bool is_rightmost,
-      PessimisticNode *l_node = nullptr)
+      PessimisticNode *l_node)
   {
     // extract and insert entries for the leaf node
     size_t node_size = kHeaderLen;
     auto offset = kPageSize;
-    while (iter < iter_end) {
+    for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
-      // const auto key_len = iter->GetKeyLength();
       const auto rec_len = key_len + sizeof(Payload);
 
       // check whether the node has sufficient space
       node_size += rec_len + kMetaLen;
-      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+      if (node_size + key_len > kPageSize) break;
 
       // insert an entry to the leaf node
-      auto tmp_offset = SetPayload(offset, payload);
-      tmp_offset = SetKey(tmp_offset, key, key_len);
-      meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
-      offset -= rec_len;
-
-      ++record_count_;
-      ++iter;
+      offset = SetPayload(offset, payload);
+      offset = SetKey(offset, key, key_len);
+      meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
     }
 
-    // set a highest key if needed
+    // set a highest key if this node is not rightmost
     if (iter < iter_end || !is_rightmost) {
-      const auto high_meta = meta_array_[record_count_ - 1];
-      const auto high_key_len = high_meta.key_len;
-      high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
-      offset -= high_key_len;
+      const auto high_key_len = meta_array_[record_count_ - 1].key_len;
+      high_meta_ = Metadata{offset, high_key_len, high_key_len};
+      offset -= high_key_len;  // reserve space for a highest key
     }
 
+    // update header information
     block_size_ = kPageSize - offset;
-    // set this node to next node of l_node
-    if (l_node) l_node->next_ = this;
+    if (l_node != nullptr) {
+      l_node->next_ = this;
+    }
   }
 
   /**
@@ -833,43 +829,40 @@ class PessimisticNode
    *
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @param l_node the left node of this node.
    */
   void
   Bulkload(  //
       typename std::vector<PessimisticNode *>::const_iterator &iter,
-      const typename std::vector<PessimisticNode *>::const_iterator &iter_end,
-      PessimisticNode *l_node = nullptr)
+      const typename std::vector<PessimisticNode *>::const_iterator &iter_end)
   {
     size_t node_size = kHeaderLen;
     auto offset = kPageSize;
-    while (iter < iter_end) {
-      const auto key_len = (*iter)->high_meta_.key_len;
-      const auto rec_len = key_len + sizeof(PessimisticNode *);
+    for (; iter < iter_end; ++iter) {
+      const auto *child = *iter;
+      const auto meta = child->high_meta_;
+      const auto high_key_len = meta.key_len;
+      const auto rec_len = high_key_len + kPtrLen;
 
       // check whether the node has sufficient space
       node_size += rec_len + kMetaLen;
-      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+      if (node_size > kPageSize) break;
 
       // insert an entry to the inner node
-      auto tmp_offset = SetPayload(offset, *iter);
-      if (key_len) tmp_offset = SetKey(tmp_offset, (*iter)->GetHighKey().value(), key_len);
-      meta_array_[record_count_] = Metadata{tmp_offset, key_len, rec_len};
-      offset -= rec_len;
-
-      ++record_count_;
-      ++iter;
+      offset = SetPayload(offset, child);
+      if (high_key_len > 0) {
+        offset = CopyKeyFrom(child, meta, offset);
+      }
+      meta_array_[record_count_++] = Metadata{offset, high_key_len, rec_len};
     }
 
-    // set a highest key
-    const auto high_meta = meta_array_[record_count_ - 1];
-    const auto high_key_len = high_meta.key_len;
-    high_meta_ = Metadata{high_meta.offset, high_key_len, high_key_len};
-    offset -= high_key_len;
-    block_size_ = kPageSize - offset;
+    // move a highest key to header
+    const auto rightmost_pos = record_count_ - 1;
+    const auto high_key_len = meta_array_[rightmost_pos].key_len;
+    high_meta_ = Metadata{offset, high_key_len, high_key_len};
+    meta_array_[rightmost_pos] = Metadata{offset + high_key_len, 0, kPtrLen};
 
-    // set this node to next node of l_node
-    if (l_node) l_node->next_ = this;
+    // update header information
+    block_size_ = kPageSize - offset;
   }
 
  private:
