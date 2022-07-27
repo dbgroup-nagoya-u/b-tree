@@ -27,6 +27,7 @@ sudo apt update && sudo apt install -y build-essential cmake
 #### Build Options for Unit Testing
 
 - `B_TREE_BUILD_TESTS`: Building unit tests for this library if `ON` (default `OFF`).
+- `B_TREE_TEST_BUILD_MULTI_THREAD_TESTS`: Building multi-threading tests if `ON` (default `ON`).
 - `B_TREE_TEST_THREAD_NUM`: The maximum number of threads to perform unit tests (default `8`).
 - `B_TREE_TEST_RANDOM_SEED`: A fixed seed value to reproduce unit tests (default `0`).
 - `B_TREE_TEST_EXEC_NUM`: The number of executions per a thread (default `1E5`).
