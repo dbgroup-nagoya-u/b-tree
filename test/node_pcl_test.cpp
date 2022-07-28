@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/node.hpp"
+#include "b_tree/component/pcl/node_varlen.hpp"
 
 // external libraries
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::b_tree::component::test
+namespace dbgroup::index::b_tree::component::pcl::test
 {
 /*######################################################################################
  * Global constants
@@ -43,7 +43,7 @@ class NodeFixture : public testing::Test
   using PayloadComp = std::less<Payload>;
 
   // define type aliases for simplicity
-  using Node_t = PessimisticNode<Key, KeyComp>;
+  using Node_t = NodeVarLen<Key, KeyComp>;
 
   /*####################################################################################
    * Internal constants
@@ -319,4 +319,4 @@ TEST_F(NodeFixture, MergeTwoNodesIntoSingleNode)
   }
 }
 
-}  // namespace dbgroup::index::b_tree::component::test
+}  // namespace dbgroup::index::b_tree::component::pcl::test

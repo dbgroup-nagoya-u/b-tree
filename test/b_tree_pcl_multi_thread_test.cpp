@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "b_tree/b_tree_pcl.hpp"
+#include "b_tree/b_tree.hpp"
 
 // organization libraries
 #include "external/index-fixtures/index_fixture_multi_thread.hpp"
@@ -42,16 +42,16 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCL = ::dbgroup::index::b_tree::BTreePCL<K, V, C>;
+using BTreePCLVarLen = ::dbgroup::index::b_tree::component::pcl::BTree<K, V, C, true>;
 
-using TestTargets = ::testing::Types<        //
-    IndexInfo<BTreePCL, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePCL, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePCL, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreePCL, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreePCL, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreePCL, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreePCL, Original, Original>  // original class keys/payloads
+using TestTargets = ::testing::Types<              //
+    IndexInfo<BTreePCLVarLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePCLVarLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePCLVarLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePCLVarLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePCLVarLen, Var, UInt8>,         // variable-length keys
+    IndexInfo<BTreePCLVarLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePCLVarLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 

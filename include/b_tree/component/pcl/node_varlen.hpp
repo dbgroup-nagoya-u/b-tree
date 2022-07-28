@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_NODE_HPP
-#define B_TREE_COMPONENT_NODE_HPP
+#ifndef B_TREE_COMPONENT_PCL_NODE_VARLEN_HPP
+#define B_TREE_COMPONENT_PCL_NODE_VARLEN_HPP
 
 #include <atomic>
 #include <optional>
@@ -27,21 +27,23 @@
 #include "lock/pessimistic_lock.hpp"
 
 // local sources
-#include "common.hpp"
-#include "metadata.hpp"
+#include "b_tree/component/common.hpp"
+#include "b_tree/component/metadata.hpp"
 
-namespace dbgroup::index::b_tree::component
+namespace dbgroup::index::b_tree::component::pcl
 {
 
 /**
- * @brief A class for representing nodes in B+trees with pessimistic coarse-grained
- * locking.
+ * @brief A class for representing nodes in B+trees.
+ *
+ * This class uses pessimistic coarse-grained locking for concurrency controls and can
+ * contain variable-length data.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
-class PessimisticNode
+class NodeVarLen
 {
  public:
   /*####################################################################################
@@ -53,7 +55,7 @@ class PessimisticNode
    *
    * @param is_leaf a flag to indicate whether a leaf node is constructed.
    */
-  constexpr explicit PessimisticNode(const bool is_leaf)
+  constexpr explicit NodeVarLen(const bool is_leaf)
       : is_leaf_{static_cast<uint64_t>(is_leaf)}, record_count_{0}, block_size_{0}, deleted_size_{0}
   {
   }
@@ -64,9 +66,9 @@ class PessimisticNode
    * @param l_node a left child node which is the previous root node.
    * @param r_node a right child node.
    */
-  PessimisticNode(  //
-      const PessimisticNode *l_node,
-      const PessimisticNode *r_node)  //
+  NodeVarLen(  //
+      const NodeVarLen *l_node,
+      const NodeVarLen *r_node)  //
       : is_leaf_{0}, record_count_{2}, block_size_{0}, deleted_size_{0}
   {
     // insert l_node
@@ -84,11 +86,11 @@ class PessimisticNode
     block_size_ += kPageSize - offset;
   }
 
-  PessimisticNode(const PessimisticNode &) = delete;
-  PessimisticNode(PessimisticNode &&) = delete;
+  NodeVarLen(const NodeVarLen &) = delete;
+  NodeVarLen(NodeVarLen &&) = delete;
 
-  auto operator=(const PessimisticNode &) -> PessimisticNode & = delete;
-  auto operator=(PessimisticNode &&) -> PessimisticNode & = delete;
+  auto operator=(const NodeVarLen &) -> NodeVarLen & = delete;
+  auto operator=(NodeVarLen &&) -> NodeVarLen & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -98,7 +100,7 @@ class PessimisticNode
    * @brief Destroy the node object.
    *
    */
-  ~PessimisticNode() = default;
+  ~NodeVarLen() = default;
 
   /*####################################################################################
    * new/delete operators
@@ -178,7 +180,7 @@ class PessimisticNode
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  CanMerge(PessimisticNode *r_node) const  //
+  CanMerge(NodeVarLen *r_node) const  //
       -> bool
   {
     return GetUsedSize() + r_node->GetUsedSize() < kMaxUsedSpaceSize;
@@ -199,7 +201,7 @@ class PessimisticNode
    */
   [[nodiscard]] auto
   GetNextNodeForRead()  //
-      -> PessimisticNode *
+      -> NodeVarLen *
   {
     next_->mutex_.LockS();
     mutex_.UnlockS();
@@ -216,7 +218,7 @@ class PessimisticNode
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> PessimisticNode *
+      -> NodeVarLen *
   {
     auto *node = this;
     const auto &high_key = GetHighKey();
@@ -279,9 +281,9 @@ class PessimisticNode
    */
   [[nodiscard]] constexpr auto
   GetChildForRead(const size_t pos)  //
-      -> PessimisticNode *
+      -> NodeVarLen *
   {
-    auto *child = GetPayload<PessimisticNode *>(pos);
+    auto *child = GetPayload<NodeVarLen *>(pos);
     child->mutex_.LockS();
     mutex_.UnlockS();
     return child;
@@ -295,9 +297,9 @@ class PessimisticNode
    */
   [[nodiscard]] constexpr auto
   GetChildForWrite(const size_t pos)  //
-      -> PessimisticNode *
+      -> NodeVarLen *
   {
-    auto *child = GetPayload<PessimisticNode *>(pos);
+    auto *child = GetPayload<NodeVarLen *>(pos);
     child->mutex_.LockSIX();
     return child;
   }
@@ -315,9 +317,9 @@ class PessimisticNode
    */
   [[nodiscard]] auto
   GetMergeableRightChild(  //
-      const PessimisticNode *l_node,
+      const NodeVarLen *l_node,
       const size_t l_pos)  //
-      -> PessimisticNode *
+      -> NodeVarLen *
   {
     // check there is a right-sibling node
     const auto r_pos = l_pos + 1;
@@ -700,8 +702,8 @@ class PessimisticNode
    */
   void
   InsertChild(  //
-      const PessimisticNode *l_node,
-      const PessimisticNode *r_node,
+      const NodeVarLen *l_node,
+      const NodeVarLen *r_node,
       const size_t pos)  //
   {
     // update a current pointer and prepare space for a left child
@@ -731,7 +733,7 @@ class PessimisticNode
    */
   void
   DeleteChild(  //
-      const PessimisticNode *l_node,
+      const NodeVarLen *l_node,
       const size_t pos)  //
   {
     const auto del_rec_len = meta_array_[pos].rec_len;  // keep a record length to be deleted
@@ -757,7 +759,7 @@ class PessimisticNode
    * @param r_node a split right node.
    */
   void
-  Split(PessimisticNode *r_node)
+  Split(NodeVarLen *r_node)
   {
     const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
 
@@ -811,7 +813,7 @@ class PessimisticNode
    * @param r_node a right node to be merged.
    */
   void
-  Merge(const PessimisticNode *r_node)
+  Merge(const NodeVarLen *r_node)
   {
     mutex_.UpgradeToX();
 
@@ -863,7 +865,7 @@ class PessimisticNode
       typename std::vector<Entry>::const_iterator &iter,
       const typename std::vector<Entry>::const_iterator &iter_end,
       const bool is_rightmost,
-      PessimisticNode *l_node)
+      NodeVarLen *l_node)
   {
     // extract and insert entries for the leaf node
     size_t node_size = kHeaderLen;
@@ -904,8 +906,8 @@ class PessimisticNode
    */
   void
   Bulkload(  //
-      typename std::vector<PessimisticNode *>::const_iterator &iter,
-      const typename std::vector<PessimisticNode *>::const_iterator &iter_end)
+      typename std::vector<NodeVarLen *>::const_iterator &iter,
+      const typename std::vector<NodeVarLen *>::const_iterator &iter_end)
   {
     size_t node_size = kHeaderLen;
     auto offset = kPageSize;
@@ -943,13 +945,13 @@ class PessimisticNode
    *##################################################################################*/
 
   /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(PessimisticNode *);
+  static constexpr size_t kPtrLen = sizeof(NodeVarLen *);
 
   /// the length of metadata.
   static constexpr size_t kMetaLen = sizeof(Metadata);
 
   /// the length of a header in each node page.
-  static constexpr size_t kHeaderLen = sizeof(PessimisticNode);
+  static constexpr size_t kHeaderLen = sizeof(NodeVarLen);
 
   /// the maximum usage of record space.
   static constexpr size_t kMaxUsedSpaceSize = kPageSize - (kHeaderLen + kMinFreeSpaceSize);
@@ -1176,7 +1178,7 @@ class PessimisticNode
    */
   auto
   CopyKeyFrom(  //
-      const PessimisticNode *node,
+      const NodeVarLen *node,
       const Metadata meta,
       size_t offset)  //
       -> size_t
@@ -1201,7 +1203,7 @@ class PessimisticNode
    * @return the updated offset value.
    */
   auto
-  CopyHighKeyFrom(const PessimisticNode *node)  //
+  CopyHighKeyFrom(const NodeVarLen *node)  //
       -> size_t
   {
     const auto meta = node->high_meta_;
@@ -1222,7 +1224,7 @@ class PessimisticNode
    */
   auto
   CopyRecordFrom(  //
-      const PessimisticNode *node,
+      const NodeVarLen *node,
       const Metadata meta,
       size_t offset)  //
       -> size_t
@@ -1249,7 +1251,7 @@ class PessimisticNode
    */
   auto
   CopyRecordsFrom(  //
-      const PessimisticNode *orig_node,
+      const NodeVarLen *orig_node,
       const size_t begin_pos,
       const size_t end_pos,
       size_t offset)  //
@@ -1312,7 +1314,7 @@ class PessimisticNode
   ::dbgroup::lock::PessimisticLock mutex_{};
 
   /// the pointer to the next node.
-  PessimisticNode *next_{nullptr};
+  NodeVarLen *next_{nullptr};
 
   /// the metadata of a highest key.
   Metadata high_meta_{kPageSize, 0, 0};
@@ -1321,10 +1323,10 @@ class PessimisticNode
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<PessimisticNode> temp_node_ =  // NOLINT
-      std::make_unique<PessimisticNode>(0);
+  static thread_local inline std::unique_ptr<NodeVarLen> temp_node_ =  // NOLINT
+      std::make_unique<NodeVarLen>(0);
 };
 
-}  // namespace dbgroup::index::b_tree::component
+}  // namespace dbgroup::index::b_tree::component::pcl
 
-#endif  // B_TREE_COMPONENT_NODE_HPP
+#endif  // B_TREE_COMPONENT_PCL_NODE_VARLEN_HPP
