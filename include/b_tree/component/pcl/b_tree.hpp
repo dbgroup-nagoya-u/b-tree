@@ -163,7 +163,7 @@ class BTree
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    node->Write(key, key_len, payload);
+    node->Write(key, key_len, &payload, kPayLen);
     return kSuccess;
   }
 
@@ -184,7 +184,7 @@ class BTree
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Insert(key, key_len, payload);
+    return node->Insert(key, key_len, &payload, kPayLen);
   }
 
   /**
@@ -204,7 +204,7 @@ class BTree
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Update(key, payload);
+    return node->Update(key, &payload, kPayLen);
   }
 
   /**

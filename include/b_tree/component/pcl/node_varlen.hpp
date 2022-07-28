@@ -74,12 +74,12 @@ class NodeVarLen
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
     const auto l_key_len = l_high_meta.key_len;
-    auto offset = SetPayload(kPageSize, l_node);
+    auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
     meta_array_[0] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // insert r_node
-    offset = SetPayload(offset, r_node);
+    offset = SetPayload(offset, &r_node, kPtrLen);
     meta_array_[1] = Metadata{offset, 0, kPtrLen};
 
     // update header information
@@ -562,28 +562,28 @@ class NodeVarLen
    * operation. If a specified key has been already inserted, this function perfroms an
    * update operation.
    *
-   * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    */
-  template <class Payload>
   void
   Write(  //
       const Key &key,
       const size_t key_len,
-      const Payload &payload)
+      const void *payload,
+      const size_t pay_len)
   {
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
-      InsertRecord(key, key_len, payload, pos);
+      InsertRecord(key, key_len, payload, pay_len, pos);
     } else if (rc == kKeyAlreadyDeleted) {
-      ReuseRecord(payload, pos);
+      ReuseRecord(payload, pay_len, pos);
     } else {  // update operation
-      memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
+      memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
     }
 
     mutex_.UnlockX();
@@ -596,19 +596,19 @@ class NodeVarLen
    * target leaf node. If a specified key exists in a target leaf node, this function
    * does nothing and returns kKeyExist as a return code.
    *
-   * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyExist otherwise.
    */
-  template <class Payload>
   auto
   Insert(  //
       const Key &key,
       const size_t key_len,
-      const Payload &payload)  //
+      const void *payload,
+      const size_t pay_len)  //
       -> ReturnCode
   {
     // search position where this key has to be set
@@ -617,9 +617,9 @@ class NodeVarLen
     // perform insert operation if possible
     auto rc = kSuccess;
     if (existence == kKeyNotInserted) {
-      InsertRecord(key, key_len, payload, pos);
+      InsertRecord(key, key_len, payload, pay_len, pos);
     } else if (existence == kKeyAlreadyDeleted) {
-      ReuseRecord(payload, pos);
+      ReuseRecord(payload, pay_len, pos);
     } else {  // a target key has been inserted
       rc = kKeyExist;
     }
@@ -635,17 +635,17 @@ class NodeVarLen
    * does not exist in a target leaf node, this function does nothing and returns
    * kKeyNotExist as a return code.
    *
-   * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyNotExist otherwise.
    */
-  template <class Payload>
   auto
   Update(  //
       const Key &key,
-      const Payload &payload)  //
+      const void *payload,
+      const size_t pay_len)  //
       -> ReturnCode
   {
     // check this node has a target record
@@ -654,7 +654,7 @@ class NodeVarLen
     // perform update operation if possible
     auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
-      memcpy(GetPayloadAddr(meta_array_[pos]), &payload, sizeof(Payload));
+      memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
       rc = kSuccess;
     }
 
@@ -669,7 +669,6 @@ class NodeVarLen
    * exist in a leaf node, this function does nothing and returns kKeyNotExist as a
    * return code.
    *
-   * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @retval kSuccess if a record is deleted.
    * @retval kKeyNotExist otherwise.
@@ -714,7 +713,7 @@ class NodeVarLen
     const auto l_high_meta = l_node->high_meta_;
     const auto key_len = l_high_meta.key_len;
     const auto rec_len = key_len + kPtrLen;
-    auto offset = SetPayload(kPageSize - block_size_, l_node);
+    auto offset = SetPayload(kPageSize - block_size_, &l_node, kPtrLen);
     offset = CopyKeyFrom(l_node, l_high_meta, offset);
     meta_array_[pos] = Metadata{offset, key_len, rec_len};
 
@@ -879,7 +878,7 @@ class NodeVarLen
       if (node_size + key_len > kPageSize) break;
 
       // insert an entry to the leaf node
-      offset = SetPayload(offset, payload);
+      offset = SetPayload(offset, &payload, sizeof(Payload));
       offset = SetKey(offset, key, key_len);
       meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
     }
@@ -922,7 +921,7 @@ class NodeVarLen
       if (node_size > kPageSize) break;
 
       // insert an entry to the inner node
-      offset = SetPayload(offset, child);
+      offset = SetPayload(offset, &child, kPtrLen);
       if (high_key_len > 0) {
         offset = CopyKeyFrom(child, meta, offset);
       }
@@ -1071,19 +1070,19 @@ class NodeVarLen
   /**
    * @brief Set a target payload directly.
    *
-   * @tparam Payload a class of payload.
    * @param offset an offset to the top of the record block.
-   * @param payload a target payload to be set.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    */
-  template <class Payload>
   auto
   SetPayload(  //
       size_t offset,
-      const Payload &payload)  //
+      const void *payload,
+      const size_t pay_len)  //
       -> size_t
   {
-    offset -= sizeof(Payload);
-    memcpy(ShiftAddr(this, offset), &payload, sizeof(Payload));
+    offset -= pay_len;
+    memcpy(ShiftAddr(this, offset), payload, pay_len);
     return offset;
   }
 
@@ -1094,25 +1093,25 @@ class NodeVarLen
   /**
    * @brief Insert a given record into this node.
    *
-   * @tparam Payload a class of payload.
    * @param key a target key to be set.
    * @param key_len the length of the key.
-   * @param payload a target payload to be set.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    * @param pos an insertion position.
    */
-  template <class Payload>
   void
   InsertRecord(  //
       const Key &key,
       const size_t key_len,
-      const Payload &payload,
+      const void *payload,
+      const size_t pay_len,
       const size_t pos)
   {
-    const auto rec_len = key_len + sizeof(Payload);
+    const auto rec_len = key_len + pay_len;
 
     // insert a new record
     auto offset = kPageSize - block_size_;
-    offset = SetPayload(offset, payload);
+    offset = SetPayload(offset, payload, pay_len);
     offset = SetKey(offset, key, key_len);
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
     meta_array_[pos] = Metadata{offset, key_len, rec_len};
@@ -1125,20 +1124,20 @@ class NodeVarLen
   /**
    * @brief Reuse the deleted record to insert a new record.
    *
-   * @tparam Payload a class of payload.
-   * @param payload a target payload to be set.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
    * @param pos the position of the deleted record.
    */
-  template <class Payload>
   void
   ReuseRecord(  //
-      const Payload &payload,
+      const void *payload,
+      const size_t pay_len,
       const size_t pos)
   {
     // reuse a deleted record
     const auto meta = meta_array_[pos];
     meta_array_[pos].is_deleted = 0;
-    memcpy(GetPayloadAddr(meta), &payload, sizeof(Payload));
+    memcpy(GetPayloadAddr(meta), payload, pay_len);
 
     // update header information
     deleted_size_ -= meta.rec_len + kMetaLen;

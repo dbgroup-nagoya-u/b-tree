@@ -90,7 +90,7 @@ class NodeFixture : public testing::Test
       const Payload payload)
   {
     LockX();
-    node_->Write(key, kKeyLen, payload);
+    node_->Write(key, kKeyLen, &payload, kPayLen);
   }
 
   auto
@@ -99,7 +99,7 @@ class NodeFixture : public testing::Test
       const size_t payload)
   {
     LockX();
-    return node_->Insert(key, kKeyLen, payload);
+    return node_->Insert(key, kKeyLen, &payload, kPayLen);
   }
 
   auto
@@ -108,7 +108,7 @@ class NodeFixture : public testing::Test
       const size_t payload)
   {
     LockX();
-    return node_->Update(key, payload);
+    return node_->Update(key, &payload, kPayLen);
   }
 
   auto
