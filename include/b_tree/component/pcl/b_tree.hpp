@@ -24,6 +24,7 @@
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
+#include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::pcl
@@ -69,7 +70,12 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree() = default;
+  BTree()
+  {
+    if constexpr (!kIsVarLen) {
+      root_->SetPayloadLength(kPayLen);
+    }
+  }
 
   BTree(const BTree &) = delete;
   BTree(BTree &&) = delete;
@@ -312,6 +318,9 @@ class BTree
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  /// a flag for indicating leaf nodes.
+  static constexpr uint32_t kLeafFlag = 1;
+
   /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
 
@@ -330,23 +339,29 @@ class BTree
   /// the length of a header in each node page.
   static constexpr size_t kHeaderLen = sizeof(Node_t);
 
-  /// the expected maximum length of keys.
-  static constexpr size_t kExpMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+  /// the maximum length of keys.
+  static constexpr size_t kMaxKeyLen = (kIsVarLen) ? kMaxVarLenDataSize : sizeof(Key);
 
-  /// the expected maximum length of payloads (including child pointers).
-  static constexpr size_t kExpMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
+  /// the maximum length of payloads (including child pointers).
+  static constexpr size_t kMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
 
-  /// the expected maximum length of records.
-  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + kExpMaxPayLen + kMetaLen;
+  /// the maximum length of records.
+  static constexpr size_t kMaxRecLen = kMaxKeyLen + kMaxPayLen + ((kIsVarLen) ? kMetaLen : 0);
 
-  /// the expected minimum block size in a certain node.
-  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLen + kExpMaxKeyLen;
+  /// the minimum block size in a certain node.
+  static constexpr size_t kMinBlockSize = kPageSize - kHeaderLen - kMaxKeyLen;
+
+  /// the expected length of leaf records.
+  static constexpr size_t kExpLeafRecLen = sizeof(Key) + kPayLen + ((kIsVarLen) ? kMetaLen : 0);
+
+  /// the expected length of internal records.
+  static constexpr size_t kExpInnerRecLen = sizeof(Key) + kPtrLen + ((kIsVarLen) ? kMetaLen : 0);
 
   /// the expected capacity of leaf nodes for bulkloading.
-  static constexpr size_t kLeafNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPayLen);
+  static constexpr size_t kLeafNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpLeafRecLen;
 
   /// the expected capacity of internal nodes for bulkloading.
-  static constexpr size_t kInnerNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPtrLen);
+  static constexpr size_t kInnerNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpInnerRecLen;
 
   /*####################################################################################
    * Internal utility functions
@@ -384,7 +399,7 @@ class BTree
 
     // check this tree requires SMOs
     ShrinkTreeIfNeeded();
-    auto *node = (root_->NeedSplit(kExpMaxRecLen)) ? RootSplit(key) : root_;
+    auto *node = (root_->NeedSplit(kMaxRecLen)) ? RootSplit(key) : root_;
 
     mutex_.UnlockSIX();
     return node;
@@ -456,7 +471,7 @@ class BTree
       auto *child = node->GetChildForWrite(pos);
 
       // perform internal SMOs eagerly
-      if (child->NeedSplit(kExpMaxRecLen)) {
+      if (child->NeedSplit(kMaxRecLen)) {
         Split(child, node, pos);
         child = child->GetValidSplitNode(key);
       } else if (child->NeedMerge()) {
@@ -665,14 +680,14 @@ class BTree
    *##################################################################################*/
 
   // Each node must have space for at least two records.
-  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
+  static_assert(2 * kMaxRecLen <= kMinBlockSize);
 
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
   /// a root node of this tree.
-  Node_t *root_ = new Node_t{true};
+  Node_t *root_ = new Node_t{kLeafFlag};
 
   /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};

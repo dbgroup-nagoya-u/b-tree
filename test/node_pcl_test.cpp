@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "b_tree/component/pcl/node_fixlen.hpp"
 #include "b_tree/component/pcl/node_varlen.hpp"
 
 // external libraries
@@ -25,31 +26,35 @@ namespace dbgroup::index::b_tree::component::pcl::test
  * Global constants
  *####################################################################################*/
 
-constexpr bool kLeafFlag = true;
+constexpr uint32_t kLeafFlag = 1;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
 
+/*######################################################################################
+ * Type aliases
+ *####################################################################################*/
+
+// extract key-payload types
+using Key = uint64_t;
+using Payload = uint64_t;
+using KeyComp = std::less<Key>;
+using PayloadComp = std::less<Payload>;
+using NodeVarLen_t = NodeVarLen<Key, KeyComp>;
+using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
+
+/*######################################################################################
+ * Fixture definitions
+ *####################################################################################*/
+
+template <class Node>
 class NodeFixture : public testing::Test
 {
  protected:
   /*####################################################################################
-   * Type aliases
-   *##################################################################################*/
-
-  // extract key-payload types
-  using Key = uint64_t;
-  using Payload = uint64_t;
-  using KeyComp = std::less<Key>;
-  using PayloadComp = std::less<Payload>;
-
-  // define type aliases for simplicity
-  using Node_t = NodeVarLen<Key, KeyComp>;
-
-  /*####################################################################################
    * Internal constants
    *##################################################################################*/
 
-  static constexpr size_t kHeaderLen = sizeof(Node_t);
+  static constexpr size_t kHeaderLen = sizeof(Node);
   static constexpr size_t kMetaLen = sizeof(Metadata);
   static constexpr size_t kKeyLen = sizeof(Key);
   static constexpr size_t kPayLen = sizeof(Payload);
@@ -64,7 +69,10 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::make_unique<Node_t>(kLeafFlag);
+    node_ = std::make_unique<Node>(kLeafFlag);
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      node_->SetPayloadLength(kPayLen);
+    }
   }
 
   void
@@ -176,147 +184,182 @@ class NodeFixture : public testing::Test
   }
 
   /*####################################################################################
+   * Internal test definitions
+   *##################################################################################*/
+
+  /*------------------------------------------------------------------------------------
+   * Leaf read/write APIs
+   *----------------------------------------------------------------------------------*/
+
+  void
+  TestWrite()
+  {
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      Write(i, i);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectSuccess);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      Write(i, i + 1);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i + 1, kExpectSuccess);
+    }
+  }
+
+  void
+  TestInsert()
+  {
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyInsert(i, i, kExpectSuccess);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectSuccess);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyInsert(i, i + 1, kExpectFailed);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectSuccess);
+    }
+  }
+
+  void
+  TestUpdate()
+  {
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyUpdate(i, i + 1, kExpectFailed);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectFailed);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      Write(i, i);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyUpdate(i, i + 1, kExpectSuccess);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i + 1, kExpectSuccess);
+    }
+  }
+
+  void
+  TestDelete()
+  {
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyDelete(i, kExpectFailed);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectFailed);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      Write(i, i);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyDelete(i, kExpectSuccess);
+    }
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectFailed);
+    }
+  }
+
+  /*------------------------------------------------------------------------------------
+   * Leaf SMO APIs
+   *----------------------------------------------------------------------------------*/
+
+  void
+  TestSplit()
+  {
+    // fill the node
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      Write(i, i);
+    }
+
+    // perform splitting
+    auto *r_node = new Node{kLeafFlag};
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      r_node->SetPayloadLength(kPayLen);
+    }
+    node_->LockSIX();
+    node_->Split(r_node);
+    node_->UnlockSIX();
+
+    // check the split nodes have the same number of records
+    const auto l_count = node_->GetRecordCount();
+    const auto r_count = r_node->GetRecordCount();
+    EXPECT_EQ(l_count, r_count);
+
+    // check the split nodes have the written records
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      if (i == l_count) {
+        node_.reset(r_node);
+      }
+      VerifyRead(i, i, kExpectSuccess);
+    }
+  }
+
+  void
+  TestMerge()
+  {
+    constexpr auto kHalfNum = kRecNumInNode / 2;
+
+    // fill a right node
+    for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
+      Write(i, i);
+    }
+    auto *r_node = node_.release();
+
+    // fill a left node
+    node_ = std::make_unique<Node>(kLeafFlag);
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      node_->SetPayloadLength(kPayLen);
+    }
+    for (size_t i = 0; i < kHalfNum; ++i) {
+      Write(i, i);
+    }
+
+    // merge the two nodes
+    node_->LockSIX();
+    node_->Merge(r_node);
+    node_->UnlockSIX();
+    delete r_node;
+
+    // check the merged node has the written records
+    for (size_t i = 0; i < kRecNumInNode; ++i) {
+      VerifyRead(i, i, kExpectSuccess);
+    }
+  }
+
+  /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
-  std::unique_ptr<Node_t> node_{nullptr};
+  std::unique_ptr<Node> node_{nullptr};
 };
+
+/*######################################################################################
+ * Preparation for typed testing
+ *####################################################################################*/
+
+using TestTargets = ::testing::Types<NodeVarLen_t, NodeFixLen_t>;
+TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
 /*######################################################################################
  * Test definitions
  *####################################################################################*/
 
-/*--------------------------------------------------------------------------------------
- * Leaf read/write APIs
- *------------------------------------------------------------------------------------*/
+TYPED_TEST(NodeFixture, WritePerformUpsertOperation) { TestFixture::TestWrite(); }
 
-TEST_F(NodeFixture, WritePerformUpsertOperation)
-{
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    Write(i, i);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectSuccess);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    Write(i, i + 1);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i + 1, kExpectSuccess);
-  }
-}
+TYPED_TEST(NodeFixture, InsertFailedWithDuplicateKeys) { TestFixture::TestInsert(); }
 
-TEST_F(NodeFixture, InsertFailedWithDuplicateKeys)
-{
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyInsert(i, i, kExpectSuccess);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectSuccess);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyInsert(i, i + 1, kExpectFailed);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectSuccess);
-  }
-}
+TYPED_TEST(NodeFixture, UpdateFailedWithNotInsertedKeys) { TestFixture::TestUpdate(); }
 
-TEST_F(NodeFixture, UpdateFailedWithNotInsertedKeys)
-{
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyUpdate(i, i + 1, kExpectFailed);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectFailed);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    Write(i, i);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyUpdate(i, i + 1, kExpectSuccess);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i + 1, kExpectSuccess);
-  }
-}
+TYPED_TEST(NodeFixture, DeleteFailedWithNotInsertedKeys) { TestFixture::TestDelete(); }
 
-TEST_F(NodeFixture, DeleteFailedWithNotInsertedKeys)
-{
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyDelete(i, kExpectFailed);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectFailed);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    Write(i, i);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyDelete(i, kExpectSuccess);
-  }
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectFailed);
-  }
-}
+TYPED_TEST(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes) { TestFixture::TestSplit(); }
 
-/*--------------------------------------------------------------------------------------
- * Leaf SMO APIs
- *------------------------------------------------------------------------------------*/
-
-TEST_F(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes)
-{
-  // fill the node
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    Write(i, i);
-  }
-
-  // perform splitting
-  auto *r_node = new Node_t{kLeafFlag};
-  node_->LockSIX();
-  node_->Split(r_node);
-  node_->UnlockSIX();
-
-  // check the split nodes have the same number of records
-  const auto l_count = node_->GetRecordCount();
-  const auto r_count = r_node->GetRecordCount();
-  EXPECT_EQ(l_count, r_count);
-
-  // check the split nodes have the written records
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    if (i == l_count) {
-      node_.reset(r_node);
-    }
-    VerifyRead(i, i, kExpectSuccess);
-  }
-}
-
-TEST_F(NodeFixture, MergeTwoNodesIntoSingleNode)
-{
-  constexpr auto kHalfNum = kRecNumInNode / 2;
-
-  // fill a right node
-  for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
-    Write(i, i);
-  }
-  auto *r_node = node_.release();
-
-  // fill a left node
-  node_ = std::make_unique<Node_t>(kLeafFlag);
-  for (size_t i = 0; i < kHalfNum; ++i) {
-    Write(i, i);
-  }
-
-  // merge the two nodes
-  node_->LockSIX();
-  node_->Merge(r_node);
-  node_->UnlockSIX();
-  delete r_node;
-
-  // check the merged node has the written records
-  for (size_t i = 0; i < kRecNumInNode; ++i) {
-    VerifyRead(i, i, kExpectSuccess);
-  }
-}
+TYPED_TEST(NodeFixture, MergeTwoNodesIntoSingleNode) { TestFixture::TestMerge(); }
 
 }  // namespace dbgroup::index::b_tree::component::pcl::test
