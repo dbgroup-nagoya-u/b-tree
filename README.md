@@ -1,8 +1,8 @@
-# B+trees
+# B<sup>+</sup>-trees
 
 ![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/b-tree/workflows/Ubuntu-20.04/badge.svg?branch=main)
 
-This repository contains open source implementations of B+trees for research use. The purpose of this implementation is to reproduce B+trees and measure its performance.
+This repository contains open source implementations of B<sup>+</sup>-trees for research use. The purpose of this implementation is to reproduce B<sup>+</sup>-trees and measure its performance.
 
 ## Build
 

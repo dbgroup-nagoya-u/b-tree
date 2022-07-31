@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_B_TREE_HPP
-#define B_TREE_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_PCL_B_TREE_HPP
+#define B_TREE_COMPONENT_PCL_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -23,10 +23,11 @@
 #include <vector>
 
 // local sources
-#include "component/node.hpp"
-#include "component/record_iterator.hpp"
+#include "b_tree/component/record_iterator.hpp"
+#include "node_fixlen.hpp"
+#include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree
+namespace dbgroup::index::b_tree::component::pcl
 {
 /**
  * @brief A class for representing B+trees with pessimistic coarse-grained locking.
@@ -36,9 +37,10 @@ namespace dbgroup::index::b_tree
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
+ * @tparam kIsVarLen a flag for indicating variable-length keys.
  */
-template <class Key, class Payload, class Comp = ::std::less<Key>>
-class BTreePCL
+template <class Key, class Payload, class Comp, bool kIsVarLen>
+class BTree
 {
  public:
   /*####################################################################################
@@ -47,10 +49,11 @@ class BTreePCL
 
   using K = Key;
   using V = Payload;
-  using Node_t = component::PessimisticNode<Key, Comp>;
-  using BTreePCL_t = BTreePCL<Key, Payload, Comp>;
-  using RecordIterator_t = component::RecordIterator<BTreePCL_t>;
-  using NodeRC = component::NodeRC;
+  using NodeVarLen_t = NodeVarLen<Key, Comp>;
+  using NodeFixLen_t = NodeFixLen<Key, Comp>;
+  using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
+  using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
+  using RecordIterator_t = RecordIterator<BTree_t>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -64,26 +67,31 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Construct a new BTreePCL object.
+   * @brief Construct a new BTree object.
    *
    */
-  BTreePCL() = default;
+  BTree()
+  {
+    if constexpr (!kIsVarLen) {
+      root_->SetPayloadLength(kPayLen);
+    }
+  }
 
-  BTreePCL(const BTreePCL &) = delete;
-  BTreePCL(BTreePCL &&) = delete;
+  BTree(const BTree &) = delete;
+  BTree(BTree &&) = delete;
 
-  BTreePCL &operator=(const BTreePCL &) = delete;
-  BTreePCL &operator=(BTreePCL &&) = delete;
+  BTree &operator=(const BTree &) = delete;
+  BTree &operator=(BTree &&) = delete;
 
   /*####################################################################################
    * Public destructors
    *##################################################################################*/
 
   /**
-   * @brief Destroy the BTreePCL object.
+   * @brief Destroy the BTree object.
    *
    */
-  ~BTreePCL()  //
+  ~BTree()  //
   {
     DeleteChildren(root_);
   }
@@ -93,7 +101,7 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Read the payload corresponding to a given key if it exists.
+   * @brief The entity of a function for reading records.
    *
    * @param key a target key.
    * @retval the payload of a given key wrapped with std::optional if it is in this tree.
@@ -113,7 +121,7 @@ class BTreePCL
   }
 
   /**
-   * @brief Perform a range scan with given keys.
+   * @brief The entity of a function for scanning records.
    *
    * @param begin_key a pair of a begin key and its openness (true=closed).
    * @param end_key a pair of an end key and its openness (true=closed).
@@ -146,11 +154,7 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Write (i.e., put) a given key/payload pair.
-   *
-   * If a given key does not exist in this tree, this function performs an insert
-   * operation. If a given key has been already inserted, this function perfroms an
-   * update operation. Thus, this function always returns kSuccess as a return code.
+   * @brief The entity of a function for putting records.
    *
    * @param key a target key to be written.
    * @param payload a target payload to be written.
@@ -165,22 +169,17 @@ class BTreePCL
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    node->Write(key, key_len, payload);
+    node->Write(key, key_len, &payload, kPayLen);
     return kSuccess;
   }
 
   /**
-   * @brief Insert a given key/payload pair.
-   *
-   * This function performs a uniqueness check in its processing. If a given key does
-   * not exist in this tree, this function inserts a target payload to this tree. If
-   * there is a given key in this tree, this function does nothing and returns kKeyExist
-   * as a return code.
+   * @brief The entity of a function for inserting records.
    *
    * @param key a target key to be inserted.
    * @param payload a target payload to be inserted.
    * @param key_len the length of a target key.
-   * @retval kSuccess if inserted.
+   * @retval.kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
   auto
@@ -191,16 +190,11 @@ class BTreePCL
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Insert(key, key_len, payload);
+    return node->Insert(key, key_len, &payload, kPayLen);
   }
 
   /**
-   * @brief Update the record corresponding to a given key with a given payload.
-   *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function updates the corresponding record. If a given key
-   * does not exist in this tree, this function does nothing and returns kKeyNotExist as
-   * a return code.
+   * @brief The entity of a function for updating records.
    *
    * @param key a target key to be updated.
    * @param payload a payload for updating.
@@ -216,17 +210,14 @@ class BTreePCL
       -> ReturnCode
   {
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Update(key, payload);
+    return node->Update(key, &payload, kPayLen);
   }
 
   /**
-   * @brief Delete the record corresponding to a given key from this tree.
-   *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function deletes it. If a given key does not exist in this
-   * tree, this function does nothing and returns kKeyNotExist as a return code.
+   * @brief The entity of a function for deleting records.
    *
    * @param key a target key to be deleted.
+   * @param key_len the length of a target key.
    * @retval kSuccess if deleted.
    * @retval kKeyNotExist otherwise.
    */
@@ -245,12 +236,7 @@ class BTreePCL
    *##################################################################################*/
 
   /**
-   * @brief Bulkload specified kay/payload pairs.
-   *
-   * This function bulkloads given entries into this index. The entries are assumed to
-   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
-   * variable-length keys). Note that keys in records are assumed to be unique and
-   * sorted.
+   * @brief The entity of a function for bulkinserting records.
    *
    * @param entries vector of entries to be bulkloaded.
    * @param thread_num the number of threads to perform bulkloading.
@@ -263,9 +249,6 @@ class BTreePCL
       const size_t thread_num = 1)  //
       -> ReturnCode
   {
-    assert(thread_num > 0);
-    assert(entries.size() >= thread_num);
-
     if (entries.empty()) return kSuccess;
 
     std::vector<Node_t *> nodes{};
@@ -335,6 +318,9 @@ class BTreePCL
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  /// a flag for indicating leaf nodes.
+  static constexpr uint32_t kLeafFlag = 1;
+
   /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
 
@@ -353,42 +339,33 @@ class BTreePCL
   /// the length of a header in each node page.
   static constexpr size_t kHeaderLen = sizeof(Node_t);
 
-  /// the expected maximum length of keys.
-  static constexpr size_t kExpMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+  /// the maximum length of keys.
+  static constexpr size_t kMaxKeyLen = (kIsVarLen) ? kMaxVarLenDataSize : sizeof(Key);
 
-  /// the expected maximum length of payloads (including child pointers).
-  static constexpr size_t kExpMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
+  /// the maximum length of payloads (including child pointers).
+  static constexpr size_t kMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
 
-  /// the expected maximum length of records.
-  static constexpr size_t kExpMaxRecLen = kExpMaxKeyLen + kExpMaxPayLen + kMetaLen;
+  /// the maximum length of records.
+  static constexpr size_t kMaxRecLen = kMaxKeyLen + kMaxPayLen + ((kIsVarLen) ? kMetaLen : 0);
 
-  /// the expected minimum block size in a certain node.
-  static constexpr size_t kExpMinBlockSize = kPageSize - kHeaderLen + kExpMaxKeyLen;
+  /// the minimum block size in a certain node.
+  static constexpr size_t kMinBlockSize = kPageSize - kHeaderLen - kMaxKeyLen;
+
+  /// the expected length of leaf records.
+  static constexpr size_t kExpLeafRecLen = sizeof(Key) + kPayLen + ((kIsVarLen) ? kMetaLen : 0);
+
+  /// the expected length of internal records.
+  static constexpr size_t kExpInnerRecLen = sizeof(Key) + kPtrLen + ((kIsVarLen) ? kMetaLen : 0);
 
   /// the expected capacity of leaf nodes for bulkloading.
-  static constexpr size_t kLeafNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPayLen);
+  static constexpr size_t kLeafNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpLeafRecLen;
 
   /// the expected capacity of internal nodes for bulkloading.
-  static constexpr size_t kInnerNodeCap = kExpMinBlockSize / (kMetaLen + sizeof(Key) + kPtrLen);
+  static constexpr size_t kInnerNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpInnerRecLen;
 
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
-
-  /**
-   * @retval true if a target key class is trivially copyable.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] static constexpr auto
-  IsValidKeyType()  //
-      -> bool
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
-    } else {
-      return std::is_trivially_copyable_v<Key>;
-    }
-  }
 
   /**
    * @return a root node with a shared lock.
@@ -422,7 +399,7 @@ class BTreePCL
 
     // check this tree requires SMOs
     ShrinkTreeIfNeeded();
-    auto *node = (root_->NeedSplit(kExpMaxRecLen)) ? RootSplit(key) : root_;
+    auto *node = (root_->NeedSplit(kMaxRecLen)) ? RootSplit(key) : root_;
 
     mutex_.UnlockSIX();
     return node;
@@ -494,7 +471,7 @@ class BTreePCL
       auto *child = node->GetChildForWrite(pos);
 
       // perform internal SMOs eagerly
-      if (child->NeedSplit(kExpMaxRecLen)) {
+      if (child->NeedSplit(kMaxRecLen)) {
         Split(child, node, pos);
         child = child->GetValidSplitNode(key);
       } else if (child->NeedMerge()) {
@@ -594,7 +571,6 @@ class BTreePCL
     if (r_node == nullptr) return;
 
     // perform merging
-    parent->UpgradeToX();
     l_node->Merge(r_node);
     parent->DeleteChild(l_node, l_pos);
     delete r_node;
@@ -702,25 +678,19 @@ class BTreePCL
    * Static assertions
    *##################################################################################*/
 
-  // target keys must be trivially copyable.
-  static_assert(IsValidKeyType());
-
-  // target payloads must be trivially copyable.
-  static_assert(std::is_trivially_copyable_v<Payload>);
-
   // Each node must have space for at least two records.
-  static_assert(2 * kExpMaxRecLen <= kExpMinBlockSize);
+  static_assert(2 * kMaxRecLen <= kMinBlockSize);
 
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
   /// a root node of this tree.
-  Node_t *root_ = new Node_t{true};
+  Node_t *root_ = new Node_t{kLeafFlag};
 
   /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};
 };
-}  // namespace dbgroup::index::b_tree
+}  // namespace dbgroup::index::b_tree::component::pcl
 
-#endif  // B_TREE_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_PCL_B_TREE_HPP
