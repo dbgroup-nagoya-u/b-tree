@@ -50,7 +50,7 @@ class BTree
   using K = Key;
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
-  using NodeFixLen_t = NodeVarLen<Key, Comp>;  // NodeFixLen<Key, Comp>;
+  using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
@@ -571,7 +571,6 @@ class BTree
     if (r_node == nullptr) return;
 
     // perform merging
-    parent->UpgradeToX();
     l_node->Merge(r_node);
     parent->DeleteChild(l_node, l_pos);
     delete r_node;

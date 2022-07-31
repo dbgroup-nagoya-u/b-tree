@@ -328,6 +328,8 @@ class NodeVarLen
       return nullptr;
     }
 
+    UpgradeToX();
+    r_node->UpgradeToX();
     return r_node;
   }
 
@@ -753,8 +755,6 @@ class NodeVarLen
   {
     const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
 
-    mutex_.UpgradeToX();
-
     // copy left half records to a temporal node
     size_t offset = kPageSize;
     size_t pos = 0;
@@ -780,6 +780,8 @@ class NodeVarLen
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
+
+    mutex_.UpgradeToX();  // upgrade the lock to modify the left node
 
     // update a header
     block_size_ = kPageSize - offset;

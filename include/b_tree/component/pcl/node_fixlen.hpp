@@ -81,9 +81,9 @@ class NodeFixLen
       const NodeFixLen *r_node)  //
       : is_leaf_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
   {
-    memcpy(&keys_[0], ShiftAddr(l_node, kHighKeyOffset), kKeyLen);
-    SetChild(kPageSize, l_node);
-    SetChild(kPageSize - kPtrLen, r_node);
+    keys_[0] = l_node->GetHighKey();
+    SetPayload(kPageSize, &l_node);
+    SetPayload(kPageSize - kPtrLen, &r_node);
   }
 
   NodeFixLen(const NodeFixLen &) = delete;
@@ -144,15 +144,7 @@ class NodeFixLen
       -> bool
   {
     // check whether the node has space for a new record
-    const auto total_size = kKeyLen * record_count_ + block_size_ + new_rec_len;
-    if (total_size <= kPageSize - kHeaderLen) return false;
-    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return true;
-
-    // this node has enough space but cleaning up is required
-    mutex_.UpgradeToX();
-    CleanUp();
-    mutex_.DowngradeToSIX();
-    return false;
+    return GetUsedSize() + new_rec_len > kPageSize - kHeaderLen;
   }
 
   /**
@@ -164,14 +156,7 @@ class NodeFixLen
       -> bool
   {
     // check this node uses enough space
-    if (GetUsedSize() < kMinUsedSpaceSize) return true;
-    if (deleted_size_ <= kMaxDeletedSpaceSize) return false;
-
-    // this node has a lot of dead space
-    mutex_.UpgradeToX();
-    CleanUp();
-    mutex_.DowngradeToSIX();
-    return false;
+    return GetUsedSize() < kMinUsedSpaceSize;
   }
 
   /**
@@ -221,8 +206,7 @@ class NodeFixLen
       -> Node *
   {
     auto *node = this;
-    const auto &high_key = GetHighKey();
-    if (!high_key || Comp{}(*high_key, key)) {
+    if (!has_high_key_ || Comp{}(GetHighKey(), key)) {
       node = next_;
       node->mutex_.LockSIX();
       mutex_.UnlockSIX();
@@ -240,7 +224,6 @@ class NodeFixLen
   SetPayloadLength(const size_t pay_len)
   {
     pay_len_ = pay_len;
-    rec_len_ = pay_len + 1;
   }
 
   /*####################################################################################
@@ -269,12 +252,7 @@ class NodeFixLen
       -> Payload
   {
     Payload payload{};
-    if constexpr (std::is_same_v<Payload, Node *>) {
-      memcpy(&payload, GetChildAddr(pos), kPtrLen);
-    } else {
-      memcpy(&payload, ShiftAddr(GetPayloadAddr(pos), kFlagLen), sizeof(Payload));
-    }
-
+    memcpy(&payload, GetPayloadAddr(pos), sizeof(Payload));
     return payload;
   }
 
@@ -344,21 +322,20 @@ class NodeFixLen
       return nullptr;
     }
 
+    UpgradeToX();
+    r_node->UpgradeToX();
     return r_node;
   }
 
   /**
    * @param pos the position of a record.
-   * @retval true if the record is deleted.
-   * @retval false otherwise.
+   * @return false.
    */
-  [[nodiscard]] auto
-  RecordIsDeleted(const size_t pos) const  //
+  [[nodiscard]] constexpr auto
+  RecordIsDeleted([[maybe_unused]] const size_t pos) const  //
       -> bool
   {
-    bool is_deleted{};
-    memcpy(&is_deleted, GetPayloadAddr(pos), kFlagLen);
-    return is_deleted;
+    return false;
   }
 
   /**
@@ -459,7 +436,6 @@ class NodeFixLen
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        if (RecordIsDeleted(pos)) return {kKeyAlreadyDeleted, pos};
         return {kKeyAlreadyInserted, pos};
       }
     }
@@ -550,7 +526,7 @@ class NodeFixLen
     const auto [existence, pos] = SearchRecord(key);
     auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
-      memcpy(&out_payload, ShiftAddr(GetPayloadAddr(pos), kFlagLen), sizeof(Payload));
+      memcpy(&out_payload, GetPayloadAddr(pos), sizeof(Payload));
       rc = kSuccess;
     }
 
@@ -587,10 +563,8 @@ class NodeFixLen
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
       InsertRecord(key, payload, pos);
-    } else if (rc == kKeyAlreadyDeleted) {
-      ReuseRecord(payload, pos);
     } else {  // update operation
-      memcpy(ShiftAddr(GetPayloadAddr(pos), kFlagLen), payload, pay_len_);
+      memcpy(GetPayloadAddr(pos), payload, pay_len_);
     }
 
     mutex_.UnlockX();
@@ -622,13 +596,10 @@ class NodeFixLen
     const auto [existence, pos] = SearchRecord(key);
 
     // perform insert operation if possible
-    auto rc = kSuccess;
+    auto rc = kKeyExist;
     if (existence == kKeyNotInserted) {
       InsertRecord(key, payload, pos);
-    } else if (existence == kKeyAlreadyDeleted) {
-      ReuseRecord(payload, pos);
-    } else {  // a target key has been inserted
-      rc = kKeyExist;
+      rc = kSuccess;
     }
 
     mutex_.UnlockX();
@@ -661,7 +632,7 @@ class NodeFixLen
     // perform update operation if possible
     auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
-      memcpy(ShiftAddr(GetPayloadAddr(pos), kFlagLen), payload, pay_len_);
+      memcpy(GetPayloadAddr(pos), payload, pay_len_);
       rc = kSuccess;
     }
 
@@ -687,12 +658,18 @@ class NodeFixLen
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
 
-    // perform update operation if possible
     auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
-      auto *pay_addr = GetPayloadAddr(pos);
-      memcpy(pay_addr, &kIsDeleted, kFlagLen);
-      deleted_size_ += rec_len_;
+      // remove a key and a payload
+      const auto move_num = record_count_ - 1 - pos;
+      memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * move_num);
+      auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
+      memmove(ShiftAddr(top_addr, pay_len_), top_addr, pay_len_ * move_num);
+
+      // update header information
+      --record_count_;
+      block_size_ -= pay_len_;
+
       rc = kSuccess;
     }
 
@@ -713,19 +690,16 @@ class NodeFixLen
       const Node *r_node,
       const size_t pos)  //
   {
-    // update a current pointer and prepare space for a left child
-    memcpy(GetChildAddr(pos), &r_node, kPtrLen);
-
-    // insert a left child
+    // insert a right child
     const auto move_num = record_count_ - 1 - pos;
     const auto move_size = kPtrLen * move_num;
     const auto top_offset = kPageSize - block_size_;
     memmove(ShiftAddr(this, top_offset - kPtrLen), ShiftAddr(this, top_offset), move_size);
-    SetChild(top_offset + move_size, &l_node, kPtrLen);
+    SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num - 1));
-    memcpy(&keys_[pos], ShiftAddr(l_node, kHighKeyOffset), kKeyLen);
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
+    keys_[pos] = l_node->GetHighKey();
 
     // update header information
     ++record_count_;
@@ -742,20 +716,20 @@ class NodeFixLen
    */
   void
   DeleteChild(  //
-      const Node *l_node,
+      [[maybe_unused]] const Node *l_node,
       const size_t pos)  //
   {
     // delete a separator key
     const auto move_num = record_count_ - 2 - pos;
-    memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * move_num);
+    memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
 
     // delete a right child
-    memcpy(GetChildAddr(pos), &l_node, kPtrLen);
     auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
     memmove(ShiftAddr(top_addr, kPtrLen), top_addr, kPtrLen * move_num);
 
     // update this header
     --record_count_;
+    block_size_ -= kPtrLen;
 
     mutex_.UnlockX();
   }
@@ -772,46 +746,27 @@ class NodeFixLen
   void
   Split(Node *r_node)
   {
-    const auto half_size = (kKeyLen * record_count_ + block_size_ - deleted_size_) / 2;
-    const auto rec_len = kKeyLen + rec_len_;
-
-    // reset a temp node
-    temp_node_->record_count_ = 0;
-    temp_node_->pay_len_ = pay_len_;
-    temp_node_->rec_len_ = rec_len_;
-
-    mutex_.UpgradeToX();
-
-    // copy left half records to a temporal node
-    size_t offset = kHighKeyOffset;
-    size_t pos = 0;
-    for (size_t used_size = 0; used_size < half_size; ++pos) {
-      if (!RecordIsDeleted(pos)) {
-        offset = temp_node_->CopyRecordFrom(this, pos, offset);
-        used_size += rec_len;
-      }
-    }
-    memcpy(ShiftAddr(temp_node_.get(), kHighKeyOffset), &keys_[pos - 1], kKeyLen);
+    const auto l_count = record_count_ / 2;
+    const auto r_count = record_count_ - l_count;
 
     // copy right half records to a right node
-    r_node->CopyHighKeyFrom(this);
-    auto r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, kHighKeyOffset);
+    r_node->pay_len_ = pay_len_;
+    auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
+    r_node->keys_[r_count] = keys_[record_count_];
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
-    r_node->pay_len_ = pay_len_;
-    r_node->rec_len_ = rec_len_;
+    r_node->has_high_key_ = has_high_key_;
+
+    mutex_.UpgradeToX();  // upgrade the lock to modify the left node
 
     // update a header
-    block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
-    record_count_ = temp_node_->record_count_;
+    block_size_ -= r_node->block_size_;
+    record_count_ = l_count;
     next_ = r_node;
-
-    // copy temporal node to this node
-    memcpy(keys_, temp_node_->keys_, kKeyLen * record_count_);
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
+    has_high_key_ = 1;
+    keys_[l_count] = keys_[l_count - 1];
 
     mutex_.DowngradeToSIX();
   }
@@ -826,33 +781,13 @@ class NodeFixLen
   {
     mutex_.UpgradeToX();
 
-    // reset a temp node
-    temp_node_->record_count_ = 0;
-    temp_node_->pay_len_ = pay_len_;
-    temp_node_->rec_len_ = rec_len_;
-
-    // copy a highest key of a merged node to a temporal node
-    temp_node_->CopyHighKeyFrom(r_node);
-
-    // copy consolidated records to the original node
-    auto offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, kHighKeyOffset);
-    record_count_ = temp_node_->record_count_;
-    if (is_leaf_) {
-      memcpy(keys_, temp_node_->keys_, kKeyLen * record_count_);
-    } else {
-      const auto sep_pos = record_count_ - 1;
-      memcpy(keys_, temp_node_->keys_, kKeyLen * sep_pos);
-      memcpy(&keys_[sep_pos], ShiftAddr(temp_node_.get(), kHighKeyOffset), kKeyLen);
-    }
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
-
     // copy right records to this nodes
-    offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, offset);
+    auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
 
     // update a header
     block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
     next_ = r_node->next_;
+    has_high_key_ = r_node->has_high_key_;
 
     mutex_.DowngradeToSIX();
   }
@@ -880,18 +815,17 @@ class NodeFixLen
       Node *l_node)
   {
     constexpr auto kPayLen = sizeof(Payload);
-    constexpr auto kRecLen = kKeyLen + kPayLen + kFlagLen;
+    constexpr auto kRecLen = kKeyLen + kPayLen;
     constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
 
     // set header information for treating payloads
     pay_len_ = kPayLen;
-    rec_len_ = kPayLen + kFlagLen;
 
     // extract and insert entries for the leaf node
-    const auto n = std::distance(iter, iter_end);
+    const size_t n = std::distance(iter, iter_end);
     const auto has_last_record = n < kNodeCap;
     const auto rec_count = (has_last_record) ? n : kNodeCap;
-    auto offset = (has_last_record && is_rightmost) ? kPageSize : kHighKeyOffset;
+    auto offset = kPageSize;
     for (size_t i = 0; i < rec_count; ++i, ++iter) {
       // insert an entry to the leaf node
       const auto &[key, payload] = *iter;
@@ -902,7 +836,7 @@ class NodeFixLen
     // set a highest key if this node is not rightmost
     if (!has_last_record || !is_rightmost) {
       has_high_key_ = 1;
-      memcpy(ShiftAddr(this, kHighKeyOffset), &keys_[record_count_ - 1], kKeyLen);
+      keys_[rec_count] = keys_[rec_count - 1];
     }
 
     // update header information
@@ -927,23 +861,18 @@ class NodeFixLen
     constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
 
     // check the number of child nodes to be loaded
-    const auto n = std::distance(iter, iter_end);
+    const size_t n = std::distance(iter, iter_end);
     const auto rec_count = (n < kNodeCap) ? n : kNodeCap;
-    const auto last_child = *std::next(iter, rec_count);
-
-    // copy a highest key if this node is rightmost
-    auto offset = kPageSize;
-    if (last_child->has_high_key_) {
-      memcpy(ShiftAddr(this, kHighKeyOffset), ShiftAddr(last_child, kHighKeyOffset), kKeyLen);
-      offset -= kKeyLen;
-    }
+    const auto *last_child = *std::next(iter, rec_count - 1);
+    has_high_key_ = last_child->has_high_key_;
 
     // extract and insert entries for the leaf node
+    auto offset = kPageSize;
     for (size_t i = 0; i < rec_count; ++i, ++iter) {
       // insert an entry to the inner node
       const auto *child = *iter;
-      memcpy(&keys_[record_count_++], ShiftAddr(child, kHighKeyOffset), kKeyLen);
-      offset = SetChild(offset, &child);
+      keys_[record_count_++] = child->GetHighKey();
+      offset = SetPayload(offset, &child);
     }
 
     // update header information
@@ -964,20 +893,8 @@ class NodeFixLen
   /// the length of a header in each node page.
   static constexpr size_t kHeaderLen = sizeof(Node);
 
-  /// the length of a deleted flag.
-  static constexpr size_t kFlagLen = sizeof(bool);
-
-  /// the offset to a highest key.
-  static constexpr size_t kHighKeyOffset = kPageSize - kKeyLen;
-
   /// the maximum usage of record space.
   static constexpr size_t kMaxUsedSpaceSize = kPageSize - (kHeaderLen + kMinFreeSpaceSize);
-
-  /// a flag for indicating live records
-  static constexpr uint8_t kIsLive = 0;
-
-  /// a flag for indicating deleted records
-  static constexpr uint8_t kIsDeleted = 1;
 
   /*####################################################################################
    * Internal getter for header information
@@ -994,10 +911,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-
-    Key high_key{};
-    memcpy(&high_key, ShiftAddr(this, kHighKeyOffset), kKeyLen);
-    return !Comp{}(high_key, end_key->first);
+    return !Comp{}(GetHighKey(), end_key->first);
   }
 
   /**
@@ -1007,8 +921,7 @@ class NodeFixLen
   GetUsedSize() const  //
       -> size_t
   {
-    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-    return kKeyLen * (record_count_ - inner_diff) + block_size_ - deleted_size_;
+    return kKeyLen * (record_count_ + (is_leaf_ & has_high_key_)) + block_size_;
   }
 
   /**
@@ -1017,13 +930,10 @@ class NodeFixLen
    */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> std::optional<Key>
+      -> const Key &
   {
-    if (has_high_key_ == 0) return std::nullopt;
-
-    Key high_key{};
-    memcpy(&high_key, ShiftAddr(this, kHighKeyOffset), kKeyLen);
-    return high_key;
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    return keys_[record_count_ - is_inner];
   }
 
   /*####################################################################################
@@ -1038,18 +948,7 @@ class NodeFixLen
   GetPayloadAddr(const size_t pos) const  //
       -> void *
   {
-    return ShiftAddr(this, kPageSize - block_size_ + (record_count_ - 1 - pos) * rec_len_);
-  }
-
-  /**
-   * @param pos the position of a target record.
-   * @return an address of a target payload.
-   */
-  [[nodiscard]] constexpr auto
-  GetChildAddr(const size_t pos) const  //
-      -> void *
-  {
-    return ShiftAddr(this, kPageSize - block_size_ + (record_count_ - 1 - pos) * kPtrLen);
+    return ShiftAddr(this, kPageSize - (pos + 1) * pay_len_);
   }
 
   /**
@@ -1066,24 +965,6 @@ class NodeFixLen
   {
     offset -= pay_len_;
     memcpy(ShiftAddr(this, offset), payload, pay_len_);
-    offset -= kFlagLen;
-    memcpy(ShiftAddr(this, offset), &kIsLive, kFlagLen);
-    return offset;
-  }
-  /**
-   * @brief Set a target child node directly.
-   *
-   * @param offset an offset to the top of the record block.
-   * @param payload a target payload to be written.
-   */
-  auto
-  SetChild(  //
-      size_t offset,
-      const void *payload)  //
-      -> size_t
-  {
-    offset -= kPtrLen;
-    memcpy(ShiftAddr(this, offset), payload, kPtrLen);
     return offset;
   }
 
@@ -1107,79 +988,18 @@ class NodeFixLen
     const auto move_num = record_count_ - pos;
 
     // insert a new key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * move_num);
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
     keys_[pos] = key;
 
     // insert a new payload
     const auto top_offset = kPageSize - block_size_;
-    const auto move_size = rec_len_ * move_num;
-    memmove(ShiftAddr(this, top_offset - rec_len_), ShiftAddr(this, top_offset), move_size);
+    const auto move_size = pay_len_ * move_num;
+    memmove(ShiftAddr(this, top_offset - pay_len_), ShiftAddr(this, top_offset), move_size);
     SetPayload(top_offset + move_size, payload);
 
     // update header information
     ++record_count_;
-    block_size_ += rec_len_;
-  }
-
-  /**
-   * @brief Reuse the deleted record to insert a new record.
-   *
-   * @param payload a target payload to be written.
-   * @param pos the position of the deleted record.
-   */
-  void
-  ReuseRecord(  //
-      const void *payload,
-      const size_t pos)
-  {
-    // reuse a deleted record
-    auto *pay_addr = GetPayloadAddr(pos);
-    memcpy(pay_addr, &kIsLive, kFlagLen);
-    memcpy(ShiftAddr(pay_addr, 1), payload, pay_len_);
-
-    // update header information
-    deleted_size_ -= rec_len_;
-  }
-
-  /**
-   * @brief Clean up this node.
-   *
-   */
-  void
-  CleanUp()
-  {
-    // reset a temp node
-    temp_node_->record_count_ = 0;
-    temp_node_->pay_len_ = pay_len_;
-    temp_node_->rec_len_ = rec_len_;
-
-    // copy records to a temporal node
-    temp_node_->CopyHighKeyFrom(this);
-    auto offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, kHighKeyOffset);
-
-    // update a header
-    block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
-    record_count_ = temp_node_->record_count_;
-
-    // copy cleaned up records to the original node
-    has_high_key_ = temp_node_->has_high_key_;
-    memcpy(&keys_, &(temp_node_->keys_), kKeyLen * record_count_);
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
-  }
-
-  /**
-   * @brief Copy a high key from a given node.
-   *
-   * @param node an original node that has a high key.
-   * @return the updated offset value.
-   */
-  void
-  CopyHighKeyFrom(const Node *node)  //
-  {
-    if (node->has_high_key_) {
-      memcpy(ShiftAddr(this, kHighKeyOffset), ShiftAddr(node, kHighKeyOffset), kKeyLen);
-    }
+    block_size_ += pay_len_;
   }
 
   /**
@@ -1199,8 +1019,8 @@ class NodeFixLen
   {
     // copy a record from the given node
     keys_[record_count_++] = node->keys_[pos];
-    offset -= rec_len_;
-    memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(pos), rec_len_);
+    offset -= pay_len_;
+    memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(pos), pay_len_);
 
     return offset;
   }
@@ -1224,9 +1044,7 @@ class NodeFixLen
   {
     // copy records from the given node
     for (size_t i = begin_pos; i < end_pos; ++i) {
-      if (!RecordIsDeleted(i)) {
-        offset = CopyRecordFrom(node, i, offset);
-      }
+      offset = CopyRecordFrom(node, i, offset);
     }
 
     return offset;
@@ -1242,11 +1060,11 @@ class NodeFixLen
   /// the total byte length of records in a node.
   uint32_t block_size_ : 31;
 
-  /// the total byte length of deleted records in a node.
-  uint16_t deleted_size_{0};
-
   /// the number of records in this node.
   uint16_t record_count_{0};
+
+  /// the length of payloads in this node.
+  uint16_t pay_len_{kPtrLen};
 
   /// a lock for concurrency controls.
   ::dbgroup::lock::PessimisticLock mutex_{};
@@ -1255,13 +1073,10 @@ class NodeFixLen
   Node *next_{nullptr};
 
   /// a flag for a highest key.
-  uint32_t has_high_key_ : 1;
+  uint64_t has_high_key_ : 1;
 
-  uint32_t : 0;
-
-  uint16_t pay_len_{kPtrLen};
-
-  uint16_t rec_len_{kPtrLen};
+  /// an alignment block.
+  uint64_t : 0;
 
   /// an actual data block (it starts with record keys).
   Key keys_[0];
