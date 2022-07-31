@@ -14,35 +14,25 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/pcl/b_tree.hpp"
+#include "b_tree/b_tree.hpp"
 
 // organization libraries
-#include "external/index-fixtures/index_fixture.hpp"
-
-namespace dbgroup::index::b_tree
-{
-/**
- * @brief Use CString as variable-length data in tests.
- *
- */
-template <>
-constexpr auto
-IsVarLenData<char *>()  //
-    -> bool
-{
-  return true;
-}
-
-}  // namespace dbgroup::index::b_tree
+#include "external/index-fixtures/index_fixture_multi_thread.hpp"
 
 namespace dbgroup::index::test
 {
+/*######################################################################################
+ * Global constants
+ *####################################################################################*/
+
+constexpr bool kIsVarLen = true;
+
 /*######################################################################################
  * Preparation for typed testing
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCLVarLen = ::dbgroup::index::b_tree::component::pcl::BTree<K, V, C, true>;
+using BTreePCLVarLen = ::dbgroup::index::b_tree::component::pcl::BTree<K, V, C, kIsVarLen>;
 
 using TestTargets = ::testing::Types<              //
     IndexInfo<BTreePCLVarLen, UInt8, UInt8>,       // fixed-length keys
@@ -53,12 +43,12 @@ using TestTargets = ::testing::Types<              //
     IndexInfo<BTreePCLVarLen, Ptr, Ptr>,           // pointer keys/payloads
     IndexInfo<BTreePCLVarLen, Original, Original>  // original class keys/payloads
     >;
-TYPED_TEST_SUITE(IndexFixture, TestTargets);
+TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
  *####################################################################################*/
 
-#include "external/index-fixtures/index_fixture_test_definitions.hpp"
+#include "external/index-fixtures/index_fixture_multi_thread_test_definitions.hpp"
 
 }  // namespace dbgroup::index::test

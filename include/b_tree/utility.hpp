@@ -56,6 +56,30 @@ IsVarLenData()  //
   return false;
 }
 
+/**
+ * @brief Use binary data as variable-length data.
+ *
+ */
+template <>
+constexpr auto
+IsVarLenData<char *>()  //
+    -> bool
+{
+  return true;
+}
+
+/**
+ * @brief Use binary data as variable-length data.
+ *
+ */
+template <>
+constexpr auto
+IsVarLenData<std::byte *>()  //
+    -> bool
+{
+  return true;
+}
+
 /*######################################################################################
  * Tuning parameters for B+trees
  *####################################################################################*/
