@@ -30,12 +30,14 @@ namespace dbgroup::index::b_tree
  * @tparam Comp a class for ordering keys.
  * @tparam kUseOptimisticLock a flag for using optimistic locking.
  * @tparam kUseFineGrainedSMOs a flag for using fine-grained SMOs.
+ * @tparam kIsVarLen a flag for indicating variable-length keys.
  */
 template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           bool kUseOptimisticLock = true,
-          bool kUseFineGrainedSMOs = true>
+          bool kUseFineGrainedSMOs = true,
+          bool kIsVarLen = IsVarLenData<Key>()>
 class BTree
 {
  public:
@@ -43,7 +45,7 @@ class BTree
    * Type aliases
    *##################################################################################*/
 
-  using BTree_t = component::pcl::BTree<Key, Payload, Comp, IsVarLenData<Key>()>;
+  using BTree_t = component::pcl::BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = component::RecordIterator<BTree_t>;
 
   /*####################################################################################
@@ -244,7 +246,12 @@ class BTree
       -> bool
   {
     if constexpr (IsVarLenData<Key>()) {
-      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+      if constexpr (!kIsVarLen) {
+        // tried to construct B+trees for fixed-length data, but variable-length keys were input
+        return false;
+      } else {
+        return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+      }
     } else {
       return std::is_trivially_copyable_v<Key>;
     }
@@ -269,12 +276,20 @@ class BTree
 };
 
 /*######################################################################################
- * Aliases for usability
+ * Aliases for convenience
  *####################################################################################*/
 
 /// an alias for using a B+tree with pessimistic coarse-grained locking.
 template <class Key, class Payload, class Comp = std::less<Key>>
 using BTreePCL = BTree<Key, Payload, Comp, false, false>;
+
+/// an alias for using a B+tree with pessimistic coarse-grained locking and variable-length keys.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreePCLVarLen = BTree<Key, Payload, Comp, false, false, true>;
+
+/// an alias for using a B+tree with pessimistic coarse-grained locking and fixed-length keys.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreePCLFixLen = BTree<Key, Payload, Comp, false, false, false>;
 
 }  // namespace dbgroup::index::b_tree
 

@@ -32,7 +32,7 @@ constexpr bool kIsVarLen = true;
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCLFixLen = ::dbgroup::index::b_tree::component::pcl::BTree<K, V, C, !kIsVarLen>;
+using BTreePCLFixLen = ::dbgroup::index::b_tree::BTreePCLFixLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
     IndexInfo<BTreePCLFixLen, UInt8, UInt8>,       // fixed-length keys
