@@ -37,13 +37,13 @@ namespace dbgroup::index::b_tree::component
  */
 enum NodeRC {
   kCompleted = 0,
-  kHasSpace,
-  kKeyNotInserted = -6,
+  kKeyNotInserted = -7,
   kKeyAlreadyDeleted,
   kKeyAlreadyInserted,
-  kNeedCleanUp,
   kNeedSplit,
   kNeedMerge,
+  kAbortMerge,
+  kNeedWaitAndRetry,
 };
 
 /*######################################################################################
