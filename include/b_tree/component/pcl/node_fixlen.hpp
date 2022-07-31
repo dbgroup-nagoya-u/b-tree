@@ -1080,10 +1080,6 @@ class NodeFixLen
 
   /// an actual data block (it starts with record keys).
   Key keys_[0];
-
-  // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
 };
 
 }  // namespace dbgroup::index::b_tree::component::pcl
