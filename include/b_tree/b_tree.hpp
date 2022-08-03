@@ -19,6 +19,7 @@
 
 // local sources
 #include "component/pcl/b_tree.hpp"
+#include "component/pfl/b_tree.hpp"
 
 namespace dbgroup::index::b_tree
 {

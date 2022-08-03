@@ -73,15 +73,15 @@ class NodeVarLen
    * @param r_node a right child node.
    */
   NodeVarLen(  //
+      const Key &l_key,
+      const size_t l_key_len,
       const NodeVarLen *l_node,
       const NodeVarLen *r_node)  //
       : is_leaf_{0}, is_removed_{0}, record_count_{2}
   {
     // insert l_node
-    const auto l_high_meta = l_node->high_meta_;
-    const auto l_key_len = l_high_meta.key_len;
     auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
-    offset = CopyKeyFrom(l_node, l_high_meta, offset);
+    offset = SetKey(offset, l_key, l_key_len);
     meta_array_[0] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // insert r_node
@@ -172,7 +172,7 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> Node *
+      -> std::tuple<Node *, Key, size_t>
   {
     const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
 
@@ -224,7 +224,15 @@ class NodeVarLen
   GetHighKeyForSMOs() const  //
       -> std::pair<Key, size_t>
   {
-    return {GetKey(high_meta_), high_meta_.key_len};
+    if constexpr (IsVarLenData<Key>()) {
+      // allocate space dynamically to keep a copied key
+      const auto h_key_len = high_meta_.key_len;
+      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len));
+      memcpy(h_key, GetKeyAddr(high_meta_), h_key_len);
+      return {h_key, h_key_len};
+    } else {
+      return {GetKey(high_meta_), high_meta_.key_len};
+    }
   }
 
   /*####################################################################################
@@ -516,7 +524,7 @@ class NodeVarLen
       if (node->is_removed_ == 0) {
         // check the node includes a target key
         const auto &high_key = node->GetHighKey();
-        if (!high_key || Comp{}(key, *high_key) || (is_closed && Comp{}(*high_key, key))) {
+        if (!high_key || Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
           return node;
         }
       }
@@ -762,8 +770,8 @@ class NodeVarLen
 
     // insert a split-right child node
     const auto *l_node = GetPayload<Node *>(pos);
-    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);  // update as a right child
-    auto offset = SetPayload(kPageSize - block_size_, l_node);   // insert a left node
+    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);           // update as a right child
+    auto offset = SetPayload(kPageSize - block_size_, &l_node, kPtrLen);  // insert a left node
     offset = SetKey(offset, sep_key, sep_key_len);
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
     meta_array_[pos] = Metadata{offset, sep_key_len, rec_len};
@@ -852,7 +860,9 @@ class NodeVarLen
     }
     const auto sep_key_len = meta_array_[pos - 1].key_len;
     temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
-    if (!is_leaf_) {
+    if (is_leaf_) {
+      offset -= sep_key_len;
+    } else {
       const auto rightmost_pos = temp_node_->record_count_ - 1;
       temp_node_->meta_array_[rightmost_pos] = Metadata{offset + sep_key_len, 0, kPtrLen};
     }
@@ -885,7 +895,7 @@ class NodeVarLen
    * @param r_node a right node to be merged.
    */
   void
-  Merge(const Node *r_node)
+  Merge(Node *r_node)
   {
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
@@ -909,6 +919,13 @@ class NodeVarLen
     deleted_size_ = 0;
     next_ = r_node->next_;
 
+    // update a header of a right node
+    r_node->is_removed_ = 1;
+    r_node->next_ = this;
+
+    mutex_.DowngradeToSIX();
+    r_node->mutex_.DowngradeToSIX();
+
     // reset a temp node
     temp_node_->record_count_ = 0;
   }
@@ -929,7 +946,8 @@ class NodeVarLen
     r_node->mutex_.UnlockX();
 
     // check the top position of a record block
-    const auto pos = SearchRecord(l_key).second;
+    auto [existence, pos] = SearchRecord(l_key);
+    pos -= (existence == kKeyAlreadyInserted) ? 0 : 1;
     auto offset = meta_array_[pos].offset;
     if (is_leaf_) {
       // set a highest key for leaf nodes
@@ -947,6 +965,24 @@ class NodeVarLen
     high_meta_ = Metadata{offset, l_key_len, l_key_len};
 
     mutex_.UnlockX();
+  }
+
+  auto
+  RemoveRoot()  //
+      -> Node *
+  {
+    mutex_.UpgradeToX();
+
+    // get a child node as a new root node
+    auto *child = GetPayload<Node *>(0);
+    child->LockSIX();
+
+    // remove this node from a tree
+    is_removed_ = 1;
+    next_ = child;
+
+    mutex_.UnlockX();
+    return child;
   }
 
   /*####################################################################################

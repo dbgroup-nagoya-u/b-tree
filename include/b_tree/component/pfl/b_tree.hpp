@@ -180,6 +180,9 @@ class BTree
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(sep_key);
+      }
     }
 
     return kSuccess;
@@ -214,6 +217,9 @@ class BTree
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(sep_key);
+      }
     }
 
     return kSuccess;
@@ -237,7 +243,7 @@ class BTree
   {
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    return node->Update(key, payload);
+    return node->Update(key, &payload, kPayLen);
   }
 
   /**
@@ -262,9 +268,12 @@ class BTree
     if (rc == NodeRC::kNeedMerge) {
       const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
       auto *r_node = TryHalfMerge(node);
-      if (r_node != nullptr && !TryCompleteMerge(stack, node, r_node, del_key)) {
+      if (r_node != nullptr && !TryCompleteMerge(stack, r_node, del_key)) {
         // abort merging due to a conflict with concurrent splitting
         node->AbortMerge(r_node, del_key, del_key_len);
+      }
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(del_key);
       }
     }
 
@@ -357,6 +366,8 @@ class BTree
 
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
+
+  static constexpr auto kRetryWait = std::chrono::microseconds{10};
 
   /// a flag for indicating leaf nodes.
   static constexpr uint32_t kLeafFlag = 1;
@@ -591,17 +602,20 @@ class BTree
     while (true) {
       // insert a new entry into a tree
       node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
-      const auto rc = node->InsertChild(l_key, l_key_len, r_child);
+      const auto rc = node->InsertChild(r_child, l_key, l_key_len);
       if (rc == NodeRC::kCompleted) return;
 
       if (rc == NodeRC::kNeedSplit) {
         // since a parent node is full, perform splitting
-        const auto *r_node = Split(node);
+        const auto *r_node = HalfSplit(node);
         auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(l_key);
-        target_node->InsertChild(l_key, l_key_len, r_child);
+        target_node->InsertChild(r_child, l_key, l_key_len);
 
         // complete splitting by inserting a new entry
         CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+        if constexpr (IsVarLenData<Key>()) {
+          ::operator delete(sep_key);
+        }
         return;
       }
 
@@ -633,7 +647,7 @@ class BTree
     auto *cur_root = root_.load(std::memory_order_relaxed);
     if (cur_root == l_child) {
       // install a new root node
-      auto *new_root = new Node_t{l_child, r_child};
+      auto *new_root = new Node_t{l_key, l_key_len, l_child, r_child};
       root_.store(new_root, std::memory_order_release);
       return true;
     }
@@ -667,14 +681,10 @@ class BTree
   [[nodiscard]] auto
   TryCompleteMerge(  //
       std::vector<Node_t *> &stack,
-      Node_t *l_child,
       Node_t *r_child,
       const Key &l_key)  //
       -> bool
   {
-    // perform root node splitting if needed
-    if (stack.size() < 2 && TryShrinkTree(stack, l_child, r_child, l_key, l_key_len)) return true;
-
     stack.pop_back();  // remove a child node from a stack
     auto *node = stack.back();
     while (true) {
@@ -694,28 +704,37 @@ class BTree
 
       // merging of parent nodes is required
       const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
-      auto *r_node = TryMerge(node);
-      if (r_node != nullptr && !TryCompleteMerge(stack, node, r_node, del_key)) {
-        // abort merging due to a conflict with concurrent splitting
-        Node_t::AbortMerge<!kIsLeaf>(node, r_node, del_key, del_key_len);
+      auto *r_node = TryHalfMerge(node);
+      if (r_node != nullptr) {
+        if (!TryCompleteMerge(stack, r_node, del_key)) {
+          // abort merging due to a conflict with concurrent splitting
+          node->AbortMerge(r_node, del_key, del_key_len);
+        }
+      } else if (stack.size() == 1) {
+        TryShrinkTree(node);
+      }
+
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(del_key);
       }
       return true;
     }
   }
 
-  [[nodiscard]] auto
-  TryShrinkTree()  //
-      -> Node_t *
+  void
+  TryShrinkTree(Node_t *node)
   {
-    // a root node cannot be merged
-    while (!root_->IsLeaf() && root_->GetRecordCount() == 1) {
-      // if a root node has only one child, shrink a tree
-      auto *child = root_->template GetPayload<Node_t *>(0);
-      child->AcquireExclusiveLock();
-      delete root_;
-      root_ = child;
+    node->LockSIX();
+
+    auto *old_root = root_.load(std::memory_order_relaxed);
+    if (node == old_root && node->GetRecordCount() == 1) {
+      do {
+        node = node->RemoveRoot();
+      } while (node->GetRecordCount() == 1 && !node->IsLeaf());
+      root_.store(node, std::memory_order_relaxed);
     }
-    return root_;
+
+    node->UnlockSIX();
   }
 
   /*####################################################################################
