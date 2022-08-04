@@ -533,6 +533,7 @@ class NodeVarLen
       auto *next = node->next_;
       node->mutex_.UnlockS();
       node = next;
+      if (node == nullptr) return node;
     }
   }
 
@@ -567,6 +568,7 @@ class NodeVarLen
       auto *next = node->next_;
       node->mutex_.UnlockX();
       node = next;
+      if (node == nullptr) return node;
     }
   }
 
@@ -626,6 +628,9 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
+    const auto rec_len = key_len + pay_len;
+    CleanUpIfNeeded(rec_len);
+
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
     if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
@@ -663,6 +668,9 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
+    const auto rec_len = key_len + pay_len;
+    CleanUpIfNeeded(rec_len);
+
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
     if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
@@ -729,17 +737,18 @@ class NodeVarLen
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
-
-    // perform delete operation if possible
-    auto rc = kKeyNotInserted;
-    if (existence == kKeyAlreadyInserted) {
-      meta_array_[pos].is_deleted = 1;
-      deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
-      rc = (NeedMerge()) ? kNeedMerge : kCompleted;
+    if (existence != kKeyAlreadyInserted) {
+      mutex_.UnlockX();
+      return kKeyNotInserted;
     }
 
+    // perform delete operation
+    meta_array_[pos].is_deleted = 1;
+    deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
+    if (NeedMerge()) return kNeedMerge;
+
     mutex_.UnlockX();
-    return rc;
+    return kCompleted;
   }
 
   /**
@@ -756,6 +765,10 @@ class NodeVarLen
       const size_t sep_key_len)  //
       -> NodeRC
   {
+    // check free space in this node
+    const auto rec_len = sep_key_len + kPtrLen;
+    CleanUpIfNeeded(rec_len);
+
     // check an inserting position and concurrent SMOs
     const auto [existence, pos] = SearchRecord(sep_key);
     if (existence == kKeyAlreadyInserted) {
@@ -764,8 +777,7 @@ class NodeVarLen
       return kNeedWaitAndRetry;
     }
 
-    // check free space in this node
-    const auto rec_len = sep_key_len + kPtrLen;
+    // recheck free space in this node
     if (NeedSplit(rec_len)) return kNeedSplit;  // this node is full, so perform splitting
 
     // insert a split-right child node
@@ -829,9 +841,10 @@ class NodeVarLen
     --record_count_;
     deleted_size_ += del_rec_len;
 
-    const auto rc = (NeedMerge()) ? kNeedMerge : kCompleted;
+    if (NeedMerge()) return kNeedMerge;
+
     mutex_.UnlockX();
-    return rc;
+    return kCompleted;
   }
 
   /*####################################################################################
@@ -979,7 +992,7 @@ class NodeVarLen
 
     // remove this node from a tree
     is_removed_ = 1;
-    next_ = child;
+    next_ = nullptr;
 
     mutex_.UnlockX();
     return child;
@@ -1113,6 +1126,18 @@ class NodeVarLen
     return !Comp{}(high_key, end_key->first);
   }
 
+  void
+  CleanUpIfNeeded(const size_t new_rec_len)
+  {
+    // check whether the node has space for a new record
+    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+    const auto used_size = total_size - deleted_size_;
+    if (total_size <= kPageSize - kHeaderLen || used_size > kMaxUsedSpaceSize) return;
+
+    // this node has a lot of dead space
+    CleanUp();
+  }
+
   /**
    * @param new_rec_len the length of a new record.
    * @retval true if this node requires splitting before inserting a new record.
@@ -1124,12 +1149,7 @@ class NodeVarLen
   {
     // check whether the node has space for a new record
     const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    if (total_size <= kPageSize - kHeaderLen) return false;
-    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return true;
-
-    // this node has enough space but cleaning up is required
-    CleanUp();
-    return false;
+    return total_size > kPageSize - kHeaderLen;
   }
 
   /**

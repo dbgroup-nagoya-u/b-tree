@@ -93,7 +93,7 @@ class BTree
    */
   ~BTree()  //
   {
-    DeleteChildren(root_);
+    DeleteChildren(root_.load(std::memory_order_acquire));
   }
 
   /*####################################################################################
@@ -268,10 +268,10 @@ class BTree
     if (rc == NodeRC::kNeedMerge) {
       const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
       auto *r_node = TryHalfMerge(node);
-      if (r_node != nullptr && !TryCompleteMerge(stack, r_node, del_key)) {
-        // abort merging due to a conflict with concurrent splitting
-        node->AbortMerge(r_node, del_key, del_key_len);
+      if (r_node != nullptr) {
+        CompleteMerge(stack, node, r_node, del_key, del_key_len);
       }
+
       if constexpr (IsVarLenData<Key>()) {
         ::operator delete(del_key);
       }
@@ -438,6 +438,11 @@ class BTree
     while (true) {
       // traverse side links if needed
       node = Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      if (node == nullptr) {
+        // a root node is removed
+        node = root_.load(std::memory_order_acquire);
+        continue;
+      }
       if (node->IsLeaf()) return node;  // reach a valid leaf node
 
       // go down to the next level
@@ -495,6 +500,12 @@ class BTree
 
       // traverse side links if needed
       node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
+      if (node == nullptr) {
+        // a root node is removed
+        stack.clear();
+        node = root_.load(std::memory_order_acquire);
+        continue;
+      }
       stack.emplace_back(node);
 
       // go down to the next level
@@ -511,29 +522,40 @@ class BTree
    * @param target_node an old root node to be searched.
    */
   void
-  SearchTargetNode(  //
+  SearchParentNode(  //
       std::vector<Node_t *> &stack,
       const Key &key,
       const Node_t *target_node)
   {
-    do {
-      stack.clear();
-
-      auto *node = root_.load(std::memory_order_acquire);
-      while (true) {
-        node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
-        stack.emplace_back(node);
-        if (node == target_node) {
-          // reach a target node
-          node->UnlockS();
-          break;
-        }
-
-        // go down to the next level
-        const auto pos = node->SearchChild(key, kClosed);
-        node = node->GetChild(pos);
+    auto *node = root_.load(std::memory_order_acquire);
+    while (true) {
+      node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
+      if (node == nullptr) {
+        // a root node is removed
+        stack.clear();
+        node = root_.load(std::memory_order_acquire);
+        continue;
       }
-    } while (stack.size() < 2);  // retry if an old root remains
+
+      stack.emplace_back(node);
+      if (node == target_node) {
+        // reach a target node
+        node->UnlockS();
+        stack.pop_back();
+        return;
+      }
+
+      if (node->IsLeaf()) {
+        // cannot reach a target node, so retry
+        stack.clear();
+        node = root_.load(std::memory_order_acquire);
+        continue;
+      }
+
+      // go down to the next level
+      const auto pos = node->SearchChild(key, kClosed);
+      node = node->GetChild(pos);
+    }
   }
 
   /**
@@ -594,17 +616,34 @@ class BTree
       const Key &l_key,
       const size_t l_key_len)
   {
-    // perform root node splitting if needed
-    if (stack.size() < 2 && TryRootSplit(stack, l_child, r_child, l_key, l_key_len)) return;
-
     stack.pop_back();  // remove a child node from a stack
-    auto *node = stack.back();
+    Node_t *node = nullptr;
     while (true) {
-      // insert a new entry into a tree
+      if (stack.empty()) {
+        // splitting a root node if possible
+        if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
+
+        // other threads have modified this tree concurrently, so retry
+        SearchParentNode(stack, l_key, l_child);
+        continue;
+      }
+
+      if (node == nullptr) {
+        // set a parent node if needed
+        node = stack.back();
+      }
+
+      // traverse horizontally to reach a valid parent node
       node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      if (node == nullptr) {
+        // a root node is removed
+        SearchParentNode(stack, l_key, l_child);
+        continue;
+      }
+
+      // insert a new entry into a tree
       const auto rc = node->InsertChild(r_child, l_key, l_key_len);
       if (rc == NodeRC::kCompleted) return;
-
       if (rc == NodeRC::kNeedSplit) {
         // since a parent node is full, perform splitting
         const auto *r_node = HalfSplit(node);
@@ -627,7 +666,6 @@ class BTree
   /**
    * @brief
    *
-   * @param stack
    * @param l_child
    * @param r_child
    * @param l_key
@@ -637,7 +675,6 @@ class BTree
    */
   [[nodiscard]] auto
   TryRootSplit(  //
-      std::vector<Node_t *> &stack,
       const Node_t *l_child,
       const Node_t *r_child,
       const Key &l_key,
@@ -645,16 +682,12 @@ class BTree
       -> bool
   {
     auto *cur_root = root_.load(std::memory_order_relaxed);
-    if (cur_root == l_child) {
-      // install a new root node
-      auto *new_root = new Node_t{l_key, l_key_len, l_child, r_child};
-      root_.store(new_root, std::memory_order_release);
-      return true;
-    }
+    if (cur_root != l_child) return false;
 
-    // create a new node stack to complete splitting
-    SearchTargetNode(stack, l_key, l_child);
-    return false;
+    // install a new root node
+    auto *new_root = new Node_t{l_key, l_key_len, l_child, r_child};
+    root_.store(new_root, std::memory_order_release);
+    return true;
   }
 
   /**
@@ -678,46 +711,69 @@ class BTree
     return r_node;
   }
 
-  [[nodiscard]] auto
-  TryCompleteMerge(  //
+  void
+  CompleteMerge(  //
       std::vector<Node_t *> &stack,
+      Node_t *l_child,
       Node_t *r_child,
-      const Key &l_key)  //
-      -> bool
+      const Key &l_key,
+      const size_t l_key_len)
   {
     stack.pop_back();  // remove a child node from a stack
-    auto *node = stack.back();
+    Node_t *node = nullptr;
     while (true) {
-      // insert a new entry into a tree
-      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
-      const auto rc = node->DeleteChild(r_child, l_key);
-      if (rc == NodeRC::kAbortMerge) return false;
-      if (rc == NodeRC::kNeedWaitAndRetry) {
-        // previous splitting has not finished, so wait and retry
-        std::this_thread::sleep_for(kRetryWait);
+      if (stack.empty()) {
+        // other threads have modified this tree concurrently, so retry
+        SearchParentNode(stack, l_key, l_child);
         continue;
       }
 
-      // child nodes have been merged
-      // gc_->AddGarbage(r_child);
-      if (rc == NodeRC::kCompleted) return true;
-
-      // merging of parent nodes is required
-      const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
-      auto *r_node = TryHalfMerge(node);
-      if (r_node != nullptr) {
-        if (!TryCompleteMerge(stack, r_node, del_key)) {
-          // abort merging due to a conflict with concurrent splitting
-          node->AbortMerge(r_node, del_key, del_key_len);
-        }
-      } else if (stack.size() == 1) {
-        TryShrinkTree(node);
+      if (node == nullptr) {
+        // set a parent node if needed
+        node = stack.back();
       }
 
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(del_key);
+      // traverse horizontally to reach a valid parent node
+      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      if (node == nullptr) {
+        // a root node is removed
+        SearchParentNode(stack, l_key, l_child);
+        continue;
       }
-      return true;
+
+      // delete an entry from a tree
+      switch (node->DeleteChild(r_child, l_key)) {
+        case NodeRC::kCompleted:
+          // gc_->AddGarbage(r_child);
+          return;
+
+        case NodeRC::kAbortMerge:
+          l_child->AbortMerge(r_child, l_key, l_key_len);
+          return;
+
+        case NodeRC::kNeedWaitAndRetry:
+          // previous splitting has not finished, so wait and retry
+          std::this_thread::sleep_for(kRetryWait);
+          continue;
+
+        case NodeRC::kNeedMerge:
+        default:
+          // gc_->AddGarbage(r_child);
+
+          // merging of parent nodes is required
+          const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
+          auto *r_node = TryHalfMerge(node);
+          if (r_node != nullptr) {
+            CompleteMerge(stack, node, r_node, del_key, del_key_len);
+          } else if (stack.size() == 1) {
+            TryShrinkTree(node);
+          }
+
+          if constexpr (IsVarLenData<Key>()) {
+            ::operator delete(del_key);
+          }
+          return;
+      }
     }
   }
 
