@@ -1132,6 +1132,28 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
   }
 
+  /**
+   * @brief Link border nodes between partial trees.
+   *
+   * @param l_node a highest border node in a left tree.
+   * @param r_node a highest border node in a right tree.
+   */
+  static void
+  LinkVerticalBorderNodes(  //
+      Node *l_node,
+      Node *r_node)
+  {
+    while (true) {
+      l_node->LinkNext(r_node);
+
+      if (l_node->is_leaf_) return;  // all the border nodes are linked
+
+      // go down to the lower level
+      l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
+      r_node = r_node->template GetPayload<Node *>(0);
+    }
+  }
+
  private:
   /*####################################################################################
    * Internal constants
