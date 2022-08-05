@@ -183,6 +183,7 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
+    node->UpgradeToX();
     const auto rc = node->Write(key, key_len, &payload, kPayLen);
 
     if (rc == NodeRC::kNeedSplit) {
@@ -221,6 +222,7 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
+    node->UpgradeToX();
     auto rc = node->Insert(key, key_len, &payload, kPayLen);
     if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
 
@@ -700,6 +702,7 @@ class BTree
       }
 
       // insert a new entry into a tree
+      node->UpgradeToX();
       const auto rc = node->InsertChild(r_child, l_key, l_key_len);
       if (rc == NodeRC::kCompleted) return;
       if (rc == NodeRC::kNeedSplit) {

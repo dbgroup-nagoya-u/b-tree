@@ -553,7 +553,7 @@ class NodeVarLen
       -> Node *
   {
     while (true) {
-      node->mutex_.LockX();
+      node->mutex_.LockSIX();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
@@ -563,7 +563,7 @@ class NodeVarLen
 
       // go to the next node
       auto *next = node->next_;
-      node->mutex_.UnlockX();
+      node->mutex_.UnlockSIX();
       node = next;
       if (node == nullptr) return node;
     }
@@ -705,16 +705,18 @@ class NodeVarLen
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
-
-    // perform update operation if possible
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
-      rc = kSuccess;
+    if (existence != kKeyAlreadyInserted) {
+      mutex_.UnlockSIX();
+      return kKeyNotExist;
     }
 
+    mutex_.UpgradeToX();
+
+    // perform update operation if possible
+    memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
+
     mutex_.UnlockX();
-    return rc;
+    return kSuccess;
   }
 
   /**
@@ -735,9 +737,11 @@ class NodeVarLen
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
     if (existence != kKeyAlreadyInserted) {
-      mutex_.UnlockX();
+      mutex_.UnlockSIX();
       return kKeyNotInserted;
     }
+
+    mutex_.UpgradeToX();
 
     // perform delete operation
     meta_array_[pos].is_deleted = 1;
@@ -807,7 +811,7 @@ class NodeVarLen
   {
     // check a child node to be deleted is not rightmost
     if (h_key_len_ > 0 && !Comp{}(del_key, GetHighKey())) {
-      mutex_.UnlockX();
+      mutex_.UnlockSIX();
       return kAbortMerge;
     }
 
@@ -815,13 +819,15 @@ class NodeVarLen
     const auto [existence, l_pos] = SearchRecord(del_key);
     if (existence == kKeyNotInserted) {
       // previous splitting has not been applied, so unlock and retry
-      mutex_.UnlockX();
+      mutex_.UnlockSIX();
       return kNeedWaitAndRetry;
     }
 
     // merging have succeeded, so unlock child nodes
     r_child->next_->mutex_.UnlockSIX();
     r_child->mutex_.UnlockSIX();
+
+    mutex_.UpgradeToX();
 
     // get a current left child node
     const auto l_meta = meta_array_[l_pos];
