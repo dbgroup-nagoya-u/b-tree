@@ -217,6 +217,30 @@ class NodeVarLen
   }
 
   /**
+   * @retval a lowest key in this node.
+   */
+  [[nodiscard]] auto
+  GetLowKey()  //
+      -> std::optional<Key>
+  {
+    mutex_.LockS();
+
+    std::optional<Key> low_key = std::nullopt;
+    if (l_key_len_ > 0) {
+      if constexpr (IsVarLenData<Key>()) {
+        low_key = reinterpret_cast<Key>(GetLowKeyAddr());
+      } else {
+        Key key{};
+        memcpy(&key, GetLowKeyAddr(), sizeof(Key));
+        low_key = std::move(key);
+      }
+    }
+
+    mutex_.UnlockS();
+    return low_key;
+  }
+
+  /**
    * @retval 1st: a highest key.
    * @retval 2nd: the length of the highest key.
    */
@@ -290,20 +314,15 @@ class NodeVarLen
   GetLeftmostChild()  //
       -> Node *
   {
+    Node *child = nullptr;
+
     // check this node is not removed
-    auto *node = this;
-    while (true) {
-      node->mutex_.LockS();
-      if (is_removed_ == 0) break;
-
-      // the node was removed, so go to the next node
-      auto *next = node->next_;
-      node->mutex_.UnlockS();
-      node = next;
+    mutex_.LockS();
+    if (is_removed_ == 0) {
+      child = GetPayload<Node *>(0);
     }
+    mutex_.UnlockS();
 
-    auto *child = GetPayload<Node *>(0);
-    node->mutex_.UnlockS();
     return child;
   }
 
@@ -1212,22 +1231,6 @@ class NodeVarLen
       -> void *
   {
     return ShiftAddr(this, l_key_offset_);
-  }
-
-  /**
-   * @retval a lowest key in this node.
-   */
-  [[nodiscard]] auto
-  GetLowKey() const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetLowKeyAddr());
-    } else {
-      Key key{};
-      memcpy(&key, GetLowKeyAddr(), sizeof(Key));
-      return key;
-    }
   }
 
   /**

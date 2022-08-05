@@ -466,6 +466,9 @@ class BTree
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
       node = node->GetLeftmostChild();
+      if (node == nullptr) {
+        node = root_.load(std::memory_order_acquire);
+      }
     }
     node->LockS();
 
@@ -518,43 +521,56 @@ class BTree
    * @brief Search an old root node to construct a valid node stack.
    *
    * @param stack the instance of a stack to be reused.
-   * @param key a search key.
    * @param target_node an old root node to be searched.
    */
   void
   SearchParentNode(  //
       std::vector<Node_t *> &stack,
-      const Key &key,
-      const Node_t *target_node)
+      Node_t *target_node)
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (true) {
-      node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
-      if (node == nullptr) {
-        // a root node is removed
-        stack.clear();
-        node = root_.load(std::memory_order_acquire);
-        continue;
-      }
+    const auto key = target_node->GetLowKey();
+    if (key) {
+      // search a target node with its lowest key
+      while (true) {
+        node = Node_t::CheckKeyRangeAndLockForRead(node, *key, !kClosed);
+        if (node == nullptr) {
+          // a root node is removed
+          stack.clear();
+          node = root_.load(std::memory_order_acquire);
+          continue;
+        }
 
-      stack.emplace_back(node);
-      if (node == target_node) {
-        // reach a target node
-        node->UnlockS();
-        stack.pop_back();
-        return;
-      }
+        stack.emplace_back(node);
+        if (node == target_node) {
+          // reach a target node
+          node->UnlockS();
+          stack.pop_back();
+          return;
+        }
 
-      if (node->IsLeaf()) {
-        // cannot reach a target node, so retry
-        stack.clear();
-        node = root_.load(std::memory_order_acquire);
-        continue;
+        // go down to the next level
+        const auto pos = node->SearchChild(*key, !kClosed);
+        node = node->GetChild(pos);
       }
+    } else {
+      // search leftmost nodes
+      while (true) {
+        stack.emplace_back(node);
+        if (node == target_node) {
+          // reach a target node
+          stack.pop_back();
+          return;
+        }
 
-      // go down to the next level
-      const auto pos = node->SearchChild(key, kClosed);
-      node = node->GetChild(pos);
+        node = node->GetLeftmostChild();
+        if (node == nullptr) {
+          // a root node is removed
+          stack.clear();
+          node = root_.load(std::memory_order_acquire);
+          continue;
+        }
+      }
     }
   }
 
@@ -611,7 +627,7 @@ class BTree
   void
   CompleteSplit(  //
       std::vector<Node_t *> &stack,
-      const Node_t *l_child,
+      Node_t *l_child,
       const Node_t *r_child,
       const Key &l_key,
       const size_t l_key_len)
@@ -624,7 +640,7 @@ class BTree
         if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
 
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, l_key, l_child);
+        SearchParentNode(stack, l_child);
         continue;
       }
 
@@ -637,7 +653,7 @@ class BTree
       node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
       if (node == nullptr) {
         // a root node is removed
-        SearchParentNode(stack, l_key, l_child);
+        SearchParentNode(stack, l_child);
         continue;
       }
 
@@ -724,7 +740,7 @@ class BTree
     while (true) {
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, l_key, l_child);
+        SearchParentNode(stack, l_child);
         continue;
       }
 
@@ -737,7 +753,7 @@ class BTree
       node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
       if (node == nullptr) {
         // a root node is removed
-        SearchParentNode(stack, l_key, l_child);
+        SearchParentNode(stack, l_child);
         continue;
       }
 
