@@ -855,8 +855,14 @@ class NodeVarLen
   {
     const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
 
+    /*------------------------------
+     * temporal left-split
+     *----------------------------*/
+
+    // set a lowest key for a split-left node
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+
     // copy left half records to a temporal node
-    size_t offset = kPageSize;
     size_t pos = 0;
     for (size_t used_size = 0; used_size < half_size; ++pos) {
       const auto meta = meta_array_[pos];
@@ -867,22 +873,36 @@ class NodeVarLen
     }
     const auto sep_key_len = meta_array_[pos - 1].key_len;
     temp_node_->h_key_offset_ = offset;
+    temp_node_->h_key_len_ = sep_key_len;
     if (is_leaf_) {
-      offset -= sep_key_len;
+      offset -= sep_key_len;  // reserve space for a highest key
     } else {
       const auto rightmost_pos = temp_node_->record_count_ - 1;
       temp_node_->meta_array_[rightmost_pos] = Metadata{offset + sep_key_len, 0, kPtrLen};
     }
 
-    // copy right half records to a right node
-    auto r_offset = r_node->CopyHighKeyFrom(this, kPageSize);
+    /*------------------------------
+     * right-split
+     *----------------------------*/
+
+    // set lowest/highest keys for a split-right node
+    auto r_offset = r_node->CopyHighKeyFrom(temp_node_.get(), kPageSize);
+    r_node->l_key_offset_ = r_offset;
+    r_node->l_key_len_ = sep_key_len;
+    r_offset = r_node->CopyHighKeyFrom(this, r_offset);
     r_node->h_key_offset_ = r_offset;
     r_node->h_key_len_ = h_key_len_;
+
+    // copy right half records to a right node
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
+
+    /*------------------------------
+     * reflect left-split
+     *----------------------------*/
 
     // update a header
     block_size_ = kPageSize - offset;
@@ -908,8 +928,9 @@ class NodeVarLen
   void
   Merge(Node *r_node)
   {
-    // copy a highest key of a merged node to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(r_node, kPageSize);
+    // copy lowest/highest keys of merged nodes to a temporal node
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+    offset = temp_node_->CopyHighKeyFrom(r_node, offset);
     temp_node_->h_key_offset_ = offset;
 
     // copy consolidated records to the original node
@@ -1026,8 +1047,8 @@ class NodeVarLen
       Node *l_node)
   {
     // extract and insert entries for the leaf node
-    size_t node_size = kHeaderLen;
-    auto offset = kPageSize;
+    auto offset = (l_node != nullptr) ? l_node->LinkNext(this) : kPageSize - kMaxKeyLen;
+    auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
       const auto rec_len = key_len + sizeof(Payload);
@@ -1051,9 +1072,6 @@ class NodeVarLen
 
     // update header information
     block_size_ = kPageSize - offset;
-    if (l_node != nullptr) {
-      l_node->next_ = this;
-    }
   }
 
   /**
@@ -1065,10 +1083,11 @@ class NodeVarLen
   void
   Bulkload(  //
       typename std::vector<Node *>::const_iterator &iter,
-      const typename std::vector<Node *>::const_iterator &iter_end)
+      const typename std::vector<Node *>::const_iterator &iter_end,
+      Node *l_node)
   {
-    size_t node_size = kHeaderLen;
-    auto offset = kPageSize;
+    auto offset = (l_node != nullptr) ? l_node->LinkNext(this) : kPageSize - kMaxKeyLen;
+    auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       const auto *child = *iter;
       const auto high_key_len = child->h_key_len_;
@@ -1098,6 +1117,9 @@ class NodeVarLen
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
+
+  /// the maximum length of keys.
+  static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node *);
@@ -1180,6 +1202,32 @@ class NodeVarLen
       -> size_t
   {
     return kMetaLen * record_count_ + block_size_ - deleted_size_;
+  }
+
+  /**
+   * @return an address of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyAddr() const  //
+      -> void *
+  {
+    return ShiftAddr(this, l_key_offset_);
+  }
+
+  /**
+   * @retval a lowest key in this node.
+   */
+  [[nodiscard]] auto
+  GetLowKey() const  //
+      -> Key
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetLowKeyAddr());
+    } else {
+      Key key{};
+      memcpy(&key, GetLowKeyAddr(), sizeof(Key));
+      return key;
+    }
   }
 
   /**
@@ -1422,9 +1470,31 @@ class NodeVarLen
   }
 
   /**
-   * @brief Copy a high key from a given node.
+   * @brief Copy a lowest key from a given node.
    *
-   * @param node an original node that has a high key.
+   * @param node an original node that has a lowest key.
+   * @return the updated offset value.
+   */
+  auto
+  CopyLowKeyFrom(const Node *node)  //
+      -> size_t
+  {
+    const auto key_len = node->l_key_len_;
+    auto offset = kPageSize;
+    if (key_len > 0) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), node->GetLowKeyAddr(), key_len);
+    }
+    l_key_offset_ = offset;
+    l_key_len_ = key_len;
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy a highest key from a given node.
+   *
+   * @param node an original node that has a highest key.
    * @return the updated offset value.
    */
   auto
@@ -1517,6 +1587,28 @@ class NodeVarLen
       const auto &[key, payload] = entry;
       return {key, payload, sizeof(Key)};
     }
+  }
+
+  /**
+   * @brief Link this node to a right sibling node.
+   *
+   * @param r_node a right sibling node.
+   * @return an offset to a lowest key in a right sibling node.
+   */
+  auto
+  LinkNext(Node *r_node)  //
+      -> size_t
+  {
+    // set a sibling link in a left node
+    next_ = r_node;
+
+    // copy a highest key in a left node as a lowest key in a right node
+    const auto offset = kPageSize - h_key_len_;
+    memcpy(ShiftAddr(r_node, offset), GetHighKeyAddr(), h_key_len_);
+    r_node->l_key_offset_ = offset;
+    r_node->l_key_len_ = h_key_len_;
+
+    return offset;
   }
 
   /*####################################################################################

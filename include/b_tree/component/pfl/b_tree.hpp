@@ -861,10 +861,12 @@ class BTree
     // load child nodes into a inner node
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
+    Node_t *l_node = nullptr;
     while (iter < iter_end) {
       auto *node = new Node_t{false};
-      node->Bulkload(iter, iter_end);
+      node->Bulkload(iter, iter_end, l_node);
       nodes.emplace_back(node);
+      l_node = node;
     }
 
     child_nodes = std::move(nodes);
