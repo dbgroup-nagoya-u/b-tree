@@ -69,7 +69,7 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = CreateNode(kLeafFlag);
     // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
     //   node_->SetPayloadLength(kPayLen);
     // }
@@ -78,7 +78,18 @@ class NodeFixture : public testing::Test
   void
   TearDown() override
   {
-    node_.reset(nullptr);
+    ::operator delete(node_);
+  }
+
+  /*####################################################################################
+   * Utility functions
+   *##################################################################################*/
+
+  auto
+  CreateNode(const bool is_leaf)  //
+      -> Node *
+  {
+    return new (::operator new(kPageSize)) Node{is_leaf};
   }
 
   /*####################################################################################
@@ -123,7 +134,9 @@ class NodeFixture : public testing::Test
   Delete(const size_t key)
   {
     LockX();
-    return node_->Delete(key);
+    auto rc = node_->Delete(key);
+    node_->UnlockX();
+    return rc;
   }
 
   /*####################################################################################
@@ -282,7 +295,7 @@ class NodeFixture : public testing::Test
     }
 
     // perform splitting
-    auto *r_node = new Node{kLeafFlag};
+    auto *r_node = CreateNode(kLeafFlag);
     // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
     //   r_node->SetPayloadLength(kPayLen);
     // }
@@ -298,7 +311,8 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
-        node_.reset(r_node);
+        ::operator delete(node_);
+        node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
     }
@@ -313,10 +327,10 @@ class NodeFixture : public testing::Test
     for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
       Write(i, i);
     }
-    auto *r_node = node_.release();
+    auto *r_node = node_;
 
     // fill a left node
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = CreateNode(kLeafFlag);
     // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
     //   node_->SetPayloadLength(kPayLen);
     // }
@@ -328,7 +342,7 @@ class NodeFixture : public testing::Test
     LockX();
     node_->Merge(r_node);
     node_->UnlockX();
-    delete r_node;
+    ::operator delete(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
@@ -340,7 +354,7 @@ class NodeFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  std::unique_ptr<Node> node_{nullptr};
+  Node *node_{nullptr};
 };
 
 /*######################################################################################

@@ -22,6 +22,9 @@
 #include <thread>
 #include <vector>
 
+// organization libraries
+#include "memory/epoch_based_gc.hpp"
+
 // local sources
 #include "b_tree/component/record_iterator.hpp"
 // #include "node_fixlen.hpp"
@@ -54,6 +57,7 @@ class BTree
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -70,7 +74,10 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree()
+  explicit BTree(  //
+      const size_t gc_interval_micro = 10000,
+      const size_t gc_thread_num = 1)
+      : gc_{gc_interval_micro, gc_thread_num, true}
   {
     if constexpr (!kIsVarLen) {
       root_->SetPayloadLength(kPayLen);
@@ -111,6 +118,8 @@ class BTree
   Read(const Key &key)  //
       -> std::optional<Payload>
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto *node = SearchLeafNodeForRead(key, kClosed);
 
     Payload payload{};
@@ -133,6 +142,8 @@ class BTree
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     Node_t *node{};
     size_t begin_pos = 0;
 
@@ -168,6 +179,8 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     const auto rc = node->Write(key, key_len, &payload, kPayLen);
@@ -204,6 +217,8 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     auto rc = node->Insert(key, key_len, &payload, kPayLen);
@@ -241,6 +256,8 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     return node->Update(key, &payload, kPayLen);
@@ -260,6 +277,8 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     const auto rc = node->Delete(key);
@@ -379,6 +398,9 @@ class BTree
   /// a flag for indicating leaf nodes.
   static constexpr uint32_t kLeafFlag = 1;
 
+  /// a flag for indicating internal nodes.
+  static constexpr uint32_t kInnerFlag = 0;
+
   /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
 
@@ -424,6 +446,19 @@ class BTree
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
+
+  /**
+   * @brief Allocate or reuse a memory region for a base node.
+   *
+   * @returns the reserved memory page.
+   */
+  [[nodiscard]] auto
+  GetNodePage()  //
+      -> void *
+  {
+    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+  }
 
   /**
    * @brief Search a leaf node that may have a target key.
@@ -599,7 +634,7 @@ class BTree
       }
     }
 
-    delete node;
+    ::operator delete(node);
   }
 
   /*####################################################################################
@@ -616,7 +651,7 @@ class BTree
   HalfSplit(Node_t *l_node)  //
       -> Node_t *
   {
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
 
     return r_node;
@@ -708,7 +743,7 @@ class BTree
     if (cur_root != l_child) return false;
 
     // install a new root node
-    auto *new_root = new Node_t{l_key, l_key_len, l_child, r_child};
+    auto *new_root = new (GetNodePage()) Node_t{l_key, l_key_len, l_child, r_child};
     root_.store(new_root, std::memory_order_release);
     return true;
   }
@@ -767,7 +802,7 @@ class BTree
       // delete an entry from a tree
       switch (node->DeleteChild(r_child, l_key)) {
         case NodeRC::kCompleted:
-          // gc_->AddGarbage(r_child);
+          gc_.AddGarbage(r_child);
           return;
 
         case NodeRC::kAbortMerge:
@@ -781,7 +816,7 @@ class BTree
 
         case NodeRC::kNeedMerge:
         default:
-          // gc_->AddGarbage(r_child);
+          gc_.AddGarbage(r_child);
 
           // merging of parent nodes is required
           const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
@@ -805,9 +840,9 @@ class BTree
   {
     node->LockSIX();
 
-    auto *old_root = root_.load(std::memory_order_relaxed);
-    if (node == old_root && node->GetRecordCount() == 1) {
+    if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
+        gc_.AddGarbage(node);
         node = node->RemoveRoot();
       } while (node->GetRecordCount() == 1 && !node->IsLeaf());
       root_.store(node, std::memory_order_relaxed);
@@ -848,7 +883,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{true};
+      auto *node = new (GetNodePage()) Node_t{kLeafFlag};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -886,7 +921,7 @@ class BTree
     const auto &iter_end = child_nodes.cend();
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{false};
+      auto *node = new (GetNodePage()) Node_t{kInnerFlag};
       node->Bulkload(iter, iter_end, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -907,8 +942,11 @@ class BTree
    * Internal member variables
    *##################################################################################*/
 
+  /// a garbage collector for node pages.
+  GC_t gc_{};
+
   /// a root node of this tree.
-  std::atomic<Node_t *> root_{new Node_t{kLeafFlag}};
+  std::atomic<Node_t *> root_{new (GetNodePage()) Node_t{kLeafFlag}};
 };
 }  // namespace dbgroup::index::b_tree::component::pfl
 

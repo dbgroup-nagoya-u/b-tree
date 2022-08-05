@@ -109,23 +109,6 @@ class NodeVarLen
   ~NodeVarLen() = default;
 
   /*####################################################################################
-   * new/delete operators
-   *##################################################################################*/
-
-  static auto
-  operator new([[maybe_unused]] std::size_t n)  //
-      -> void *
-  {
-    return ::operator new(kPageSize);
-  }
-
-  static void
-  operator delete(void *p) noexcept
-  {
-    ::operator delete(p);
-  }
-
-  /*####################################################################################
    * Public getters for header information
    *##################################################################################*/
 
@@ -1673,8 +1656,8 @@ class NodeVarLen
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node>          //
+      temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
 };
 
 }  // namespace dbgroup::index::b_tree::component::pfl
