@@ -247,7 +247,7 @@ class BTree
   template <class Entry>
   auto
   Bulkload(  //
-      std::vector<Entry> &entries,
+      const std::vector<Entry> &entries,
       const size_t thread_num = 1)  //
       -> ReturnCode
   {
