@@ -129,7 +129,9 @@ class NodeFixture : public testing::Test
   {
     node_->LockSIX();
     auto rc = node_->Delete(key);
-    node_->UnlockX();
+    if (rc == kNeedMerge) {
+      node_->UnlockSIX();
+    }
     return rc;
   }
 

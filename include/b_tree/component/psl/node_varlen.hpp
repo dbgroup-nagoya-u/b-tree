@@ -360,17 +360,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Release the exclusive lock for this node.
-   *
-   */
-  auto
-  UnlockX()  //
-      -> void
-  {
-    mutex_.UnlockX();
-  }
-
-  /**
    * @brief Acquire a shared lock with intent-exclusive locking for this node.
    *
    */
