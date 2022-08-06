@@ -172,8 +172,8 @@ class NodeVarLen
   /**
    * @brief Get a mergeable-sibling node if exist.
    *
-   * The returned node is locked with an exclusive lock. If there is no mergeable node,
-   * this node is unlocked.
+   * The returned node is locked with a SIX lock. If there is no mergeable node, this
+   * node is unlocked.
    *
    * @retval a mergeable-sibling node if exist.
    * @retval nullptr otherwise.
@@ -191,8 +191,8 @@ class NodeVarLen
     // check the right-sibling node has enough capacity for merging
     next_->mutex_.LockSIX();
     if (GetUsedSize() + next_->GetUsedSize() >= kMaxUsedSpaceSize) {
-      mutex_.UnlockSIX();
       next_->mutex_.UnlockSIX();
+      mutex_.UnlockSIX();
       return nullptr;
     }
 
@@ -200,7 +200,8 @@ class NodeVarLen
   }
 
   /**
-   * @retval a lowest key in this node.
+   * @retval a lowest key in this node if exist.
+   * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
   GetLowKey()  //
@@ -289,8 +290,6 @@ class NodeVarLen
   /**
    * @brief Get a leftmost child node.
    *
-   * The node is unlocked after this function.
-   *
    * @return the child node.
    */
   [[nodiscard]] auto
@@ -361,7 +360,7 @@ class NodeVarLen
   }
 
   /**
-   * @brief Release the shared lock for this node.
+   * @brief Release the exclusive lock for this node.
    *
    */
   auto
@@ -389,16 +388,6 @@ class NodeVarLen
   UnlockSIX()
   {
     mutex_.UnlockSIX();
-  }
-
-  /**
-   * @brief Upgrade the SIX lock to an exclusive lock for this node.
-   *
-   */
-  void
-  UpgradeToX()
-  {
-    mutex_.UpgradeToX();
   }
 
   /*####################################################################################
@@ -616,6 +605,8 @@ class NodeVarLen
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
+   * @retval kCompleted if a record is written.
+   * @retval kNeedSplit if this node should be split before inserting a record.
    */
   auto
   Write(  //
@@ -657,8 +648,9 @@ class NodeVarLen
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
-   * @retval kSuccess if a key/payload pair is written.
-   * @retval kKeyExist otherwise.
+   * @retval kCompleted if a record is inserted.
+   * @retval kKeyAlreadyInserted if there is a record with the same key.
+   * @retval kNeedSplit if this node should be split before inserting a record.
    */
   auto
   Insert(  //
@@ -732,8 +724,9 @@ class NodeVarLen
    * return code.
    *
    * @param key a target key to be written.
-   * @retval kSuccess if a record is deleted.
-   * @retval kKeyNotExist otherwise.
+   * @retval kCompleted if a record is deleted.
+   * @retval kKeyNotInserted if there is not record with the same key.
+   * @retval kNeedMerge if this node should be merged.
    */
   auto
   Delete(const Key &key)  //
@@ -763,9 +756,12 @@ class NodeVarLen
   /**
    * @brief Insert a new child node into this node.
    *
-   * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
-   * @param pos the position of the left child node.
+   * @param sep_key a separator key.
+   * @param sep_key_len the length of the separator key.
+   * @retval kCompleted if a new entry is inserted.
+   * @retval kNeedWaitAndRetry if previous merging has not been finished.
+   * @retval kNeedSplit if this node should be split before inserting an index entry.
    */
   auto
   InsertChild(  //
@@ -810,8 +806,12 @@ class NodeVarLen
   /**
    * @brief Delete a child node from this node.
    *
-   * @param l_node a left child node.
-   * @param pos the position of the left child node.
+   * @param r_child a right child (i.e., removed) node.
+   * @param del_key a separater key to be deleted.
+   * @retval kCompleted if the entry is deleted.
+   * @retval kNeedWaitAndRetry if previous splitting has not been finished.
+   * @retval kNeedMerge if this node should be merged.
+   * @retval kAbortMerge if this merge operation should be aborted.
    */
   auto
   DeleteChild(  //
@@ -906,6 +906,8 @@ class NodeVarLen
      * right-split
      *----------------------------*/
 
+    r_node->mutex_.LockX();
+
     // set lowest/highest keys for a split-right node
     auto r_offset = r_node->CopyHighKeyFrom(temp_node_.get(), kPageSize);
     r_node->l_key_offset_ = r_offset;
@@ -920,6 +922,8 @@ class NodeVarLen
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
+
+    r_node->mutex_.UnlockX();
 
     /*------------------------------
      * reflect left-split
@@ -995,6 +999,13 @@ class NodeVarLen
     temp_node_->record_count_ = 0;
   }
 
+  /**
+   * @brief Abort a merge operation.
+   *
+   * @param r_node a right-sibling node.
+   * @param l_key a separator key for this node.
+   * @param l_key_len the length of the separator key.
+   */
   void
   AbortMerge(  //
       Node *r_node,
@@ -1036,6 +1047,11 @@ class NodeVarLen
     mutex_.UnlockX();
   }
 
+  /**
+   * @brief Remove this node from a tree and return a new root node.
+   *
+   * @return a new root node.
+   */
   auto
   RemoveRoot()  //
       -> Node *
@@ -1109,6 +1125,7 @@ class NodeVarLen
    *
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
+   * @param l_node the left sibling node of this node.
    */
   void
   Bulkload(  //
@@ -1203,6 +1220,11 @@ class NodeVarLen
     return !Comp{}(GetHighKey(), end_key->first);
   }
 
+  /**
+   * @brief Clean up this node if this includes a lot of dead space.
+   *
+   * @param new_rec_len the length of a record to be inserted.
+   */
   void
   CleanUpIfNeeded(const size_t new_rec_len)
   {
@@ -1408,6 +1430,8 @@ class NodeVarLen
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
    * @param pos an insertion position.
+   * @retval kCompleted if a record is inserted.
+   * @retval kNeedSplit if this node should be split before inserting a record.
    */
   auto
   InsertRecord(  //
@@ -1676,12 +1700,16 @@ class NodeVarLen
   /// the pointer to the next node.
   Node *next_{nullptr};
 
+  /// the offset to a lowest key.
   uint16_t l_key_offset_{kPageSize};
 
+  /// the length of a lowest key.
   uint16_t l_key_len_{0};
 
+  /// the offset to a highest key.
   uint16_t h_key_offset_{kPageSize};
 
+  /// the length of a highest key.
   uint16_t h_key_len_{0};
 
   /// an actual data block (it starts with record metadata).

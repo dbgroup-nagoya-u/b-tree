@@ -96,13 +96,6 @@ class NodeFixture : public testing::Test
    * Operation wrappers
    *##################################################################################*/
 
-  void
-  LockX()
-  {
-    node_->LockSIX();
-    node_->UpgradeToX();
-  }
-
   auto
   Write(  //
       const Key key,

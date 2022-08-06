@@ -70,7 +70,9 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree()
+  BTree(  //
+      [[maybe_unused]] const size_t gc_interval_micro,
+      [[maybe_unused]] const size_t gc_thread_num)
   {
     if constexpr (!kIsVarLen) {
       root_->SetPayloadLength(kPayLen);

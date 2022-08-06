@@ -74,9 +74,9 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  explicit BTree(  //
-      const size_t gc_interval_micro = 1000,
-      const size_t gc_thread_num = 1)
+  BTree(  //
+      const size_t gc_interval_micro,
+      const size_t gc_thread_num)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
     // if constexpr (!kIsVarLen) {
@@ -520,9 +520,8 @@ class BTree
   /**
    * @brief Search a leaf node that may have a target key.
    *
-   * This function performs SMOs if internal nodes on the way should be modified. This
-   * function uses SIX and X locks for modifying trees, and a returned leaf node is
-   * locked by an exclusive lock.
+   * This function uses shared locks while traversing a tree, and a returned leaf node
+   * is locked by a shared with intent-exclusive lock.
    *
    * @param key a search key.
    * @return a stack of nodes that may have a target key.
@@ -560,10 +559,10 @@ class BTree
   }
 
   /**
-   * @brief Search an old root node to construct a valid node stack.
+   * @brief Search a parent node of a given one to construct a valid node stack.
    *
    * @param stack the instance of a stack to be reused.
-   * @param target_node an old root node to be searched.
+   * @param target_node a child node to be searched.
    */
   void
   SearchParentNode(  //
@@ -722,14 +721,14 @@ class BTree
   }
 
   /**
-   * @brief
+   * @brief Try to split a root node.
    *
-   * @param l_child
-   * @param r_child
-   * @param l_key
-   * @param l_key_len
-   * @return true
-   * @return false
+   * @param l_child a split-left (i.e., an old root) node.
+   * @param r_child a split-right node.
+   * @param l_key a highest key of `l_child`.
+   * @param l_key_len the length of a highest key.
+   * @retval true if a root node is split.
+   * @retval false otherwise.
    */
   [[nodiscard]] auto
   TryRootSplit(  //
@@ -769,6 +768,15 @@ class BTree
     return r_node;
   }
 
+  /**
+   * @brief Complete a merge operatin by deleting an index entry.
+   *
+   * @param stack nodes in the searched path.
+   * @param l_child a left child node.
+   * @param r_child a right child (i.e., removed) node.
+   * @param l_key a separator key.
+   * @param l_key_len the length of the separator key.
+   */
   void
   CompleteMerge(  //
       std::vector<Node_t *> &stack,
@@ -835,6 +843,11 @@ class BTree
     }
   }
 
+  /**
+   * @brief Try to remove a root node.
+   *
+   * @param node an expected old root node.
+   */
   void
   TryShrinkTree(Node_t *node)
   {

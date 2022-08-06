@@ -66,7 +66,12 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree() = default;
+  explicit BTree(  //
+      const size_t gc_interval_micro = 1000,
+      const size_t gc_thread_num = 1)
+      : b_tree_{gc_interval_micro, gc_thread_num}
+  {
+  }
 
   BTree(const BTree &) = delete;
   BTree(BTree &&) = delete;
