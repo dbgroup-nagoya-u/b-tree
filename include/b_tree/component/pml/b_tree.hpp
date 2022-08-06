@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PCL_B_TREE_HPP
-#define B_TREE_COMPONENT_PCL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_PML_B_TREE_HPP
+#define B_TREE_COMPONENT_PML_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -27,10 +27,10 @@
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree::component::pcl
+namespace dbgroup::index::b_tree::component::pml
 {
 /**
- * @brief A class for representing B+trees with pessimistic coarse-grained locking.
+ * @brief A class for representing B+trees with pessimistic multi-layer locking.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
@@ -691,6 +691,6 @@ class BTree
   /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};
 };
-}  // namespace dbgroup::index::b_tree::component::pcl
+}  // namespace dbgroup::index::b_tree::component::pml
 
-#endif  // B_TREE_COMPONENT_PCL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_PML_B_TREE_HPP

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-// #include "b_tree/component/pfl/node_fixlen.hpp"
-#include "b_tree/component/pfl/node_varlen.hpp"
+// #include "b_tree/component/psl/node_fixlen.hpp"
+#include "b_tree/component/psl/node_varlen.hpp"
 
 // external libraries
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::b_tree::component::pfl::test
+namespace dbgroup::index::b_tree::component::psl::test
 {
 /*######################################################################################
  * Global constants
@@ -108,7 +108,7 @@ class NodeFixture : public testing::Test
       const Key key,
       const Payload payload)
   {
-    LockX();
+    node_->LockSIX();
     node_->Write(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -117,7 +117,7 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    LockX();
+    node_->LockSIX();
     return node_->Insert(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -126,14 +126,14 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    LockX();
+    node_->LockSIX();
     return node_->Update(key, &payload, kPayLen);
   }
 
   auto
   Delete(const size_t key)
   {
-    LockX();
+    node_->LockSIX();
     auto rc = node_->Delete(key);
     node_->UnlockX();
     return rc;
@@ -299,9 +299,9 @@ class NodeFixture : public testing::Test
     // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
     //   r_node->SetPayloadLength(kPayLen);
     // }
-    LockX();
+    node_->LockSIX();
     node_->Split(r_node);
-    node_->UnlockX();
+    node_->UnlockSIX();
 
     // check the split nodes have the same number of records
     const auto l_count = node_->GetRecordCount();
@@ -339,9 +339,10 @@ class NodeFixture : public testing::Test
     }
 
     // merge the two nodes
-    LockX();
+    node_->LockSIX();
+    r_node->LockSIX();
     node_->Merge(r_node);
-    node_->UnlockX();
+    node_->UnlockSIX();
     ::operator delete(r_node);
 
     // check the merged node has the written records
@@ -380,4 +381,4 @@ TYPED_TEST(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes) { TestFixture::Te
 
 TYPED_TEST(NodeFixture, MergeTwoNodesIntoSingleNode) { TestFixture::TestMerge(); }
 
-}  // namespace dbgroup::index::b_tree::component::pfl::test
+}  // namespace dbgroup::index::b_tree::component::psl::test

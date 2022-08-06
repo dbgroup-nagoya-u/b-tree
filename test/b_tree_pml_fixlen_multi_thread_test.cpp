@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/pfl/b_tree.hpp"
+#include "b_tree/b_tree.hpp"
 
 // organization libraries
-#include "external/index-fixtures/index_fixture.hpp"
+#include "external/index-fixtures/index_fixture_multi_thread.hpp"
 
 namespace dbgroup::index::test
 {
@@ -26,23 +26,22 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePFLVarLen = ::dbgroup::index::b_tree::component::pfl::BTree<K, V, C, true>;
+using BTreePMLFixLen = ::dbgroup::index::b_tree::BTreePMLFixLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
-    IndexInfo<BTreePFLVarLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePFLVarLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePFLVarLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreePFLVarLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreePFLVarLen, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreePFLVarLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreePFLVarLen, Original, Original>  // original class keys/payloads
+    IndexInfo<BTreePMLFixLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePMLFixLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePMLFixLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePMLFixLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePMLFixLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePMLFixLen, Original, Original>  // original class keys/payloads
     >;
-TYPED_TEST_SUITE(IndexFixture, TestTargets);
+TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
  *####################################################################################*/
 
-#include "external/index-fixtures/index_fixture_test_definitions.hpp"
+#include "external/index-fixtures/index_fixture_multi_thread_test_definitions.hpp"
 
 }  // namespace dbgroup::index::test

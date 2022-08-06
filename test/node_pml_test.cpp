@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/pcl/node_fixlen.hpp"
-#include "b_tree/component/pcl/node_varlen.hpp"
+#include "b_tree/component/pml/node_fixlen.hpp"
+#include "b_tree/component/pml/node_varlen.hpp"
 
 // external libraries
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::b_tree::component::pcl::test
+namespace dbgroup::index::b_tree::component::pml::test
 {
 /*######################################################################################
  * Global constants
@@ -362,4 +362,4 @@ TYPED_TEST(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes) { TestFixture::Te
 
 TYPED_TEST(NodeFixture, MergeTwoNodesIntoSingleNode) { TestFixture::TestMerge(); }
 
-}  // namespace dbgroup::index::b_tree::component::pcl::test
+}  // namespace dbgroup::index::b_tree::component::pml::test

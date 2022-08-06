@@ -26,16 +26,16 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCLVarLen = ::dbgroup::index::b_tree::BTreePCLVarLen<K, V, C>;
+using BTreePMLVarLen = ::dbgroup::index::b_tree::BTreePMLVarLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
-    IndexInfo<BTreePCLVarLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePCLVarLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePCLVarLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreePCLVarLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreePCLVarLen, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreePCLVarLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreePCLVarLen, Original, Original>  // original class keys/payloads
+    IndexInfo<BTreePMLVarLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePMLVarLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePMLVarLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePMLVarLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePMLVarLen, Var, UInt8>,         // variable-length keys
+    IndexInfo<BTreePMLVarLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePMLVarLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PFL_B_TREE_HPP
-#define B_TREE_COMPONENT_PFL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_PSL_B_TREE_HPP
+#define B_TREE_COMPONENT_PSL_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -30,10 +30,10 @@
 // #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree::component::pfl
+namespace dbgroup::index::b_tree::component::psl
 {
 /**
- * @brief A class for representing B+trees with pessimistic fine-grained locking.
+ * @brief A class for representing B+trees with pessimistic single-layer locking.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
@@ -75,13 +75,13 @@ class BTree
    *
    */
   explicit BTree(  //
-      const size_t gc_interval_micro = 10000,
+      const size_t gc_interval_micro = 1000,
       const size_t gc_thread_num = 1)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
-    if constexpr (!kIsVarLen) {
-      root_->SetPayloadLength(kPayLen);
-    }
+    // if constexpr (!kIsVarLen) {
+    //   root_->SetPayloadLength(kPayLen);
+    // }
   }
 
   BTree(const BTree &) = delete;
@@ -183,7 +183,6 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    node->UpgradeToX();
     const auto rc = node->Write(key, key_len, &payload, kPayLen);
 
     if (rc == NodeRC::kNeedSplit) {
@@ -222,7 +221,6 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    node->UpgradeToX();
     auto rc = node->Insert(key, key_len, &payload, kPayLen);
     if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
 
@@ -702,7 +700,6 @@ class BTree
       }
 
       // insert a new entry into a tree
-      node->UpgradeToX();
       const auto rc = node->InsertChild(r_child, l_key, l_key_len);
       if (rc == NodeRC::kCompleted) return;
       if (rc == NodeRC::kNeedSplit) {
@@ -951,6 +948,6 @@ class BTree
   /// a root node of this tree.
   std::atomic<Node_t *> root_{new (GetNodePage()) Node_t{kLeafFlag}};
 };
-}  // namespace dbgroup::index::b_tree::component::pfl
+}  // namespace dbgroup::index::b_tree::component::psl
 
-#endif  // B_TREE_COMPONENT_PFL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_PSL_B_TREE_HPP
