@@ -294,12 +294,19 @@ class BTree
 
       // align the height of partial trees
       nodes.reserve(kInnerNodeCap * thread_num);
+      Node_t *prev_node = nullptr;
       for (auto &&[p_height, p_nodes] : partial_trees) {
         while (p_height < height) {  // NOLINT
           ConstructUpperLayer(p_nodes);
           ++p_height;
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
+
+        // link partial trees
+        if (prev_node != nullptr) {
+          Node_t::LinkVerticalBorderNodes(prev_node, p_nodes.front());
+        }
+        prev_node = p_nodes.back();
       }
     }
 
