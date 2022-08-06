@@ -27,7 +27,7 @@
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
-// #include "node_fixlen.hpp"
+#include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::psl
@@ -53,7 +53,7 @@ class BTree
   using K = Key;
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
-  using NodeFixLen_t = NodeVarLen<Key, Comp>;  // NodeFixLen<Key, Comp>;
+  using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
@@ -79,9 +79,11 @@ class BTree
       const size_t gc_thread_num)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
-    // if constexpr (!kIsVarLen) {
-    //   root_->SetPayloadLength(kPayLen);
-    // }
+    auto *root = new (GetNodePage()) Node_t{kLeafFlag};
+    if constexpr (!kIsVarLen) {
+      root->SetPayloadLength(kPayLen);
+    }
+    root_.store(root, std::memory_order_release);
   }
 
   BTree(const BTree &) = delete;
@@ -959,7 +961,7 @@ class BTree
   GC_t gc_{};
 
   /// a root node of this tree.
-  std::atomic<Node_t *> root_{new (GetNodePage()) Node_t{kLeafFlag}};
+  std::atomic<Node_t *> root_{nullptr};
 };
 }  // namespace dbgroup::index::b_tree::component::psl
 

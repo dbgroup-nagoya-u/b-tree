@@ -28,7 +28,6 @@
 
 // local sources
 #include "b_tree/component/common.hpp"
-#include "b_tree/component/metadata.hpp"
 
 namespace dbgroup::index::b_tree::component::pml
 {
@@ -36,8 +35,8 @@ namespace dbgroup::index::b_tree::component::pml
 /**
  * @brief A class for representing nodes in B+trees.
  *
- * This class uses pessimistic multi-layer locking for concurrency controls and can
- * contain variable-length data.
+ * This class uses pessimistic multi-layer locking for concurrency controls and
+ * optimizes a page layout for fixed-length data.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
@@ -662,7 +661,7 @@ class NodeFixLen
     if (existence == kKeyAlreadyInserted) {
       // remove a key and a payload
       const auto move_num = record_count_ - 1 - pos;
-      memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * move_num);
+      memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
       auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
       memmove(ShiftAddr(top_addr, pay_len_), top_addr, pay_len_ * move_num);
 
@@ -748,11 +747,12 @@ class NodeFixLen
   {
     const auto l_count = record_count_ / 2;
     const auto r_count = record_count_ - l_count;
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     // copy right half records to a right node
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count] = keys_[record_count_];
+    r_node->keys_[r_count - is_inner] = keys_[record_count_ - is_inner];
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
@@ -766,7 +766,7 @@ class NodeFixLen
     record_count_ = l_count;
     next_ = r_node;
     has_high_key_ = 1;
-    keys_[l_count] = keys_[l_count - 1];
+    keys_[l_count - is_inner] = keys_[l_count - 1];
 
     mutex_.DowngradeToSIX();
   }

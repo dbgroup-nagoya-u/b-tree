@@ -430,8 +430,9 @@ class NodeVarLen
         end_pos = pos - 1;
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (meta_array_[pos].is_deleted) return {kKeyAlreadyDeleted, pos};
+      } else if (meta_array_[pos].is_deleted) {
+        return {kKeyAlreadyDeleted, pos};
+      } else {
         return {kKeyAlreadyInserted, pos};
       }
     }

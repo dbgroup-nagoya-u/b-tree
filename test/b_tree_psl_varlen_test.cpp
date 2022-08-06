@@ -26,7 +26,7 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePSLVarLen = ::dbgroup::index::b_tree::BTreePMLVarLen<K, V, C>;
+using BTreePSLVarLen = ::dbgroup::index::b_tree::BTreePSLVarLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
     IndexInfo<BTreePSLVarLen, UInt8, UInt8>,       // fixed-length keys

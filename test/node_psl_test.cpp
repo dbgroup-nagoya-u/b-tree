@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// #include "b_tree/component/psl/node_fixlen.hpp"
+#include "b_tree/component/psl/node_fixlen.hpp"
 #include "b_tree/component/psl/node_varlen.hpp"
 
 // external libraries
@@ -40,7 +40,7 @@ using Payload = uint64_t;
 using KeyComp = std::less<Key>;
 using PayloadComp = std::less<Payload>;
 using NodeVarLen_t = NodeVarLen<Key, KeyComp>;
-// using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
+using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
 
 /*######################################################################################
  * Fixture definitions
@@ -70,9 +70,6 @@ class NodeFixture : public testing::Test
   SetUp() override
   {
     node_ = CreateNode(kLeafFlag);
-    // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-    //   node_->SetPayloadLength(kPayLen);
-    // }
   }
 
   void
@@ -89,7 +86,11 @@ class NodeFixture : public testing::Test
   CreateNode(const bool is_leaf)  //
       -> Node *
   {
-    return new (::operator new(kPageSize)) Node{is_leaf};
+    auto *node = new (::operator new(kPageSize)) Node{is_leaf};
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      node->SetPayloadLength(kPayLen);
+    }
+    return node;
   }
 
   /*####################################################################################
@@ -289,9 +290,6 @@ class NodeFixture : public testing::Test
 
     // perform splitting
     auto *r_node = CreateNode(kLeafFlag);
-    // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-    //   r_node->SetPayloadLength(kPayLen);
-    // }
     node_->LockSIX();
     node_->Split(r_node);
     node_->UnlockSIX();
@@ -324,9 +322,6 @@ class NodeFixture : public testing::Test
 
     // fill a left node
     node_ = CreateNode(kLeafFlag);
-    // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-    //   node_->SetPayloadLength(kPayLen);
-    // }
     for (size_t i = 0; i < kHalfNum; ++i) {
       Write(i, i);
     }
@@ -355,7 +350,7 @@ class NodeFixture : public testing::Test
  * Preparation for typed testing
  *####################################################################################*/
 
-using TestTargets = ::testing::Types<NodeVarLen_t>;
+using TestTargets = ::testing::Types<NodeVarLen_t, NodeFixLen_t>;
 TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
 /*######################################################################################

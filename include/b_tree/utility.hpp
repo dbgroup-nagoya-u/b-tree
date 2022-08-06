@@ -39,6 +39,21 @@ enum ReturnCode {
   kKeyExist,
 };
 
+/// a flag for indicating pessimistic locking.
+constexpr bool kPessimisticLock = false;
+
+/// a flag for indicating optimistic locking.
+constexpr bool kOptimisticLock = true;
+
+/// a flag for indicating multi-layer locking.
+constexpr bool kMultiLayerLock = false;
+
+/// a flag for indicating multi-layer locking.
+constexpr bool kSingleLayerLock = true;
+
+/// a flag for indicating optimized page layouts for fixed-length data.
+constexpr bool kOptimizeForFixLenData = false;
+
 /*######################################################################################
  * Utility functions
  *####################################################################################*/
