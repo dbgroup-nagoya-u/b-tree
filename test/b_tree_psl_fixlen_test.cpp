@@ -1,4 +1,3 @@
-
 /*
  * Copyright 2022 Database Group, Nagoya University
  *
@@ -15,57 +14,34 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_COMMON_HPP
-#define B_TREE_COMPONENT_COMMON_HPP
+#include "b_tree/b_tree.hpp"
 
-#include <cstring>
-#include <memory>
+// organization libraries
+#include "external/index-fixtures/index_fixture.hpp"
 
-// local sources
-#include "b_tree/utility.hpp"
-
-namespace dbgroup::index::b_tree::component
+namespace dbgroup::index::test
 {
-
 /*######################################################################################
- * Internal enum and constants
+ * Preparation for typed testing
  *####################################################################################*/
 
-/**
- * @brief Internal return codes for representing results of node modification.
- *
- */
-enum NodeRC {
-  kCompleted = 0,
-  kKeyNotInserted = -7,
-  kKeyAlreadyDeleted,
-  kKeyAlreadyInserted,
-  kNeedSplit,
-  kNeedMerge,
-  kAbortMerge,
-  kNeedWaitAndRetry,
-};
+template <class K, class V, class C>
+using BTreePSLFixLen = ::dbgroup::index::b_tree::BTreePSLFixLen<K, V, C>;
+
+using TestTargets = ::testing::Types<              //
+    IndexInfo<BTreePSLFixLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePSLFixLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePSLFixLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePSLFixLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePSLFixLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePSLFixLen, Original, Original>  // original class keys/payloads
+    >;
+TYPED_TEST_SUITE(IndexFixture, TestTargets);
 
 /*######################################################################################
- * Internal utility functions
+ * Unit test definitions
  *####################################################################################*/
 
-/**
- * @brief Shift a memory address by byte offsets.
- *
- * @param addr an original address.
- * @param offset an offset to shift.
- * @return a shifted address.
- */
-constexpr auto
-ShiftAddr(  //
-    const void *addr,
-    const int64_t offset)  //
-    -> void *
-{
-  return static_cast<std::byte *>(const_cast<void *>(addr)) + offset;
-}
+#include "external/index-fixtures/index_fixture_test_definitions.hpp"
 
-}  // namespace dbgroup::index::b_tree::component
-
-#endif
+}  // namespace dbgroup::index::test

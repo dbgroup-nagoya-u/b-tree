@@ -18,7 +18,11 @@
 #define B_TREE_B_TREE_HPP
 
 // local sources
-#include "component/pcl/b_tree.hpp"
+#include "utility.hpp"
+
+// actual B+tree implementations
+#include "component/pml/b_tree.hpp"
+#include "component/psl/b_tree.hpp"
 
 namespace dbgroup::index::b_tree
 {
@@ -29,14 +33,14 @@ namespace dbgroup::index::b_tree
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
  * @tparam kUseOptimisticLock a flag for using optimistic locking.
- * @tparam kUseFineGrainedSMOs a flag for using fine-grained SMOs.
+ * @tparam kUseSingleLayerLock a flag for using fine-grained SMOs.
  * @tparam kIsVarLen a flag for indicating variable-length keys.
  */
 template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           bool kUseOptimisticLock = true,
-          bool kUseFineGrainedSMOs = true,
+          bool kUseSingleLayerLock = true,
           bool kIsVarLen = IsVarLenData<Key>()>
 class BTree
 {
@@ -45,7 +49,16 @@ class BTree
    * Type aliases
    *##################################################################################*/
 
-  using BTree_t = component::pcl::BTree<Key, Payload, Comp, kIsVarLen>;
+  template <class K, class V, class C, bool VAR>
+  using BTreePML = component::pml::BTree<K, V, C, VAR>;
+
+  template <class K, class V, class C, bool VAR>
+  using BTreePSL = component::psl::BTree<K, V, C, VAR>;
+
+  using BTree_t = std::conditional_t<kUseSingleLayerLock,
+                                     BTreePSL<Key, Payload, Comp, kIsVarLen>,
+                                     BTreePML<Key, Payload, Comp, kIsVarLen>>;
+
   using RecordIterator_t = component::RecordIterator<BTree_t>;
 
   /*####################################################################################
@@ -56,7 +69,12 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree() = default;
+  explicit BTree(  //
+      const size_t gc_interval_micro = 1000,
+      const size_t gc_thread_num = 1)
+      : b_tree_{gc_interval_micro, gc_thread_num}
+  {
+  }
 
   BTree(const BTree &) = delete;
   BTree(BTree &&) = delete;
@@ -245,14 +263,14 @@ class BTree
   IsValidKeyType()  //
       -> bool
   {
-    if constexpr (IsVarLenData<Key>()) {
-      if constexpr (!kIsVarLen) {
-        // tried to construct B+trees for fixed-length data, but variable-length keys were input
-        return false;
-      } else {
-        return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
-      }
+    if constexpr (kIsVarLen && IsVarLenData<Key>()) {
+      // check a base type is trivially copyable
+      return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
+    } else if constexpr (IsVarLenData<Key>()) {
+      // cannot use optimized page layouts with variable-length data
+      return false;
     } else {
+      // check a given key type is trivially copyable
       return std::is_trivially_copyable_v<Key>;
     }
   }
@@ -279,17 +297,33 @@ class BTree
  * Aliases for convenience
  *####################################################################################*/
 
-/// an alias for using a B+tree with pessimistic coarse-grained locking.
+/// a B+tree based on pessimistic multi-layer locking (PML).
 template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreePCL = BTree<Key, Payload, Comp, false, false>;
+using BTreePML = BTree<Key, Payload, Comp, kPessimisticLock, kMultiLayerLock>;
 
-/// an alias for using a B+tree with pessimistic coarse-grained locking and variable-length keys.
+/// a B+tree based on PML with generic page layouts.
 template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreePCLVarLen = BTree<Key, Payload, Comp, false, false, true>;
+using BTreePMLVarLen =
+    BTree<Key, Payload, Comp, kPessimisticLock, kMultiLayerLock, !kOptimizeForFixLenData>;
 
-/// an alias for using a B+tree with pessimistic coarse-grained locking and fixed-length keys.
+/// a B+tree based on PML with optimized page layouts for fixed-length data.
 template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreePCLFixLen = BTree<Key, Payload, Comp, false, false, false>;
+using BTreePMLFixLen =
+    BTree<Key, Payload, Comp, kPessimisticLock, kMultiLayerLock, kOptimizeForFixLenData>;
+
+/// a B+tree with pessimistic single-layer locking (PSL).
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreePSL = BTree<Key, Payload, Comp, kPessimisticLock, kSingleLayerLock>;
+
+/// a B+tree based on PSL with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreePSLVarLen =
+    BTree<Key, Payload, Comp, kPessimisticLock, kSingleLayerLock, !kOptimizeForFixLenData>;
+
+/// a B+tree based on PSL with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreePSLFixLen =
+    BTree<Key, Payload, Comp, kPessimisticLock, kSingleLayerLock, kOptimizeForFixLenData>;
 
 }  // namespace dbgroup::index::b_tree
 

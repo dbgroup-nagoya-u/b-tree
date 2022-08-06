@@ -32,6 +32,11 @@ set(B_TREE_MAX_VARLEN_DATA_SIZE "128" CACHE STRING "The expected maximum size of
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/cpp-utility")
 
 #--------------------------------------------------------------------------------------#
+# Configure garbage collector
+#--------------------------------------------------------------------------------------#
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
+
+#--------------------------------------------------------------------------------------#
 # Build targets
 #--------------------------------------------------------------------------------------#
 
@@ -53,6 +58,7 @@ if(NOT TARGET b_tree::b_tree)
   )
   target_link_libraries(b_tree INTERFACE
     cpp_utility::cpp_utility
+    memory_manager::memory_manager
   )
 endif()
 

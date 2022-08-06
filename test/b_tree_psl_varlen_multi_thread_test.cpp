@@ -17,7 +17,7 @@
 #include "b_tree/b_tree.hpp"
 
 // organization libraries
-#include "external/index-fixtures/index_fixture.hpp"
+#include "external/index-fixtures/index_fixture_multi_thread.hpp"
 
 namespace dbgroup::index::test
 {
@@ -26,23 +26,23 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCLVarLen = ::dbgroup::index::b_tree::BTreePCLVarLen<K, V, C>;
+using BTreePSLVarLen = ::dbgroup::index::b_tree::BTreePSLVarLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
-    IndexInfo<BTreePCLVarLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePCLVarLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePCLVarLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreePCLVarLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreePCLVarLen, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreePCLVarLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreePCLVarLen, Original, Original>  // original class keys/payloads
+    IndexInfo<BTreePSLVarLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePSLVarLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePSLVarLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePSLVarLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePSLVarLen, Var, UInt8>,         // variable-length keys
+    IndexInfo<BTreePSLVarLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePSLVarLen, Original, Original>  // original class keys/payloads
     >;
-TYPED_TEST_SUITE(IndexFixture, TestTargets);
+TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
  *####################################################################################*/
 
-#include "external/index-fixtures/index_fixture_test_definitions.hpp"
+#include "external/index-fixtures/index_fixture_multi_thread_test_definitions.hpp"
 
 }  // namespace dbgroup::index::test

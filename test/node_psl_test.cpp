@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/pcl/node_fixlen.hpp"
-#include "b_tree/component/pcl/node_varlen.hpp"
+#include "b_tree/component/psl/node_fixlen.hpp"
+#include "b_tree/component/psl/node_varlen.hpp"
 
 // external libraries
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::b_tree::component::pcl::test
+namespace dbgroup::index::b_tree::component::psl::test
 {
 /*######################################################################################
  * Global constants
@@ -69,35 +69,40 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::make_unique<Node>(kLeafFlag);
-    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-      node_->SetPayloadLength(kPayLen);
-    }
+    node_ = CreateNode(kLeafFlag);
   }
 
   void
   TearDown() override
   {
-    node_.reset(nullptr);
+    ::operator delete(node_);
+  }
+
+  /*####################################################################################
+   * Utility functions
+   *##################################################################################*/
+
+  auto
+  CreateNode(const bool is_leaf)  //
+      -> Node *
+  {
+    auto *node = new (::operator new(kPageSize)) Node{is_leaf};
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      node->SetPayloadLength(kPayLen);
+    }
+    return node;
   }
 
   /*####################################################################################
    * Operation wrappers
    *##################################################################################*/
 
-  void
-  LockX()
-  {
-    node_->LockSIX();
-    node_->UpgradeToX();
-  }
-
   auto
   Write(  //
       const Key key,
       const Payload payload)
   {
-    LockX();
+    node_->LockSIX();
     node_->Write(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -106,7 +111,7 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    LockX();
+    node_->LockSIX();
     return node_->Insert(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -115,15 +120,19 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    LockX();
+    node_->LockSIX();
     return node_->Update(key, &payload, kPayLen);
   }
 
   auto
   Delete(const size_t key)
   {
-    LockX();
-    return node_->Delete(key);
+    node_->LockSIX();
+    auto rc = node_->Delete(key);
+    if (rc == kNeedMerge) {
+      node_->UnlockSIX();
+    }
+    return rc;
   }
 
   /*####################################################################################
@@ -154,10 +163,12 @@ class NodeFixture : public testing::Test
       const Payload payload,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyExist;
     auto rc = Insert(key, payload);
-
-    EXPECT_EQ(expected_rc, rc);
+    if (expect_success) {
+      EXPECT_NE(rc, kKeyAlreadyInserted);
+    } else {
+      EXPECT_EQ(rc, kKeyAlreadyInserted);
+    }
   }
 
   void
@@ -177,10 +188,12 @@ class NodeFixture : public testing::Test
       const Key key,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
     auto rc = Delete(key);
-
-    EXPECT_EQ(expected_rc, rc);
+    if (expect_success) {
+      EXPECT_NE(rc, kKeyNotInserted);
+    } else {
+      EXPECT_EQ(rc, kKeyNotInserted);
+    }
   }
 
   /*####################################################################################
@@ -278,10 +291,7 @@ class NodeFixture : public testing::Test
     }
 
     // perform splitting
-    auto *r_node = new Node{kLeafFlag};
-    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-      r_node->SetPayloadLength(kPayLen);
-    }
+    auto *r_node = CreateNode(kLeafFlag);
     node_->LockSIX();
     node_->Split(r_node);
     node_->UnlockSIX();
@@ -294,7 +304,8 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
-        node_.reset(r_node);
+        ::operator delete(node_);
+        node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
     }
@@ -309,22 +320,20 @@ class NodeFixture : public testing::Test
     for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
       Write(i, i);
     }
-    auto *r_node = node_.release();
+    auto *r_node = node_;
 
     // fill a left node
-    node_ = std::make_unique<Node>(kLeafFlag);
-    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-      node_->SetPayloadLength(kPayLen);
-    }
+    node_ = CreateNode(kLeafFlag);
     for (size_t i = 0; i < kHalfNum; ++i) {
       Write(i, i);
     }
 
     // merge the two nodes
     node_->LockSIX();
+    r_node->LockSIX();
     node_->Merge(r_node);
     node_->UnlockSIX();
-    delete r_node;
+    ::operator delete(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
@@ -336,7 +345,7 @@ class NodeFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  std::unique_ptr<Node> node_{nullptr};
+  Node *node_{nullptr};
 };
 
 /*######################################################################################
@@ -362,4 +371,4 @@ TYPED_TEST(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes) { TestFixture::Te
 
 TYPED_TEST(NodeFixture, MergeTwoNodesIntoSingleNode) { TestFixture::TestMerge(); }
 
-}  // namespace dbgroup::index::b_tree::component::pcl::test
+}  // namespace dbgroup::index::b_tree::component::psl::test

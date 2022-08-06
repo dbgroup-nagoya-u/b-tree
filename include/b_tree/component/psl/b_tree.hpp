@@ -14,23 +14,26 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PCL_B_TREE_HPP
-#define B_TREE_COMPONENT_PCL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_PSL_B_TREE_HPP
+#define B_TREE_COMPONENT_PSL_B_TREE_HPP
 
 #include <future>
 #include <optional>
 #include <thread>
 #include <vector>
 
+// organization libraries
+#include "memory/epoch_based_gc.hpp"
+
 // local sources
 #include "b_tree/component/record_iterator.hpp"
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree::component::pcl
+namespace dbgroup::index::b_tree::component::psl
 {
 /**
- * @brief A class for representing B+trees with pessimistic coarse-grained locking.
+ * @brief A class for representing B+trees with pessimistic single-layer locking.
  *
  * This implementation can store variable-length keys (i.e., 'text' type in PostgreSQL).
  *
@@ -54,6 +57,7 @@ class BTree
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -70,11 +74,16 @@ class BTree
    * @brief Construct a new BTree object.
    *
    */
-  BTree()
+  BTree(  //
+      const size_t gc_interval_micro,
+      const size_t gc_thread_num)
+      : gc_{gc_interval_micro, gc_thread_num, true}
   {
+    auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kIsVarLen) {
-      root_->SetPayloadLength(kPayLen);
+      root->SetPayloadLength(kPayLen);
     }
+    root_.store(root, std::memory_order_release);
   }
 
   BTree(const BTree &) = delete;
@@ -93,7 +102,7 @@ class BTree
    */
   ~BTree()  //
   {
-    DeleteChildren(root_);
+    DeleteChildren(root_.load(std::memory_order_acquire));
   }
 
   /*####################################################################################
@@ -111,6 +120,8 @@ class BTree
   Read(const Key &key)  //
       -> std::optional<Payload>
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     auto *node = SearchLeafNodeForRead(key, kClosed);
 
     Payload payload{};
@@ -133,6 +144,8 @@ class BTree
       const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
     Node_t *node{};
     size_t begin_pos = 0;
 
@@ -168,8 +181,25 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key);
-    node->Write(key, key_len, &payload, kPayLen);
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    auto &&stack = SearchLeafNodeForWrite(key);
+    auto *node = stack.back();
+    const auto rc = node->Write(key, key_len, &payload, kPayLen);
+
+    if (rc == NodeRC::kNeedSplit) {
+      // perform splitting if needed
+      auto *r_node = HalfSplit(node);
+      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      target_node->Write(key, key_len, &payload, kPayLen);
+
+      // complete splitting by inserting a new entry
+      CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(sep_key);
+      }
+    }
+
     return kSuccess;
   }
 
@@ -189,8 +219,27 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key);
-    return node->Insert(key, key_len, &payload, kPayLen);
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    auto &&stack = SearchLeafNodeForWrite(key);
+    auto *node = stack.back();
+    auto rc = node->Insert(key, key_len, &payload, kPayLen);
+    if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
+
+    if (rc == NodeRC::kNeedSplit) {
+      // perform splitting if needed
+      auto *r_node = HalfSplit(node);
+      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      target_node->Insert(key, key_len, &payload, kPayLen);
+
+      // complete splitting by inserting a new entry
+      CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(sep_key);
+      }
+    }
+
+    return kSuccess;
   }
 
   /**
@@ -209,7 +258,10 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key);
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    auto &&stack = SearchLeafNodeForWrite(key);
+    auto *node = stack.back();
     return node->Update(key, &payload, kPayLen);
   }
 
@@ -227,8 +279,26 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    auto *node = SearchLeafNodeForWrite(key);
-    return node->Delete(key);
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    auto &&stack = SearchLeafNodeForWrite(key);
+    auto *node = stack.back();
+    const auto rc = node->Delete(key);
+    if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
+
+    if (rc == NodeRC::kNeedMerge) {
+      const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
+      auto *r_node = TryHalfMerge(node);
+      if (r_node != nullptr) {
+        CompleteMerge(stack, node, r_node, del_key, del_key_len);
+      }
+
+      if constexpr (IsVarLenData<Key>()) {
+        ::operator delete(del_key);
+      }
+    }
+
+    return kSuccess;
   }
 
   /*####################################################################################
@@ -292,12 +362,19 @@ class BTree
 
       // align the height of partial trees
       nodes.reserve(kInnerNodeCap * thread_num);
+      Node_t *prev_node = nullptr;
       for (auto &&[p_height, p_nodes] : partial_trees) {
         while (p_height < height) {  // NOLINT
           ConstructUpperLayer(p_nodes);
           ++p_height;
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
+
+        // link partial trees
+        if (prev_node != nullptr) {
+          Node_t::LinkVerticalBorderNodes(prev_node, p_nodes.front());
+        }
+        prev_node = p_nodes.back();
       }
     }
 
@@ -318,8 +395,13 @@ class BTree
   /// an expected maximum height of a tree.
   static constexpr size_t kExpectedTreeHeight = 8;
 
+  static constexpr auto kRetryWait = std::chrono::microseconds{10};
+
   /// a flag for indicating leaf nodes.
   static constexpr uint32_t kLeafFlag = 1;
+
+  /// a flag for indicating internal nodes.
+  static constexpr uint32_t kInnerFlag = 0;
 
   /// a flag for indicating closed-interval
   static constexpr bool kClosed = true;
@@ -368,41 +450,16 @@ class BTree
    *##################################################################################*/
 
   /**
-   * @return a root node with a shared lock.
+   * @brief Allocate or reuse a memory region for a base node.
+   *
+   * @returns the reserved memory page.
    */
   [[nodiscard]] auto
-  GetRootForRead()  //
-      -> Node_t *
+  GetNodePage()  //
+      -> void *
   {
-    mutex_.LockS();  // tree-latch
-
-    auto *node = root_;
-    node->LockS();  // root-latch
-
-    mutex_.UnlockS();  // tree-unlatch
-    return node;
-  }
-
-  /**
-   * @brief Get a root node with a shared lock with an intent-exclusive lock.
-   *
-   * This function performs SMOs for a root node if required.
-   *
-   * @return a root node or a valid child node if a root node is split.
-   */
-  [[nodiscard]] auto
-  GetRootForWrite(const Key &key)  //
-      -> Node_t *
-  {
-    mutex_.LockSIX();  // tree-latch
-    root_->LockSIX();  // root-latch
-
-    // check this tree requires SMOs
-    ShrinkTreeIfNeeded();
-    auto *node = (root_->NeedSplit(kMaxRecLen)) ? RootSplit(key) : root_;
-
-    mutex_.UnlockSIX();
-    return node;
+    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
   /**
@@ -421,13 +478,21 @@ class BTree
       const bool is_closed)  //
       -> Node_t *
   {
-    auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, is_closed);
-      node = node->GetChildForRead(pos);
-    }
+    auto *node = root_.load(std::memory_order_acquire);
+    while (true) {
+      // traverse side links if needed
+      node = Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      if (node == nullptr) {
+        // a root node is removed
+        node = root_.load(std::memory_order_acquire);
+        continue;
+      }
+      if (node->IsLeaf()) return node;  // reach a valid leaf node
 
-    return node;
+      // go down to the next level
+      const auto pos = node->SearchChild(key, is_closed);
+      node = node->GetChild(pos);
+    }
   }
 
   /**
@@ -442,10 +507,14 @@ class BTree
   SearchLeftmostLeaf()  //
       -> Node_t *
   {
-    auto *node = GetRootForRead();
+    auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      node = node->GetChildForRead(0);
+      node = node->GetLeftmostChild();
+      if (node == nullptr) {
+        node = root_.load(std::memory_order_acquire);
+      }
     }
+    node->LockS();
 
     return node;
   }
@@ -453,39 +522,99 @@ class BTree
   /**
    * @brief Search a leaf node that may have a target key.
    *
-   * This function performs SMOs if internal nodes on the way should be modified. This
-   * function uses SIX and X locks for modifying trees, and a returned leaf node is
-   * locked by an exclusive lock.
+   * This function uses shared locks while traversing a tree, and a returned leaf node
+   * is locked by a shared with intent-exclusive lock.
    *
    * @param key a search key.
-   * @return a leaf node that may have a target key.
+   * @return a stack of nodes that may have a target key.
    */
   [[nodiscard]] auto
   SearchLeafNodeForWrite(const Key &key)  //
-      -> Node_t *
+      -> std::vector<Node_t *>
   {
-    auto *node = GetRootForWrite(key);
-    while (!node->IsLeaf()) {
-      // search a child node
-      const auto pos = node->SearchChild(key, kClosed);
-      auto *child = node->GetChildForWrite(pos);
+    std::vector<Node_t *> stack{};
+    stack.reserve(kExpectedTreeHeight);
 
-      // perform internal SMOs eagerly
-      if (child->NeedSplit(kMaxRecLen)) {
-        Split(child, node, pos);
-        child = child->GetValidSplitNode(key);
-      } else if (child->NeedMerge()) {
-        Merge(child, node, pos);
-      } else {
-        node->UnlockSIX();
+    auto *node = root_.load(std::memory_order_acquire);
+    while (true) {
+      if (node->IsLeaf()) {
+        // require an exclusive lock for write operations
+        node = Node_t::CheckKeyRangeAndLockForWrite(node, key);
+        stack.emplace_back(node);
+        return stack;
       }
 
-      // go down to the next level
-      node = child;
-    }
+      // traverse side links if needed
+      node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
+      if (node == nullptr) {
+        // a root node is removed
+        stack.clear();
+        node = root_.load(std::memory_order_acquire);
+        continue;
+      }
+      stack.emplace_back(node);
 
-    node->UpgradeToX();
-    return node;
+      // go down to the next level
+      const auto pos = node->SearchChild(key, kClosed);
+      node = node->GetChild(pos);
+    }
+  }
+
+  /**
+   * @brief Search a parent node of a given one to construct a valid node stack.
+   *
+   * @param stack the instance of a stack to be reused.
+   * @param target_node a child node to be searched.
+   */
+  void
+  SearchParentNode(  //
+      std::vector<Node_t *> &stack,
+      Node_t *target_node)
+  {
+    auto *node = root_.load(std::memory_order_acquire);
+    const auto key = target_node->GetLowKey();
+    if (key) {
+      // search a target node with its lowest key
+      while (true) {
+        node = Node_t::CheckKeyRangeAndLockForRead(node, *key, !kClosed);
+        if (node == nullptr) {
+          // a root node is removed
+          stack.clear();
+          node = root_.load(std::memory_order_acquire);
+          continue;
+        }
+
+        stack.emplace_back(node);
+        if (node == target_node) {
+          // reach a target node
+          node->UnlockS();
+          stack.pop_back();
+          return;
+        }
+
+        // go down to the next level
+        const auto pos = node->SearchChild(*key, !kClosed);
+        node = node->GetChild(pos);
+      }
+    } else {
+      // search leftmost nodes
+      while (true) {
+        stack.emplace_back(node);
+        if (node == target_node) {
+          // reach a target node
+          stack.pop_back();
+          return;
+        }
+
+        node = node->GetLeftmostChild();
+        if (node == nullptr) {
+          // a root node is removed
+          stack.clear();
+          node = root_.load(std::memory_order_acquire);
+          continue;
+        }
+      }
+    }
   }
 
   /**
@@ -506,7 +635,7 @@ class BTree
       }
     }
 
-    delete node;
+    ::operator delete(node);
   }
 
   /*####################################################################################
@@ -517,83 +646,224 @@ class BTree
    * @brief Split a given node.
    *
    * @param l_node a node to be split.
-   * @param parent a parent node of `l_node`.
-   * @param pos the position of `l_node` in its parent node.
+   * @return a split-right node.
    */
-  void
-  Split(  //
-      Node_t *l_node,
-      Node_t *parent,
-      const size_t pos)
+  [[nodiscard]] auto
+  HalfSplit(Node_t *l_node)  //
+      -> Node_t *
   {
-    parent->UpgradeToX();
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
-    parent->InsertChild(l_node, r_node, pos);
+
+    return r_node;
   }
 
   /**
-   * @brief Split a root node and install a new root node into this tree.
+   * @brief Complete a split operation by inserting a new entry.
    *
-   * @param key a search key.
-   * @return one of the split child nodes that includes a given key.
+   * @param stack nodes in the searched path.
+   * @param l_child a left child node.
+   * @param r_child a right child node.
+   * @param l_key a separator key.
+   * @param l_key_len the length of the separator key.
+   */
+  void
+  CompleteSplit(  //
+      std::vector<Node_t *> &stack,
+      Node_t *l_child,
+      const Node_t *r_child,
+      const Key &l_key,
+      const size_t l_key_len)
+  {
+    stack.pop_back();  // remove a child node from a stack
+    Node_t *node = nullptr;
+    while (true) {
+      if (stack.empty()) {
+        // splitting a root node if possible
+        if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
+
+        // other threads have modified this tree concurrently, so retry
+        SearchParentNode(stack, l_child);
+        continue;
+      }
+
+      if (node == nullptr) {
+        // set a parent node if needed
+        node = stack.back();
+      }
+
+      // traverse horizontally to reach a valid parent node
+      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      if (node == nullptr) {
+        // a root node is removed
+        SearchParentNode(stack, l_child);
+        continue;
+      }
+
+      // insert a new entry into a tree
+      const auto rc = node->InsertChild(r_child, l_key, l_key_len);
+      if (rc == NodeRC::kCompleted) return;
+      if (rc == NodeRC::kNeedSplit) {
+        // since a parent node is full, perform splitting
+        const auto *r_node = HalfSplit(node);
+        auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(l_key);
+        target_node->InsertChild(r_child, l_key, l_key_len);
+
+        // complete splitting by inserting a new entry
+        CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
+        if constexpr (IsVarLenData<Key>()) {
+          ::operator delete(sep_key);
+        }
+        return;
+      }
+
+      // previous merging has not finished, so wait and retry
+      std::this_thread::sleep_for(kRetryWait);
+    }
+  }
+
+  /**
+   * @brief Try to split a root node.
+   *
+   * @param l_child a split-left (i.e., an old root) node.
+   * @param r_child a split-right node.
+   * @param l_key a highest key of `l_child`.
+   * @param l_key_len the length of a highest key.
+   * @retval true if a root node is split.
+   * @retval false otherwise.
    */
   [[nodiscard]] auto
-  RootSplit(const Key &key)  //
-      -> Node_t *
+  TryRootSplit(  //
+      const Node_t *l_child,
+      const Node_t *r_child,
+      const Key &l_key,
+      const size_t l_key_len)  //
+      -> bool
   {
-    mutex_.UpgradeToX();
+    auto *cur_root = root_.load(std::memory_order_relaxed);
+    if (cur_root != l_child) return false;
 
-    auto *l_node = root_;
-    auto *r_node = new Node_t{l_node->IsLeaf()};
-    l_node->Split(r_node);
-    root_ = new Node_t{l_node, r_node};
-
-    mutex_.DowngradeToSIX();
-    return l_node->GetValidSplitNode(key);
+    // install a new root node
+    auto *new_root = new (GetNodePage()) Node_t{l_key, l_key_len, l_child, r_child};
+    root_.store(new_root, std::memory_order_release);
+    return true;
   }
 
   /**
    * @brief Merge a given node with its right-sibling node if possible.
    *
    * @param l_node a node to be merged.
-   * @param parent a parent node of `l_node`.
-   * @param pos the position of `l_node` in its parent node.
+   * @retval a right-sibling node to be removed if merging succeeds.
+   * @retval nullptr otherwise.
    */
-  void
-  Merge(  //
-      Node_t *l_node,
-      Node_t *parent,
-      const size_t l_pos)
+  [[nodiscard]] auto
+  TryHalfMerge(Node_t *l_node)  //
+      -> Node_t *
   {
     // check there is a mergeable sibling node
-    auto *r_node = parent->GetMergeableRightChild(l_node, l_pos);
-    if (r_node == nullptr) return;
+    auto *r_node = l_node->GetMergeableSiblingNode();
+    if (r_node == nullptr) return nullptr;
 
     // perform merging
     l_node->Merge(r_node);
-    parent->DeleteChild(l_node, l_pos);
-    delete r_node;
+
+    return r_node;
   }
 
   /**
-   * @brief Remove a root node that has only one child node.
+   * @brief Complete a merge operatin by deleting an index entry.
    *
+   * @param stack nodes in the searched path.
+   * @param l_child a left child node.
+   * @param r_child a right child (i.e., removed) node.
+   * @param l_key a separator key.
+   * @param l_key_len the length of the separator key.
    */
   void
-  ShrinkTreeIfNeeded()
+  CompleteMerge(  //
+      std::vector<Node_t *> &stack,
+      Node_t *l_child,
+      Node_t *r_child,
+      const Key &l_key,
+      const size_t l_key_len)
   {
-    while (root_->GetRecordCount() == 1 && !root_->IsLeaf()) {
-      mutex_.UpgradeToX();
+    stack.pop_back();  // remove a child node from a stack
+    Node_t *node = nullptr;
+    while (true) {
+      if (stack.empty()) {
+        // other threads have modified this tree concurrently, so retry
+        SearchParentNode(stack, l_child);
+        continue;
+      }
 
-      // if a root node has only one child, shrink a tree
-      auto *child = root_->template GetPayload<Node_t *>(0);
-      child->LockSIX();
-      delete root_;
-      root_ = child;
+      if (node == nullptr) {
+        // set a parent node if needed
+        node = stack.back();
+      }
 
-      mutex_.DowngradeToSIX();
+      // traverse horizontally to reach a valid parent node
+      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      if (node == nullptr) {
+        // a root node is removed
+        SearchParentNode(stack, l_child);
+        continue;
+      }
+
+      // delete an entry from a tree
+      switch (node->DeleteChild(r_child, l_key)) {
+        case NodeRC::kCompleted:
+          gc_.AddGarbage(r_child);
+          return;
+
+        case NodeRC::kAbortMerge:
+          l_child->AbortMerge(r_child, l_key, l_key_len);
+          return;
+
+        case NodeRC::kNeedWaitAndRetry:
+          // previous splitting has not finished, so wait and retry
+          std::this_thread::sleep_for(kRetryWait);
+          continue;
+
+        case NodeRC::kNeedMerge:
+        default:
+          gc_.AddGarbage(r_child);
+
+          // merging of parent nodes is required
+          const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
+          auto *r_node = TryHalfMerge(node);
+          if (r_node != nullptr) {
+            CompleteMerge(stack, node, r_node, del_key, del_key_len);
+          } else if (stack.size() == 1) {
+            TryShrinkTree(node);
+          }
+
+          if constexpr (IsVarLenData<Key>()) {
+            ::operator delete(del_key);
+          }
+          return;
+      }
     }
+  }
+
+  /**
+   * @brief Try to remove a root node.
+   *
+   * @param node an expected old root node.
+   */
+  void
+  TryShrinkTree(Node_t *node)
+  {
+    node->LockSIX();
+
+    if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
+      do {
+        gc_.AddGarbage(node);
+        node = node->RemoveRoot();
+      } while (node->GetRecordCount() == 1 && !node->IsLeaf());
+      root_.store(node, std::memory_order_relaxed);
+    }
+
+    node->UnlockSIX();
   }
 
   /*####################################################################################
@@ -628,7 +898,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{true};
+      auto *node = new (GetNodePage()) Node_t{kLeafFlag};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -664,10 +934,12 @@ class BTree
     // load child nodes into a inner node
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
+    Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{false};
-      node->Bulkload(iter, iter_end);
+      auto *node = new (GetNodePage()) Node_t{kInnerFlag};
+      node->Bulkload(iter, iter_end, l_node);
       nodes.emplace_back(node);
+      l_node = node;
     }
 
     child_nodes = std::move(nodes);
@@ -685,12 +957,12 @@ class BTree
    * Internal member variables
    *##################################################################################*/
 
+  /// a garbage collector for node pages.
+  GC_t gc_{};
+
   /// a root node of this tree.
-  Node_t *root_ = new Node_t{kLeafFlag};
-
-  /// mutex for managing a tree lock.
-  ::dbgroup::lock::PessimisticLock mutex_{};
+  std::atomic<Node_t *> root_{nullptr};
 };
-}  // namespace dbgroup::index::b_tree::component::pcl
+}  // namespace dbgroup::index::b_tree::component::psl
 
-#endif  // B_TREE_COMPONENT_PCL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_PSL_B_TREE_HPP

@@ -17,7 +17,7 @@
 #include "b_tree/b_tree.hpp"
 
 // organization libraries
-#include "external/index-fixtures/index_fixture_multi_thread.hpp"
+#include "external/index-fixtures/index_fixture.hpp"
 
 namespace dbgroup::index::test
 {
@@ -26,22 +26,22 @@ namespace dbgroup::index::test
  *####################################################################################*/
 
 template <class K, class V, class C>
-using BTreePCLFixLen = ::dbgroup::index::b_tree::BTreePCLFixLen<K, V, C>;
+using BTreePMLFixLen = ::dbgroup::index::b_tree::BTreePMLFixLen<K, V, C>;
 
 using TestTargets = ::testing::Types<              //
-    IndexInfo<BTreePCLFixLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreePCLFixLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreePCLFixLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreePCLFixLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreePCLFixLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreePCLFixLen, Original, Original>  // original class keys/payloads
+    IndexInfo<BTreePMLFixLen, UInt8, UInt8>,       // fixed-length keys
+    IndexInfo<BTreePMLFixLen, UInt4, UInt8>,       // small keys
+    IndexInfo<BTreePMLFixLen, UInt8, UInt4>,       // small payloads
+    IndexInfo<BTreePMLFixLen, UInt4, UInt4>,       // small keys/payloads
+    IndexInfo<BTreePMLFixLen, Ptr, Ptr>,           // pointer keys/payloads
+    IndexInfo<BTreePMLFixLen, Original, Original>  // original class keys/payloads
     >;
-TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
+TYPED_TEST_SUITE(IndexFixture, TestTargets);
 
 /*######################################################################################
  * Unit test definitions
  *####################################################################################*/
 
-#include "external/index-fixtures/index_fixture_multi_thread_test_definitions.hpp"
+#include "external/index-fixtures/index_fixture_test_definitions.hpp"
 
 }  // namespace dbgroup::index::test
