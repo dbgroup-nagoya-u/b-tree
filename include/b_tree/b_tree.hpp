@@ -21,6 +21,7 @@
 #include "utility.hpp"
 
 // actual B+tree implementations
+#include "component/oml/b_tree.hpp"
 #include "component/osl/b_tree.hpp"
 #include "component/pml/b_tree.hpp"
 #include "component/psl/b_tree.hpp"
@@ -49,6 +50,9 @@ class BTree
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
+
+  template <class K, class V, class C, bool VAR>
+  using BTreeOML = component::oml::BTree<K, V, C, VAR>;
 
   template <class K, class V, class C, bool VAR>
   using BTreePML = component::pml::BTree<K, V, C, VAR>;
@@ -307,6 +311,20 @@ class BTree
 /*######################################################################################
  * Aliases for convenience
  *####################################################################################*/
+
+/// a B+tree based on optimistic multi-layer locking (OML).
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOML = BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock>;
+
+/// a B+tree based on OML with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOMLVarLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, !kOptimizeForFixLenData>;
+
+/// a B+tree based on OML with optimized page layouts for fixed-length data.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOMLFixLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, kOptimizeForFixLenData>;
 
 /// a B+tree based on pessimistic multi-layer locking (PML).
 template <class Key, class Payload, class Comp = std::less<Key>>
