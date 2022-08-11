@@ -314,39 +314,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Get a child node in a given position.
-   *
-   * The returned child node is locked with a shared lock and this node is unlocked.
-   *
-   * @param pos the position of a child node.
-   * @return the child node with a shared lock.
-   */
-  [[nodiscard]] constexpr auto
-  GetChildForRead(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    child->mutex_.LockS();
-    mutex_.UnlockS();
-    return child;
-  }
-
-  /**
-   * @brief Get a child node in a given position.
-   *
-   * @param pos the position of a child node.
-   * @return the child node with an SIX lock.
-   */
-  [[nodiscard]] constexpr auto
-  GetChildForWrite(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    child->mutex_.LockSIX();
-    return child;
-  }
-
-  /**
    * @brief Get a mergeable child node if exist.
    *
    * The returned child node is locked with an SIX lock. If there is no mergeable child
@@ -359,7 +326,7 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetMergeableRightChild(  //
-      const Node *l_node,
+      Node *l_node,
       const size_t l_pos)  //
       -> Node *
   {
@@ -367,20 +334,21 @@ class NodeVarLen
     const auto r_pos = l_pos + 1;
     if (r_pos == record_count_) {
       // a rightmost node is cannot be merged
-      mutex_.UnlockSIX();
+      mutex_.UnlockX();
+      l_node->mutex_.UnlockX();
       return nullptr;
     }
 
     // check the right-sibling node has enough capacity for merging
-    auto *r_node = GetChildForWrite(r_pos);
+    auto *r_node = GetPayload<Node *>(r_pos);
+    r_node->mutex_.LockX();
     if (l_node->GetUsedSize() + r_node->GetUsedSize() >= kMaxUsedSpaceSize) {
-      mutex_.UnlockSIX();
-      r_node->mutex_.UnlockSIX();
+      mutex_.UnlockX();
+      l_node->mutex_.UnlockX();
+      r_node->mutex_.UnlockX();
       return nullptr;
     }
 
-    UpgradeToX();
-    r_node->UpgradeToX();
     return r_node;
   }
 
@@ -418,11 +386,11 @@ class NodeVarLen
   GetVersion()  //
       -> uint64_t
   {
-    mutex_.GetVersion();
+    return mutex_.GetVersion();
   }
 
   auto
-  GetVersion(const uint64_t version)  //
+  CheckVersion(const uint64_t version)  //
       -> bool
   {
     return mutex_.CheckVersion(version);
@@ -477,6 +445,20 @@ class NodeVarLen
   UpgradeToX()
   {
     mutex_.UpgradeToX();
+  }
+
+  auto
+  LockX()  //
+      -> void
+  {
+    mutex_.LockX();
+  }
+
+  auto
+  UnlockX()  //
+      -> void
+  {
+    mutex_.UnlockX();
   }
 
   /*####################################################################################
@@ -606,7 +588,6 @@ class NodeVarLen
       rc = kSuccess;
     }
 
-    mutex_.UnlockS();
     return rc;
   }
 
@@ -871,8 +852,6 @@ class NodeVarLen
   void
   Merge(Node *r_node)
   {
-    mutex_.UpgradeToX();
-
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
 
@@ -899,12 +878,12 @@ class NodeVarLen
     r_node->is_removed_ = 1;
     r_node->next_ = this;
 
-    r_node->mutex_.DowngradeToSIX();
+    r_node->mutex_.UnlockX();
 
     // reset a temp node
     temp_node_->record_count_ = 0;
 
-    mutex_.DowngradeToSIX();
+    mutex_.UnlockX();
   }
 
   /*####################################################################################
@@ -1022,6 +1001,12 @@ class NodeVarLen
     }
   }
 
+  void
+  SetRemoved()
+  {
+    is_removed_ = 1;
+  }
+
  private:
   /*####################################################################################
    * Internal constants
@@ -1136,12 +1121,6 @@ class NodeVarLen
     Payload payload{};
     memcpy(&payload, GetPayloadAddr(meta), sizeof(Payload));
     return payload;
-  }
-
-  void
-  SetRemoved()
-  {
-    is_removed_ = 1;
   }
 
   /**

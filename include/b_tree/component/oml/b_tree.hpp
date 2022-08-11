@@ -79,7 +79,7 @@ class BTree
       const size_t gc_thread_num)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
-    auto *root = new (GetNodePage()) Node_t{kLeafFlag};
+    auto *root = new Node_t{kLeafFlag};
     if constexpr (!kIsVarLen) {
       root->SetPayloadLength(kPayLen);
     }
@@ -442,7 +442,7 @@ class BTree
       return GetRootForWrite(key);
     }
 
-    *node = root_.load(std::memory_order_acquire);
+    node = root_.load(std::memory_order_acquire);
     auto [next_node, next_rc] = RootSplit(node, key);
     node = next_node;
     if (next_rc == kNeedRootRetry) {
@@ -472,7 +472,7 @@ class BTree
     while (!node->IsLeaf()) {
       const auto version = node->GetVersion();
       const auto pos = node->SearchChild(key, is_closed);
-      const auto *child = node->GetChild(pos);
+      auto *child = node->GetChild(pos);
       const auto rc = node->NeedRetry(key, version);
       switch (rc) {
         case kNeedRootRetry:
@@ -529,7 +529,7 @@ class BTree
       const auto version = node->GetVersion();
       // search a child node
       const auto pos = node->SearchChild(key, kClosed);
-      const auto *child = node->GetChild(pos);
+      auto *child = node->GetChild(pos);
 
       // perform internal SMOs eagerly
       auto rc = CheckSMO(node, child, version, true);  // check split
@@ -590,11 +590,11 @@ class BTree
   CheckSMO(Node_t *parent,
            Node_t *child,
            const uint64_t parent_ver,
-           bool is_split)  //
+           const bool is_split)  //
       -> NodeRC
   {
     const auto [should_smo, child_ver] =
-        (is_split) ? child->NeedSplit(kMaxRecLen) : child->NeedMerge(kMaxRecLen);
+        (is_split) ? child->NeedSplit(kMaxRecLen) : child->NeedMerge();
     if (!should_smo) {
       if (!child->CheckVersion(child_ver)) {
         return CheckSMO(parent, child, parent_ver, is_split);
@@ -633,7 +633,7 @@ class BTree
       Node_t *parent,
       const size_t pos)  //
   {
-    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+    auto *r_node = new Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
   }
@@ -662,12 +662,12 @@ class BTree
         node->UnlockX();
         return {node, kCompleted};
       } else {
-        auto *l_node = root_;
-        auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+        auto *l_node = node;
+        auto *r_node = new Node_t{l_node->IsLeaf()};
         l_node->Split(r_node);
-        root_ = new (GetNodePage()) Node_t{l_node, r_node};
+        root_ = new Node_t{l_node, r_node};
 
-        return l_node->GetValidSplitNode(key);
+        return {l_node->GetValidSplitNode(key), kCompleted};
       }
     }
   }
@@ -757,7 +757,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{true};
+      auto *node = new Node_t{true};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -794,7 +794,7 @@ class BTree
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{false};
+      auto *node = new Node_t{false};
       node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
     }
