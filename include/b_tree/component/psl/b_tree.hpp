@@ -819,7 +819,7 @@ class BTree
           l_child->AbortMerge(r_child, l_key, l_key_len);
           return;
 
-        case NodeRC::kNeedWaitAndRetry:
+        case NodeRC::kNeedRetry:
           // previous splitting has not finished, so wait and retry
           std::this_thread::sleep_for(kRetryWait);
           continue;

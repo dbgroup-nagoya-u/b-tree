@@ -750,7 +750,7 @@ class NodeVarLen
    * @param sep_key a separator key.
    * @param sep_key_len the length of the separator key.
    * @retval kCompleted if a new entry is inserted.
-   * @retval kNeedWaitAndRetry if previous merging has not been finished.
+   * @retval kNeedRetry if previous merging has not been finished.
    * @retval kNeedSplit if this node should be split before inserting an index entry.
    */
   auto
@@ -769,7 +769,7 @@ class NodeVarLen
     if (existence == kKeyAlreadyInserted) {
       // previous merging has not been applied, so unlock and retry
       mutex_.UnlockSIX();
-      return kNeedWaitAndRetry;
+      return kNeedRetry;
     }
 
     // recheck free space in this node
@@ -799,7 +799,7 @@ class NodeVarLen
    * @param r_child a right child (i.e., removed) node.
    * @param del_key a separater key to be deleted.
    * @retval kCompleted if the entry is deleted.
-   * @retval kNeedWaitAndRetry if previous splitting has not been finished.
+   * @retval kNeedRetry if previous splitting has not been finished.
    * @retval kNeedMerge if this node should be merged.
    * @retval kAbortMerge if this merge operation should be aborted.
    */
@@ -820,7 +820,7 @@ class NodeVarLen
     if (existence == kKeyNotInserted) {
       // previous splitting has not been applied, so unlock and retry
       mutex_.UnlockSIX();
-      return kNeedWaitAndRetry;
+      return kNeedRetry;
     }
 
     // merging have succeeded, so unlock child nodes
