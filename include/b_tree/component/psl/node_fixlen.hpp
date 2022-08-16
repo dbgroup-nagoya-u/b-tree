@@ -268,23 +268,6 @@ class NodeFixLen
   }
 
   /**
-   * @brief Get a child node in a given position.
-   *
-   * The node is unlocked after this function.
-   *
-   * @param pos the position of a child node.
-   * @return the child node.
-   */
-  [[nodiscard]] auto
-  GetChild(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    mutex_.UnlockS();
-    return child;
-  }
-
-  /**
    * @brief Get a leftmost child node.
    *
    * @return the child node.
@@ -428,7 +411,7 @@ class NodeFixLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> size_t
+      -> Node *
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -448,7 +431,9 @@ class NodeFixLen
       }
     }
 
-    return begin_pos;
+    auto *child = GetPayload<Node *>(begin_pos);
+    mutex_.UnlockS();
+    return child;
   }
 
   /**

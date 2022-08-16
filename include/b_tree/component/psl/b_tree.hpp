@@ -490,8 +490,7 @@ class BTree
       if (node->IsLeaf()) return node;  // reach a valid leaf node
 
       // go down to the next level
-      const auto pos = node->SearchChild(key, is_closed);
-      node = node->GetChild(pos);
+      node = node->SearchChild(key, is_closed);
     }
   }
 
@@ -555,8 +554,7 @@ class BTree
       stack.emplace_back(node);
 
       // go down to the next level
-      const auto pos = node->SearchChild(key, kClosed);
-      node = node->GetChild(pos);
+      node = node->SearchChild(key, kClosed);
     }
   }
 
@@ -593,8 +591,7 @@ class BTree
         }
 
         // go down to the next level
-        const auto pos = node->SearchChild(*key, !kClosed);
-        node = node->GetChild(pos);
+        node = node->SearchChild(*key, !kClosed);
       }
     } else {
       // search leftmost nodes
