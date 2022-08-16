@@ -606,7 +606,6 @@ class BTree
   {
     while (true) {
       auto [should_smo, child_ver] = (is_split) ? child->NeedSplit(kMaxRecLen) : child->NeedMerge();
-      (is_split) ? child->NeedSplit(kMaxRecLen) : child->NeedMerge();
       if (!should_smo) {
         if (!child->HasSameVersion(child_ver)) {
           continue;
