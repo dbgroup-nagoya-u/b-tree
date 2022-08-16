@@ -400,13 +400,6 @@ class NodeVarLen
     return mutex_.HasSameVersion(ver);
   }
 
-  auto
-  TryLockX(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.TryLockX(ver);
-  }
-
   /**
    * @brief Acquire a shared lock for this node.
    *
@@ -415,6 +408,17 @@ class NodeVarLen
   LockS()
   {
     mutex_.LockS();
+  }
+
+  /**
+   * @brief Acquire a shared lock for this node if the version is same.
+   *
+   */
+  auto
+  TryLockS(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.TryLockS(ver);
   }
 
   /**
@@ -428,6 +432,33 @@ class NodeVarLen
     mutex_.UnlockS();
   }
 
+  auto
+  LockX()  //
+      -> void
+  {
+    mutex_.LockX();
+  }
+
+  auto
+  TryLockX(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.TryLockX(ver);
+  }
+
+  void
+  DowngradeToSIX()
+  {
+    mutex_.DowngradeToSIX();
+  }
+
+  auto
+  UnlockX()  //
+      -> void
+  {
+    mutex_.UnlockX();
+  }
+
   /**
    * @brief Acquire a shared lock with intent-exclusive locking for this node.
    *
@@ -438,14 +469,11 @@ class NodeVarLen
     mutex_.LockSIX();
   }
 
-  /**
-   * @brief Release the shared lock with intent-exclusive locking for this node.
-   *
-   */
-  void
-  UnlockSIX()
+  auto
+  TryLockSIX(const uint64_t ver)  //
+      -> bool
   {
-    mutex_.UnlockSIX();
+    return mutex_.TryLockSIX(ver);
   }
 
   /**
@@ -458,18 +486,14 @@ class NodeVarLen
     mutex_.UpgradeToX();
   }
 
-  auto
-  LockX()  //
-      -> void
+  /**
+   * @brief Release the shared lock with intent-exclusive locking for this node.
+   *
+   */
+  void
+  UnlockSIX()
   {
-    mutex_.LockX();
-  }
-
-  auto
-  UnlockX()  //
-      -> void
-  {
-    mutex_.UnlockX();
+    mutex_.UnlockSIX();
   }
 
   /*####################################################################################
@@ -1014,7 +1038,7 @@ class NodeVarLen
   }
 
   void
-  SetRemoved()
+  SetRemove()
   {
     is_removed_ = 1;
   }
