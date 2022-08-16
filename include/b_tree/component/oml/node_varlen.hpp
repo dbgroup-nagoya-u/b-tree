@@ -148,28 +148,31 @@ class NodeVarLen
   }
 
   [[nodiscard]] auto
-  NeedRetry(const Key key,                 //
-            const uint64_t version) const  //
+  NeedRetryInner(const Key key,             //
+                 const uint64_t ver) const  //
       -> NodeRC
   {
     const auto &high_key = GetHighKey();
-
-    if (is_leaf_) {
-      if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
-        return kNeedNextRetry;
-      } else if (!mutex_.CheckVersion(version)) {
-        return kNeedRetry;
-      } else {
-        return kCompleted;
-      }
-    } else {
-      if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
-        return kNeedRootRetry;
-      } else if (!mutex_.CheckVersion(version)) {
-        return kNeedRetry;
-      }
-      return kCompleted;
+    if (!mutex_.HasSameVersion(ver)) {
+      return kNeedRetry;
+    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
+      return kNeedRootRetry;
     }
+    return kCompleted;
+  }
+
+  [[nodiscard]] auto
+  NeedRetryLeaf(const Key key,             //
+                const uint64_t ver) const  //
+      -> NodeRC
+  {
+    const auto &high_key = GetHighKey();
+    if (!mutex_.CheckMyVersion(ver)) {
+      return kNeedRetry;
+    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
+      return kNeedNextRetry;
+    }
+    return kCompleted;
   }
 
   /**
@@ -181,20 +184,20 @@ class NodeVarLen
   NeedSplit(const size_t new_rec_len)  //
       -> std::pair<bool, uint64_t>
   {
-    const uint64_t version = mutex_.GetVersion();
+    const auto ver = mutex_.GetVersion();
 
     // check whether the node has space for a new record
     const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    if (total_size <= kPageSize - kHeaderLen) return {false, version};
-    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return {true, version};
+    if (total_size <= kPageSize - kHeaderLen) return {false, ver};
+    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return {true, ver};
 
     // this node has enough space but cleaning up is required
     mutex_.LockX();
-    if (mutex_.CheckVersion(version)) {
+    if (mutex_.CheckMyVersion(ver)) {
       CleanUp();
     }
     mutex_.UnlockX();
-    return {false, version};
+    return {false, ver};
   }
 
   /**
@@ -205,18 +208,19 @@ class NodeVarLen
   NeedMerge()  //
       -> std::pair<bool, uint64_t>
   {
-    const auto version = mutex_.GetVersion();
+    const auto ver = mutex_.GetVersion();
+
     // check this node uses enough space
-    if (GetUsedSize() < kMinUsedSpaceSize) return {true, version};
-    if (deleted_size_ <= kMaxDeletedSpaceSize) return {false, version};
+    if (GetUsedSize() < kMinUsedSpaceSize) return {true, ver};
+    if (deleted_size_ <= kMaxDeletedSpaceSize) return {false, ver};
 
     // this node has a lot of dead space
     mutex_.LockX();
-    if (mutex_.CheckVersion(version)) {
+    if (mutex_.CheckMyVersion(ver)) {
       CleanUp();
     }
     mutex_.UnlockX();
-    return {false, version};
+    return {false, ver};
   }
 
   /**
@@ -231,9 +235,9 @@ class NodeVarLen
 
   [[nodiscard]] auto
   GetNextNode()  //
-      -> Node *
+      -> std::pair<Node *, uint64_t>
   {
-    return next_;
+    return {next_, mutex_.GetVersion()};
   }
 
   /**
@@ -266,6 +270,19 @@ class NodeVarLen
       node = next_;
     }
 
+    return node;
+  }
+
+  [[nodiscard]] auto
+  GetValidNextNode(const Key &key)  //
+      -> Node *
+  {
+    auto *node = this;
+    const auto &high_key = GetHighKey();
+    if (high_key && Comp{}(high_key.value(), key)) {
+      node = next_;
+    }
+    mutex_.UnlockX();
     return node;
   }
 
@@ -390,10 +407,17 @@ class NodeVarLen
   }
 
   auto
-  CheckVersion(const uint64_t version)  //
+  HasSameVersion(const uint64_t ver)  //
       -> bool
   {
-    return mutex_.CheckVersion(version);
+    return mutex_.HasSameVersion(ver);
+  }
+
+  auto
+  CheckMyVersion(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.CheckMyVersion(ver);
   }
 
   /**
@@ -513,8 +537,9 @@ class NodeVarLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> size_t
+      -> std::tuple<size_t, uint64_t>
   {
+    const auto ver = mutex_.GetVersion();
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
     while (begin_pos <= end_pos) {
@@ -533,7 +558,7 @@ class NodeVarLen
       }
     }
 
-    return begin_pos;
+    return {begin_pos, ver};
   }
 
   /**
