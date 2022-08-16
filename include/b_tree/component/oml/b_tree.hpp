@@ -568,10 +568,9 @@ class BTree
           break;
         }
       } else if (retry_rc == kNeedRetry) {
-        node->UnlockX();
         continue;
       } else {
-        node = node->GetValidNextNode(key);
+        node = node->GetValidSplitNode(key);
       }
     }
     return node;

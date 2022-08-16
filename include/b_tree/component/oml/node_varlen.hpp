@@ -271,19 +271,6 @@ class NodeVarLen
     return node;
   }
 
-  [[nodiscard]] auto
-  GetValidNextNode(const Key &key)  //
-      -> Node *
-  {
-    auto *node = this;
-    const auto &high_key = GetHighKey();
-    if (high_key && Comp{}(high_key.value(), key)) {
-      node = next_;
-    }
-    mutex_.UnlockX();
-    return node;
-  }
-
   /*####################################################################################
    * Public getters for records
    *##################################################################################*/
