@@ -593,7 +593,7 @@ class BTree
       }
     }
 
-    ::operator delete(node);
+    delete node;
   }
 
   [[nodiscard]] auto
@@ -676,9 +676,10 @@ class BTree
           auto *l_node = node;
           auto *r_node = new Node_t{l_node->IsLeaf()};
           l_node->Split(r_node);
+          node = l_node->GetValidSplitNode(key);
           auto *new_root = new Node_t{l_node, r_node};
           root_.store(new_root, std::memory_order_release);
-          return {root_, kCompleted};
+          return {node, kCompleted};
         }
       }
     }
@@ -833,7 +834,7 @@ class BTree
   GC_t gc_{};
 
   /// a root node of this tree.
-  std::atomic<Node_t *> root_ = new Node_t{kLeafFlag};
+  std::atomic<Node_t *> root_{nullptr};
 };
 }  // namespace dbgroup::index::b_tree::component::oml
 
