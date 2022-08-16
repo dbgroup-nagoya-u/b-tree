@@ -523,57 +523,56 @@ class BTree
   SearchLeafNodeForWrite(const Key &key)  //
       -> Node_t *
   {
-    Node_t *node;
-    while (true) {
-      node = GetRootForWrite(key);
-      while (!node->IsLeaf()) {
-        // search a child node
-        const auto [pos, ver] = node->SearchChild(key, kClosed);
-        auto *child = node->GetChild(pos);
-        const auto rc = node->NeedRetryInner(key, ver);
-        if (rc == kNeedRetry) {
-          continue;
-        } else if (rc == kNeedRootRetry) {
-          break;
-        }
+    while (true) {  // for retry from root
+      auto *node = GetRootForWrite(key);
+      while (true) {  // for retry from this node
+        if (node->IsLeaf()) {
+          // search for a valid node in leaf nodes
+          while (true) {
+            const auto ver = node->GetVersion();
+            const auto retry_rc = node->NeedRetryLeaf(key, ver);
+            if (retry_rc == kCompleted) {
+              if (node->TryLockX(ver)) {
+                return node;
+              }
+            } else if (retry_rc == kNeedRetry) {
+              continue;
+            } else {
+              node = node->GetValidSplitNode(key);
+            }
+          }
+        } else {
+          // search a child node
+          const auto [pos, ver] = node->SearchChild(key, kClosed);
+          auto *child = node->GetChild(pos);
+          const auto rc = node->NeedRetryInner(key, ver);
+          if (rc == kNeedRetry) {
+            continue;
+          } else if (rc == kNeedRootRetry) {
+            break;
+          }
 
-        // perform internal SMOs eagerly
-        auto retry_rc = CheckSMO(node, child, ver, true);  // check split
-        if (retry_rc == kNeedRetry) {
-          continue;
-        } else if (retry_rc == kNeedSplit) {
-          Split(child, node, pos);
-          node = child->GetValidSplitNode(key);
-          continue;
-        }
+          // perform internal SMOs eagerly
+          auto retry_rc = CheckSMO(node, child, ver, true);  // check split
+          if (retry_rc == kNeedRetry) {
+            continue;
+          } else if (retry_rc == kNeedSplit) {
+            Split(child, node, pos);
+            node = child->GetValidSplitNode(key);
+            continue;
+          }
 
-        retry_rc = CheckSMO(node, child, ver, false);  // check merge
-        if (retry_rc == kNeedRetry) {
-          continue;
-        } else if (retry_rc == kNeedMerge) {
-          Merge(child, node, pos);
-        }
+          retry_rc = CheckSMO(node, child, ver, false);  // check merge
+          if (retry_rc == kNeedRetry) {
+            continue;
+          } else if (retry_rc == kNeedMerge) {
+            Merge(child, node, pos);
+          }
 
-        node = child;
+          node = child;
+        }
       }
-      break;
     }
-
-    // search for a valid node in leaf nodes
-    while (true) {
-      const auto ver = node->GetVersion();
-      const auto retry_rc = node->NeedRetryLeaf(key, ver);
-      if (retry_rc == kCompleted) {
-        if (node->TryLockX(ver)) {
-          break;
-        }
-      } else if (retry_rc == kNeedRetry) {
-        continue;
-      } else {
-        node = node->GetValidSplitNode(key);
-      }
-    }
-    return node;
   }
 
   /**
@@ -679,7 +678,7 @@ class BTree
           l_node->Split(r_node);
           auto *new_root = new Node_t{l_node, r_node};
           root_.store(new_root, std::memory_order_release);
-          return {l_node->GetValidSplitNode(key), kCompleted};
+          return {root_, kCompleted};
         }
       }
     }

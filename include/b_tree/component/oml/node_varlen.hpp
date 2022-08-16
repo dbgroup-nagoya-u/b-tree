@@ -264,7 +264,9 @@ class NodeVarLen
   {
     auto *node = this;
     const auto &high_key = GetHighKey();
-    if (!high_key || Comp{}(*high_key, key)) {
+    if (node->is_removed_) {
+      node = next_;
+    } else if (!high_key || Comp{}(*high_key, key)) {
       node = next_;
     }
 
@@ -522,7 +524,7 @@ class NodeVarLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::tuple<size_t, uint64_t>
+      -> std::pair<size_t, uint64_t>
   {
     const auto ver = mutex_.GetVersion();
     int64_t begin_pos = 0;
