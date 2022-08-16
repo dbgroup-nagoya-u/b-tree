@@ -167,7 +167,7 @@ class NodeVarLen
       -> NodeRC
   {
     const auto &high_key = GetHighKey();
-    if (!mutex_.CheckMyVersion(ver)) {
+    if (!mutex_.HasSameVersion(ver)) {
       return kNeedRetry;
     } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
       return kNeedNextRetry;
@@ -192,11 +192,10 @@ class NodeVarLen
     if (total_size - deleted_size_ > kMaxUsedSpaceSize) return {true, ver};
 
     // this node has enough space but cleaning up is required
-    mutex_.LockX();
-    if (mutex_.CheckMyVersion(ver)) {
+    if (mutex_.TryLockX(ver)) {
       CleanUp();
+      mutex_.UnlockX();
     }
-    mutex_.UnlockX();
     return {false, ver};
   }
 
@@ -215,11 +214,10 @@ class NodeVarLen
     if (deleted_size_ <= kMaxDeletedSpaceSize) return {false, ver};
 
     // this node has a lot of dead space
-    mutex_.LockX();
-    if (mutex_.CheckMyVersion(ver)) {
+    if (mutex_.TryLockX(ver)) {
       CleanUp();
+      mutex_.UnlockX();
     }
-    mutex_.UnlockX();
     return {false, ver};
   }
 
@@ -414,10 +412,10 @@ class NodeVarLen
   }
 
   auto
-  CheckMyVersion(const uint64_t ver)  //
+  TryLockX(const uint64_t ver)  //
       -> bool
   {
-    return mutex_.CheckMyVersion(ver);
+    return mutex_.TryLockX(ver);
   }
 
   /**

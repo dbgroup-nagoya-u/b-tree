@@ -562,10 +562,11 @@ class BTree
     // search for a valid node in leaf nodes
     while (true) {
       const auto ver = node->GetVersion();
-      node->LockX();
       const auto retry_rc = node->NeedRetryLeaf(key, ver);
       if (retry_rc == kCompleted) {
-        break;
+        if (node->TryLockX(ver)) {
+          break;
+        }
       } else if (retry_rc == kNeedRetry) {
         node->UnlockX();
         continue;
@@ -614,11 +615,11 @@ class BTree
           return kCompleted;
         }
       } else {
-        parent->LockX();
-        child->LockX();
-        if (!parent->CheckMyVersion(parent_ver) || !child->CheckMyVersion(child_ver)) {
+        if (!parent->TryLockX(parent_ver)) {
+          return kNeedRetry;
+        }
+        if (!child->TryLockX(child_ver)) {
           parent->UnlockX();
-          child->UnlockX();
           return kNeedRetry;
         }
         return (is_split) ? kNeedSplit : kNeedMerge;
@@ -668,13 +669,12 @@ class BTree
           return {node, kCompleted};
         }
       } else {
-        node->LockX();
+        if (!node->TryLockX(ver)) {
+          continue;
+        }
         if (node != root_) {
           node->UnlockX();
           return {nullptr, kNeedRootRetry};
-        } else if (!node->CheckMyVersion(ver)) {
-          node->UnlockX();
-          continue;
         } else {
           auto *l_node = node;
           auto *r_node = new Node_t{l_node->IsLeaf()};
@@ -724,13 +724,12 @@ class BTree
         // if a root node has only one child, shrink a tree
         auto *child = node->template GetPayload<Node_t *>(0);
 
-        node->LockX();
+        if (!node->TryLockX(ver)) {
+          continue;
+        }
         if (node != root_) {  // if the root node has been moved by another thread
           node->UnlockX();
           return kNeedRootRetry;
-        } else if (!node->CheckMyVersion(ver)) {  // TODO: use check ver
-          node->UnlockX();
-          continue;
         } else {
           node->SetRemoved();
           gc_.AddGarbage(node);

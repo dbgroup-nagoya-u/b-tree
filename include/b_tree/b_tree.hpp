@@ -61,9 +61,6 @@ class BTree
   using BTreePSL = component::psl::BTree<K, V, C, VAR>;
 
   template <class K, class V, class C, bool VAR>
-  using BTreeOML = component::pml::BTree<K, V, C, VAR>;
-
-  template <class K, class V, class C, bool VAR>
   using BTreeOSL = component::osl::BTree<K, V, C, VAR>;
 
   using BTree_t = std::conditional_t<kUseOptimisticLock,
@@ -353,20 +350,6 @@ using BTreePSLVarLen =
 template <class Key, class Payload, class Comp = std::less<Key>>
 using BTreePSLFixLen =
     BTree<Key, Payload, Comp, kPessimisticLock, kSingleLayerLock, kOptimizeForFixLenData>;
-
-/// a B+tree based on optimistic multi-layer locking (OML).
-template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreeOML = BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock>;
-
-/// a B+tree based on OML with generic page layouts.
-template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreeOMLVarLen =
-    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, !kOptimizeForFixLenData>;
-
-/// a B+tree based on OML with optimized page layouts for fixed-length data.
-template <class Key, class Payload, class Comp = std::less<Key>>
-using BTreeOMLFixLen =
-    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, kOptimizeForFixLenData>;
 
 /// a B+tree with optimistic single-layer locking (OSL).
 template <class Key, class Payload, class Comp = std::less<Key>>
