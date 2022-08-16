@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PSL_B_TREE_HPP
-#define B_TREE_COMPONENT_PSL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_OSL_B_TREE_HPP
+#define B_TREE_COMPONENT_OSL_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -27,10 +27,10 @@
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
-#include "node_fixlen.hpp"
+// #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree::component::psl
+namespace dbgroup::index::b_tree::component::osl
 {
 /**
  * @brief A class for representing B+trees with pessimistic single-layer locking.
@@ -53,7 +53,7 @@ class BTree
   using K = Key;
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
-  using NodeFixLen_t = NodeFixLen<Key, Comp>;
+  using NodeFixLen_t = NodeVarLen<Key, Comp>;  // NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
@@ -124,11 +124,15 @@ class BTree
 
     auto *node = SearchLeafNodeForRead(key, kClosed);
 
-    Payload payload{};
-    const auto rc = node->Read(key, payload);
+    while (true) {
+      Payload payload{};
+      const auto rc = node->Read(key, payload);
+      if (rc == NodeRC::kKeyAlreadyInserted) return payload;
+      if (rc != NodeRC::kNeedRetry) return std::nullopt;
 
-    if (rc == kSuccess) return payload;
-    return std::nullopt;
+      // version check failed, so re-check key range
+      node = Node_t::CheckKeyRange(node, key, kClosed);
+    }
   }
 
   /**
@@ -152,6 +156,7 @@ class BTree
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
       node = SearchLeafNodeForRead(key, is_closed);
+      node = Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -475,13 +480,13 @@ class BTree
   [[nodiscard]] auto
   SearchLeafNodeForRead(  //
       const Key &key,
-      const bool is_closed)  //
+      const bool is_closed) const  //
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
     while (true) {
       // traverse side links if needed
-      node = Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      node = Node_t::CheckKeyRange(node, key, is_closed);
       if (node == nullptr) {
         // a root node is removed
         node = root_.load(std::memory_order_acquire);
@@ -537,24 +542,26 @@ class BTree
     auto *node = root_.load(std::memory_order_acquire);
     while (true) {
       if (node->IsLeaf()) {
-        // require an exclusive lock for write operations
+        // require an SIX lock for write operations
         node = Node_t::CheckKeyRangeAndLockForWrite(node, key);
         stack.emplace_back(node);
         return stack;
       }
 
       // traverse side links if needed
-      node = Node_t::CheckKeyRangeAndLockForRead(node, key, kClosed);
+      node = Node_t::CheckKeyRange(node, key, kClosed);
       if (node == nullptr) {
         // a root node is removed
         stack.clear();
         node = root_.load(std::memory_order_acquire);
         continue;
       }
-      stack.emplace_back(node);
 
       // go down to the next level
-      node = node->SearchChild(key, kClosed);
+      auto *child = node->SearchChild(key, kClosed);
+      if (child == node) continue;  // version check failed, so retry
+      stack.emplace_back(node);
+      node = child;
     }
   }
 
@@ -567,14 +574,15 @@ class BTree
   void
   SearchParentNode(  //
       std::vector<Node_t *> &stack,
-      Node_t *target_node)
+      Node_t *target_node) const
   {
     auto *node = root_.load(std::memory_order_acquire);
-    const auto key = target_node->GetLowKey();
+    const auto key = target_node->GetLowKey();  // copy lowest key
     if (key) {
       // search a target node with its lowest key
       while (true) {
-        node = Node_t::CheckKeyRangeAndLockForRead(node, *key, !kClosed);
+        node = Node_t::CheckKeyRange(node, *key, !kClosed);
+        if (node == target_node) return;
         if (node == nullptr) {
           // a root node is removed
           stack.clear();
@@ -582,27 +590,16 @@ class BTree
           continue;
         }
 
-        stack.emplace_back(node);
-        if (node == target_node) {
-          // reach a target node
-          node->UnlockS();
-          stack.pop_back();
-          return;
-        }
-
         // go down to the next level
-        node = node->SearchChild(*key, !kClosed);
+        auto *child = node->SearchChild(*key, !kClosed);
+        if (child == node) continue;  // version check failed, so retry
+        stack.emplace_back(node);
+        node = child;
       }
     } else {
       // search leftmost nodes
-      while (true) {
+      while (node != target_node) {
         stack.emplace_back(node);
-        if (node == target_node) {
-          // reach a target node
-          stack.pop_back();
-          return;
-        }
-
         node = node->GetLeftmostChild();
         if (node == nullptr) {
           // a root node is removed
@@ -960,6 +957,6 @@ class BTree
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};
 };
-}  // namespace dbgroup::index::b_tree::component::psl
+}  // namespace dbgroup::index::b_tree::component::osl
 
-#endif  // B_TREE_COMPONENT_PSL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_OSL_B_TREE_HPP

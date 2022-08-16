@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
-#define B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
+#ifndef B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP
+#define B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP
 
 #include <atomic>
 #include <optional>
@@ -24,19 +24,19 @@
 #include <vector>
 
 // organization libraries
-#include "lock/pessimistic_lock.hpp"
+#include "lock/optimistic_lock.hpp"
 
 // local sources
 #include "b_tree/component/common.hpp"
 #include "b_tree/component/metadata.hpp"
 
-namespace dbgroup::index::b_tree::component::psl
+namespace dbgroup::index::b_tree::component::osl
 {
 
 /**
  * @brief A class for representing nodes in B+trees.
  *
- * This class uses pessimistic single-layer locking for concurrency controls and can
+ * This class uses optmistic single-layer locking for concurrency controls and can
  * contain variable-length data.
  *
  * @tparam Key a target key class.
@@ -204,24 +204,25 @@ class NodeVarLen
    * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
-  GetLowKey()  //
+  GetLowKey() const  //
       -> std::optional<Key>
   {
-    mutex_.LockS();
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-    std::optional<Key> low_key = std::nullopt;
-    if (l_key_len_ > 0) {
-      if constexpr (IsVarLenData<Key>()) {
-        low_key = reinterpret_cast<Key>(GetLowKeyAddr());
-      } else {
-        Key key{};
-        memcpy(&key, GetLowKeyAddr(), sizeof(Key));
-        low_key = std::move(key);
+      std::optional<Key> low_key = std::nullopt;
+      if (l_key_len_ > 0) {
+        if constexpr (IsVarLenData<Key>()) {
+          low_key = reinterpret_cast<Key>(GetLowKeyAddr());
+        } else {
+          Key key{};
+          memcpy(&key, GetLowKeyAddr(), sizeof(Key));
+          low_key = std::move(key);
+        }
       }
-    }
 
-    mutex_.UnlockS();
-    return low_key;
+      if (mutex_.HasSameVersion(ver)) return low_key;
+    }
   }
 
   /**
@@ -276,19 +277,20 @@ class NodeVarLen
    * @return the child node.
    */
   [[nodiscard]] auto
-  GetLeftmostChild()  //
+  GetLeftmostChild() const  //
       -> Node *
   {
-    Node *child = nullptr;
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-    // check this node is not removed
-    mutex_.LockS();
-    if (is_removed_ == 0) {
-      child = GetPayload<Node *>(0);
+      // check this node is not removed
+      Node *child = nullptr;
+      if (is_removed_ == 0) {
+        child = GetPayload<Node *>(0);
+      }
+
+      if (mutex_.HasSameVersion(ver)) return child;
     }
-    mutex_.UnlockS();
-
-    return child;
   }
 
   /**
@@ -418,6 +420,8 @@ class NodeVarLen
       const bool is_closed)  //
       -> Node *
   {
+    const auto ver = mutex_.GetVersion();
+
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
     while (begin_pos <= end_pos) {
@@ -437,8 +441,7 @@ class NodeVarLen
     }
 
     auto *child = GetPayload<Node *>(begin_pos);
-    mutex_.UnlockS();
-    return child;
+    return (mutex_.HasSameVersion(ver)) ? child : this;
   }
 
   /**
@@ -449,7 +452,7 @@ class NodeVarLen
    * @retval 2nd: the end position for scanning.
    */
   [[nodiscard]] auto
-  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key)  //
+  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
       -> std::pair<bool, size_t>
   {
     const auto is_end = IsRightmostOf(end_key);
@@ -463,6 +466,47 @@ class NodeVarLen
     }
 
     return {is_end, end_pos};
+  }
+
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * @param node a current node to be locked.
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   * @return a node whose key range includes the search key.
+   */
+  [[nodiscard]] static auto
+  CheckKeyRange(  //
+      Node *node,
+      const Key &key,
+      const bool is_closed)  //
+      -> Node *
+  {
+    while (true) {
+      const auto ver = node->mutex_.GetVersion();
+
+      // check the node is not removed
+      if (node->is_removed_ == 0) {
+        // check the node includes a target key
+        if (node->h_key_len_ == 0) {
+          if (node->mutex_.HasSameVersion(ver)) return node;
+          continue;
+        }
+        const auto &high_key = node->GetHighKey();
+        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+          if (node->mutex_.HasSameVersion(ver)) return node;
+          continue;
+        }
+      }
+
+      // go to the next node
+      auto *next = node->next_;
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
+      node = next;
+      if (node == nullptr) return node;
+    }
   }
 
   /**
@@ -543,26 +587,27 @@ class NodeVarLen
    * @tparam Payload a class of payload.
    * @param key a target key.
    * @param out_payload a reference to be stored a target payload.
-   * @retval kSuccess if a target record is read.
-   * @retval kKeyNotExist otherwise.
+   * @retval kKeyAlreadyInserted if a target record is read.
+   * @retval kNeedRetry if a version check failed.
+   * @retval kKeyAlreadyDeleted if a target record is deleted.
+   * @retval kKeyNotInserted otherwise.
    */
   template <class Payload>
   auto
   Read(  //
       const Key &key,
-      Payload &out_payload)  //
-      -> ReturnCode
+      Payload &out_payload) const  //
+      -> NodeRC
   {
+    const auto ver = mutex_.GetVersion();
+
     const auto [existence, pos] = SearchRecord(key);
-    auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
       const auto meta = meta_array_[pos];
       memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
-      rc = kSuccess;
     }
 
-    mutex_.UnlockS();
-    return rc;
+    return (mutex_.HasSameVersion(ver)) ? existence : kNeedRetry;
   }
 
   /*####################################################################################
@@ -1220,7 +1265,7 @@ class NodeVarLen
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  NeedSplit(const size_t new_rec_len)  //
+  NeedSplit(const size_t new_rec_len) const  //
       -> bool
   {
     // check whether the node has space for a new record
@@ -1616,8 +1661,8 @@ class NodeVarLen
    * @retval 3rd: the length of a target key.
    */
   template <class Payload, class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
+  [[nodiscard]] constexpr auto
+  ParseEntry(const Entry &entry) const  //
       -> std::tuple<Key, Payload, size_t>
   {
     if constexpr (IsVarLenData<Key>()) {
@@ -1670,7 +1715,7 @@ class NodeVarLen
   uint16_t record_count_{0};
 
   /// a lock for concurrency controls.
-  ::dbgroup::lock::PessimisticLock mutex_{};
+  ::dbgroup::lock::OptimisticLock mutex_{};
 
   /// the pointer to the next node.
   Node *next_{nullptr};
@@ -1695,6 +1740,6 @@ class NodeVarLen
       temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
 };
 
-}  // namespace dbgroup::index::b_tree::component::psl
+}  // namespace dbgroup::index::b_tree::component::osl
 
-#endif  // B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
+#endif  // B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP

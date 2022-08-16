@@ -268,23 +268,6 @@ class NodeFixLen
   }
 
   /**
-   * @brief Get a child node in a given position.
-   *
-   * The node is unlocked after this function.
-   *
-   * @param pos the position of a child node.
-   * @return the child node.
-   */
-  [[nodiscard]] auto
-  GetChild(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    mutex_.UnlockS();
-    return child;
-  }
-
-  /**
    * @brief Get a leftmost child node.
    *
    * @return the child node.
@@ -428,7 +411,7 @@ class NodeFixLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> size_t
+      -> Node *
   {
     int64_t begin_pos = 0;
     int64_t end_pos = record_count_ - 2;
@@ -448,7 +431,9 @@ class NodeFixLen
       }
     }
 
-    return begin_pos;
+    auto *child = GetPayload<Node *>(begin_pos);
+    mutex_.UnlockS();
+    return child;
   }
 
   /**
@@ -731,7 +716,7 @@ class NodeFixLen
    * @param sep_key a separator key.
    * @param sep_key_len the length of the separator key.
    * @retval kCompleted if a new entry is inserted.
-   * @retval kNeedWaitAndRetry if previous merging has not been finished.
+   * @retval kNeedRetry if previous merging has not been finished.
    * @retval kNeedSplit if this node should be split before inserting an index entry.
    */
   auto
@@ -749,7 +734,7 @@ class NodeFixLen
     if (existence == kKeyAlreadyInserted) {
       // previous merging has not been applied, so unlock and retry
       mutex_.UnlockSIX();
-      return kNeedWaitAndRetry;
+      return kNeedRetry;
     }
 
     // recheck free space in this node
@@ -803,7 +788,7 @@ class NodeFixLen
     if (existence == kKeyNotInserted) {
       // previous splitting has not been applied, so unlock and retry
       mutex_.UnlockSIX();
-      return kNeedWaitAndRetry;
+      return kNeedRetry;
     }
 
     // merging have succeeded, so unlock child nodes

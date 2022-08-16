@@ -123,7 +123,7 @@ class RecordIterator
   HasNext()  //
       -> bool
   {
-    while (true) {
+    while (node_ != nullptr) {
       // check records remain in this node
       while (pos_ < end_pos_ && node_->RecordIsDeleted(pos_)) {
         ++pos_;  // skip deleted records
@@ -133,7 +133,8 @@ class RecordIterator
       // check this node is rightmost for a given end key
       if (is_end_) {
         node_->UnlockS();
-        return false;
+        node_ = nullptr;
+        break;
       }
 
       // go to the next node
@@ -141,6 +142,8 @@ class RecordIterator
       pos_ = 0;
       std::tie(is_end_, end_pos_) = node_->SearchEndPositionFor(end_key_);
     }
+
+    return false;
   }
 
   /**

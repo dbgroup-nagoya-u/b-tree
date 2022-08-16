@@ -21,6 +21,7 @@
 #include "utility.hpp"
 
 // actual B+tree implementations
+#include "component/osl/b_tree.hpp"
 #include "component/pml/b_tree.hpp"
 #include "component/psl/b_tree.hpp"
 
@@ -55,9 +56,19 @@ class BTree
   template <class K, class V, class C, bool VAR>
   using BTreePSL = component::psl::BTree<K, V, C, VAR>;
 
-  using BTree_t = std::conditional_t<kUseSingleLayerLock,
-                                     BTreePSL<Key, Payload, Comp, kIsVarLen>,
-                                     BTreePML<Key, Payload, Comp, kIsVarLen>>;
+  template <class K, class V, class C, bool VAR>
+  using BTreeOML = component::pml::BTree<K, V, C, VAR>;
+
+  template <class K, class V, class C, bool VAR>
+  using BTreeOSL = component::osl::BTree<K, V, C, VAR>;
+
+  using BTree_t = std::conditional_t<kUseOptimisticLock,
+                                     std::conditional_t<kUseSingleLayerLock,
+                                                        BTreeOSL<Key, Payload, Comp, kIsVarLen>,
+                                                        BTreeOML<Key, Payload, Comp, kIsVarLen>>,
+                                     std::conditional_t<kUseSingleLayerLock,
+                                                        BTreePSL<Key, Payload, Comp, kIsVarLen>,
+                                                        BTreePML<Key, Payload, Comp, kIsVarLen>>>;
 
   using RecordIterator_t = component::RecordIterator<BTree_t>;
 
@@ -324,6 +335,34 @@ using BTreePSLVarLen =
 template <class Key, class Payload, class Comp = std::less<Key>>
 using BTreePSLFixLen =
     BTree<Key, Payload, Comp, kPessimisticLock, kSingleLayerLock, kOptimizeForFixLenData>;
+
+/// a B+tree based on optimistic multi-layer locking (OML).
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOML = BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock>;
+
+/// a B+tree based on OML with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOMLVarLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, !kOptimizeForFixLenData>;
+
+/// a B+tree based on OML with optimized page layouts for fixed-length data.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOMLFixLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kMultiLayerLock, kOptimizeForFixLenData>;
+
+/// a B+tree with optimistic single-layer locking (OSL).
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOSL = BTree<Key, Payload, Comp, kOptimisticLock, kSingleLayerLock>;
+
+/// a B+tree based on OSL with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOSLVarLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kSingleLayerLock, !kOptimizeForFixLenData>;
+
+/// a B+tree based on OSL with generic page layouts.
+template <class Key, class Payload, class Comp = std::less<Key>>
+using BTreeOSLFixLen =
+    BTree<Key, Payload, Comp, kOptimisticLock, kSingleLayerLock, kOptimizeForFixLenData>;
 
 }  // namespace dbgroup::index::b_tree
 

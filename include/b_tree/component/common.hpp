@@ -43,7 +43,7 @@ enum NodeRC {
   kNeedSplit,
   kNeedMerge,
   kAbortMerge,
-  kNeedWaitAndRetry,
+  kNeedRetry,
 };
 
 /*######################################################################################
