@@ -417,12 +417,12 @@ class NodeVarLen
    */
   [[nodiscard]] static auto
   SearchChild(  //
-      Node *&node,
+      const Node *&node,
       const Key &key,
       const bool is_closed)  //
       -> Node *
   {
-    Node *child{};
+    const Node *child{};
     while (true) {
       const auto ver = node->CheckKeyRange(node, key, is_closed);
       if (node == nullptr) break;  // a root node was removed
