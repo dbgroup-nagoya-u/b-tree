@@ -141,14 +141,14 @@ class NodeFixture : public testing::Test
       const Payload expected_val,
       const bool expect_success)
   {
-    Payload payload{};
-    const auto rc = Node::Read(node_.release(), key, payload);
+    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
+    Payload payload{};
+    const auto rc = node_->Read(key, payload);
+
+    EXPECT_EQ(expected_rc, rc);
     if (expect_success) {
-      EXPECT_EQ(kKeyAlreadyInserted, rc);
       EXPECT_EQ(expected_val, payload);
-    } else {
-      EXPECT_NE(kKeyAlreadyInserted, rc);
     }
   }
 

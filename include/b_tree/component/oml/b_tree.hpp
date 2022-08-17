@@ -122,12 +122,25 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForRead(key, kClosed);
-    Payload payload{};
-    const auto rc = Node_t::Read(node, key, payload);
+    auto &&[node, ver] = SearchLeafNodeForRead(key, kClosed);
 
-    if (rc == kSuccess) return payload;
-    return std::nullopt;
+    Payload payload{};
+    while (true) {
+      const auto rc = node->Read(key, payload);
+      const auto retry_rc = node->NeedRetryLeaf(key, ver);
+
+      if (retry_rc == kNeedNextRetry) {
+        const auto [new_node, new_ver] = node->GetNextNode();
+        if (new_ver == ver) {
+          node = new_node;
+        }
+      } else if (retry_rc == kCompleted) {
+        if (rc == kSuccess) return payload;
+        return std::nullopt;
+      } else {
+        ver = node->GetVersion();
+      }
+    }
   }
 
   /**
@@ -150,7 +163,7 @@ class BTree
 
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
-      node = SearchLeafNodeForRead(key, is_closed);
+      node = SearchLeafNodeForRead(key, is_closed).first;
       node->LockS();
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
@@ -184,7 +197,6 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     node->Write(key, key_len, &payload, kPayLen);
     return kSuccess;
   }
@@ -208,7 +220,6 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     return node->Insert(key, key_len, &payload, kPayLen);
   }
 
@@ -231,7 +242,6 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     return node->Update(key, &payload, kPayLen);
   }
 
@@ -252,7 +262,6 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     return node->Delete(key);
   }
 
@@ -353,6 +362,9 @@ class BTree
   /// a flag for indicating leaf nodes.
   static constexpr uint32_t kLeafFlag = 1;
 
+  /// a flag for indicating closed-interval
+  static constexpr bool kClosed = true;
+
   /// a flag for indicating delete operations
   static constexpr bool kDelOps = true;
 
@@ -444,13 +456,14 @@ class BTree
   SearchLeafNodeForRead(  //
       const Key &key,
       const bool is_closed)  //
-      -> Node_t *
+      -> std::pair<Node_t *, uint64_t>
   {
     while (true) {  // for retry from root
       auto *node = root_.load(std::memory_order_acquire);
       while (true) {  // for retry from node
         if (node->IsLeaf()) {
-          return node;
+          const auto ver = node->GetVersion();
+          return {node, ver};
         } else {
           const auto [pos, ver] = node->SearchChild(key, is_closed);
           auto *child = node->GetChild(pos);
@@ -504,7 +517,24 @@ class BTree
       auto *node = GetRootForWrite(key);
       while (true) {  // for retry from node
         if (node->IsLeaf()) {
-          return node;
+          // search for a valid node in leaf nodes
+          while (true) {
+            const auto ver = node->GetVersion();
+            const auto rc = node->NeedRetryLeaf(key, ver);
+            switch (rc) {
+              case kCompleted:
+                if (node->TryLockX(ver)) {
+                  return node;
+                }
+                continue;
+              case kNeedNextRetry:
+                node = node->GetValidSplitNode(key);
+                break;
+              case kNeedRetry:
+              default:
+                continue;
+            }
+          }
         } else {
           // search a child node
           const auto [pos, ver] = node->SearchChild(key, kClosed);

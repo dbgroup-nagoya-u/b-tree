@@ -161,6 +161,20 @@ class NodeVarLen
     return kCompleted;
   }
 
+  [[nodiscard]] auto
+  NeedRetryLeaf(const Key key,             //
+                const uint64_t ver) const  //
+      -> NodeRC
+  {
+    const auto &high_key = GetHighKey();
+    if (!mutex_.HasSameVersion(ver)) {
+      return kNeedRetry;
+    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
+      return kNeedNextRetry;
+    }
+    return kCompleted;
+  }
+
   /**
    * @param new_rec_len the length of a new record.
    * @retval true if this node requires splitting before inserting a new record.
@@ -582,86 +596,6 @@ class NodeVarLen
     return {is_end, end_pos};
   }
 
-  /**
-   * @brief Check the key range of a given node and traverse side links if needed.
-   *
-   * @param node a current node to be checked.
-   * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
-   * @return a node whose key range includes the search key.
-   */
-  [[nodiscard]] static auto
-  CheckKeyRange(  //
-      Node *&node,
-      const Key &key,
-      const bool is_closed)  //
-      -> uint64_t
-  {
-    uint64_t ver{};
-    while (true) {
-      ver = node->mutex_.GetVersion();
-
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (!node->GetHighKey()) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-      }
-
-      // go to the next node
-      auto *next = node->next_;
-      if (!node->mutex_.HasSameVersion(ver)) continue;
-
-      if (next == nullptr) break;
-      node = next;
-    }
-
-    return ver;
-  }
-
-  /**
-   * @brief Check the key range of a given node and traverse side links if needed.
-   *
-   * This function acquires an exclusive lock for a returned node.
-   *
-   * @param node a current node to be locked.
-   * @param key a search key.
-   * @return a node whose key range includes the search key.
-   */
-  static void
-  CheckKeyRangeAndLockForWrite(  //
-      Node *&node,
-      const Key &key)
-  {
-    while (true) {
-      const auto ver = node->mutex_.GetVersion();
-
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        const auto &high_key = node->GetHighKey();
-        if (!high_key || !Comp{}(*high_key, key)) {
-          if (node->mutex_.TryLockX(ver)) return;
-          continue;
-        }
-      }
-
-      // go to the next node
-      auto *next = node->next_;
-      if (!node->mutex_.HasSameVersion(ver)) continue;
-
-      if (next == nullptr) return;
-      node = next;
-    }
-  }
-
   /*####################################################################################
    * Leaf read operations
    *##################################################################################*/
@@ -676,24 +610,21 @@ class NodeVarLen
    * @retval kKeyNotExist otherwise.
    */
   template <class Payload>
-  static auto
-  Read(Node *&node,
-       const Key &key,
-       Payload &out_payload)  //
+  auto
+  Read(  //
+      const Key &key,
+      Payload &out_payload)  //
       -> ReturnCode
   {
-    while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
-
-      const auto [existence, pos] = node->SearchRecord(key);
-      if (existence == kKeyAlreadyInserted) {
-        const auto meta = node->meta_array_[pos];
-        memcpy(&out_payload, node->GetPayloadAddr(meta), sizeof(Payload));
-        if (node->mutex_.HasSameVersion(ver)) return kSuccess;
-      }
-
-      if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+    const auto [existence, pos] = SearchRecord(key);
+    auto rc = kKeyNotExist;
+    if (existence == kKeyAlreadyInserted) {
+      const auto meta = meta_array_[pos];
+      memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
+      rc = kSuccess;
     }
+
+    return rc;
   }
 
   /*####################################################################################
