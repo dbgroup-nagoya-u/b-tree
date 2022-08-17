@@ -646,8 +646,7 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
-    const auto rec_len = key_len + pay_len;
-    CleanUpIfNeeded(rec_len);
+    CleanUpIfNeeded(key_len + pay_len);
 
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
@@ -690,8 +689,7 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
-    const auto rec_len = key_len + pay_len;
-    CleanUpIfNeeded(rec_len);
+    CleanUpIfNeeded(key_len + pay_len);
 
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);

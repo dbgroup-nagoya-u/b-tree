@@ -18,6 +18,7 @@
 #ifndef B_TREE_COMPONENT_COMMON_HPP
 #define B_TREE_COMPONENT_COMMON_HPP
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 

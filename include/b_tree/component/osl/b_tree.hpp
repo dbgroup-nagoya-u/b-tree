@@ -185,6 +185,7 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
+    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     const auto rc = node->Write(key, key_len, &payload, kPayLen);
 
     if (rc == NodeRC::kNeedSplit) {
@@ -223,6 +224,7 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
+    Node_t::CheckKeyRangeAndLockForWrite(node, key);
     auto rc = node->Insert(key, key_len, &payload, kPayLen);
     if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
 
