@@ -69,13 +69,13 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = new Node{kLeafFlag};
   }
 
   void
   TearDown() override
   {
-    node_.reset(nullptr);
+    node_ = nullptr;
   }
 
   /*####################################################################################
@@ -141,14 +141,14 @@ class NodeFixture : public testing::Test
       const Payload expected_val,
       const bool expect_success)
   {
-    Payload payload{};
-    const auto rc = Node::Read(node_.release(), key, payload);
+    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
 
+    Payload payload{};
+    const auto rc = Node::Read(node_, key, payload);
+
+    EXPECT_EQ(expected_rc, rc);
     if (expect_success) {
-      EXPECT_EQ(kKeyAlreadyInserted, rc);
       EXPECT_EQ(expected_val, payload);
-    } else {
-      EXPECT_NE(kKeyAlreadyInserted, rc);
     }
   }
 
@@ -294,7 +294,7 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
-        node_.reset(r_node);
+        node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
     }
@@ -309,10 +309,10 @@ class NodeFixture : public testing::Test
     for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
       Write(i, i);
     }
-    auto *r_node = node_.release();
+    auto *r_node = node_;
 
     // fill a left node
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = new Node{kLeafFlag};
     for (size_t i = 0; i < kHalfNum; ++i) {
       Write(i, i);
     }
@@ -332,7 +332,7 @@ class NodeFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  std::unique_ptr<Node> node_{nullptr};
+  Node *node_{nullptr};
 };
 
 /*######################################################################################
