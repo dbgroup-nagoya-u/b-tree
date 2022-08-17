@@ -147,20 +147,6 @@ class NodeVarLen
     return is_removed_;
   }
 
-  [[nodiscard]] auto
-  NeedRetryInner(const Key key,             //
-                 const uint64_t ver) const  //
-      -> NodeRC
-  {
-    const auto &high_key = GetHighKey();
-    if (!mutex_.HasSameVersion(ver)) {
-      return kNeedRetry;
-    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
-      return kNeedRootRetry;
-    }
-    return kCompleted;
-  }
-
   /**
    * @param new_rec_len the length of a new record.
    * @retval true if this node requires splitting before inserting a new record.
@@ -170,19 +156,27 @@ class NodeVarLen
   NeedSplit(const size_t new_rec_len)  //
       -> std::pair<bool, uint64_t>
   {
-    const auto ver = mutex_.GetVersion();
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+      auto need_split = false;
 
-    // check whether the node has space for a new record
-    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    if (total_size <= kPageSize - kHeaderLen) return {false, ver};
-    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return {true, ver};
-
-    // this node has enough space but cleaning up is required
-    if (mutex_.TryLockX(ver)) {
-      CleanUp();
-      mutex_.UnlockX();
+      // check whether the node has space for a new record
+      const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+      if (total_size <= kPageSize - kHeaderLen) {
+        need_split = false;
+      } else if (total_size - deleted_size_ > kMaxUsedSpaceSize) {
+        need_split = true;
+      } else {
+        // this node has enough space but cleaning up is required
+        if (mutex_.TryLockX(ver)) {
+          CleanUp();
+          mutex_.UnlockX();
+          continue;
+        }
+        need_split = false;
+      }
+      if (mutex_.HasSameVersion(ver)) return {need_split, ver};
     }
-    return {false, ver};
   }
 
   /**
@@ -193,18 +187,25 @@ class NodeVarLen
   NeedMerge()  //
       -> std::pair<bool, uint64_t>
   {
-    const auto ver = mutex_.GetVersion();
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+      auto need_merge = false;
 
-    // check this node uses enough space
-    if (GetUsedSize() < kMinUsedSpaceSize) return {true, ver};
-    if (deleted_size_ <= kMaxDeletedSpaceSize) return {false, ver};
-
-    // this node has a lot of dead space
-    if (mutex_.TryLockX(ver)) {
-      CleanUp();
-      mutex_.UnlockX();
+      // check this node uses enough space
+      if (GetUsedSize() < kMinUsedSpaceSize) {
+        need_merge = true;
+      } else if (deleted_size_ <= kMaxDeletedSpaceSize) {
+        need_merge = false;
+      } else {
+        // this node has a lot of dead space
+        if (mutex_.TryLockX(ver)) {
+          CleanUp();
+          mutex_.UnlockX();
+        }
+        need_merge = false;
+      }
+      if (mutex_.HasSameVersion(ver)) return {need_merge, ver};
     }
-    return {false, ver};
   }
 
   /**
@@ -215,13 +216,6 @@ class NodeVarLen
       -> size_t
   {
     return record_count_;
-  }
-
-  [[nodiscard]] auto
-  GetNextNode()  //
-      -> std::pair<Node *, uint64_t>
-  {
-    return {next_, mutex_.GetVersion()};
   }
 
   /**
@@ -285,6 +279,28 @@ class NodeVarLen
       -> Payload
   {
     return GetPayload<Payload>(meta_array_[pos]);
+  }
+
+  /**
+   * @brief Get a leftmost child node.
+   *
+   * @return the child node.
+   */
+  [[nodiscard]] auto
+  GetLeftmostChild() const  //
+      -> Node *
+  {
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+
+      // check this node is not removed
+      Node *child = nullptr;
+      if (is_removed_ == 0) {
+        child = GetPayload<Node *>(0);
+      }
+
+      if (mutex_.HasSameVersion(ver)) return child;
+    }
   }
 
   /**
@@ -531,7 +547,7 @@ class NodeVarLen
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchAndGetChild(  //
+  SearchChild(  //
       const Key &key,
       const bool is_closed)  //
       -> std::tuple<size_t, uint64_t, Node *, NodeRC>
