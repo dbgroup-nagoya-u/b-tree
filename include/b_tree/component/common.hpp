@@ -37,16 +37,18 @@ namespace dbgroup::index::b_tree::component
  */
 enum NodeRC {
   kCompleted = 0,
-  kKeyNotInserted = -9,
+  kKeyNotInserted = -8,
   kKeyAlreadyDeleted,
   kKeyAlreadyInserted,
   kNeedSplit,
   kNeedMerge,
   kAbortMerge,
   kNeedRetry,
-  kNeedNextRetry,
   kNeedRootRetry,
 };
+
+/// a flag for indicating closed-interval.
+constexpr bool kClosed = true;
 
 /*######################################################################################
  * Internal utility functions
