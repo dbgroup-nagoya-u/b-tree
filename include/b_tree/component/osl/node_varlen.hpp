@@ -527,19 +527,26 @@ class NodeVarLen
       -> Node *
   {
     while (true) {
-      node->mutex_.LockS();
+      const auto ver = node->mutex_.GetVersion();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->h_key_len_ == 0) return node;
+        if (node->h_key_len_ == 0) {
+          if (node->mutex_.TryLockS(ver)) return node;
+          continue;
+        }
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) return node;
+        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+          if (node->mutex_.TryLockS(ver)) return node;
+          continue;
+        }
       }
 
       // go to the next node
       auto *next = node->next_;
-      node->mutex_.UnlockS();
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
       node = next;
       if (node == nullptr) return node;
     }
@@ -561,17 +568,21 @@ class NodeVarLen
       -> Node *
   {
     while (true) {
-      node->mutex_.LockSIX();
+      const auto ver = node->mutex_.GetVersion();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->h_key_len_ == 0 || !Comp{}(node->GetHighKey(), key)) return node;
+        if (node->h_key_len_ == 0 || !Comp{}(node->GetHighKey(), key)) {
+          if (node->mutex_.TryLockSIX(ver)) return node;
+          continue;
+        }
       }
 
       // go to the next node
       auto *next = node->next_;
-      node->mutex_.UnlockSIX();
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
       node = next;
       if (node == nullptr) return node;
     }
