@@ -120,15 +120,13 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockSIX();
-    return node_->Update(key, &payload, kPayLen);
+    return Node::Update(node_, key, &payload, kPayLen);
   }
 
   auto
   Delete(const size_t key)
   {
-    node_->LockSIX();
-    auto rc = node_->Delete(key);
+    auto rc = Node::Delete(node_, key);
     if (rc == kNeedMerge) {
       node_->UnlockSIX();
     }
@@ -146,7 +144,7 @@ class NodeFixture : public testing::Test
       const bool expect_success)
   {
     Payload payload{};
-    const auto rc = node_->Read(key, payload);
+    const auto rc = Node::Read(node_, key, payload);
 
     if (expect_success) {
       EXPECT_EQ(kKeyAlreadyInserted, rc);

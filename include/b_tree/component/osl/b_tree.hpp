@@ -123,16 +123,11 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNode(key, kClosed);
+    Payload payload{};
+    const auto rc = Node_t::Read(node, key, payload);
 
-    while (true) {
-      Payload payload{};
-      const auto rc = node->Read(key, payload);
-      if (rc == NodeRC::kKeyAlreadyInserted) return payload;
-      if (rc != NodeRC::kNeedRetry) return std::nullopt;
-
-      // version check failed, so re-check key range
-      Node_t::CheckKeyRange(node, key, kClosed);
-    }
+    if (rc == NodeRC::kKeyAlreadyInserted) return payload;
+    return std::nullopt;
   }
 
   /**
@@ -265,9 +260,8 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto &&stack = SearchLeafNodeForWrite(key);
-    auto *node = stack.back();
-    return node->Update(key, &payload, kPayLen);
+    auto *node = SearchLeafNode(key, kClosed);
+    return Node_t::Update(node, key, &payload, kPayLen);
   }
 
   /**
@@ -288,7 +282,7 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    const auto rc = node->Delete(key);
+    const auto rc = Node_t::Delete(node, key);
     if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
 
     if (rc == NodeRC::kNeedMerge) {
@@ -515,7 +509,7 @@ class BTree
 
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      auto *child = Node_t::SearchChild(node, key, is_closed);
+      auto *child = Node_t::SearchChild(node, key, kClosed);
       if (node == nullptr) {
         // a root node was removed
         stack.clear();
