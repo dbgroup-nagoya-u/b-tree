@@ -122,7 +122,7 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForRead(key, kClosed);
+    auto *node = SearchLeafNode(key, kClosed);
 
     while (true) {
       Payload payload{};
@@ -131,7 +131,7 @@ class BTree
       if (rc != NodeRC::kNeedRetry) return std::nullopt;
 
       // version check failed, so re-check key range
-      node = Node_t::CheckKeyRange(node, key, kClosed);
+      Node_t::CheckKeyRange(node, key, kClosed);
     }
   }
 
@@ -155,8 +155,8 @@ class BTree
 
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
-      node = SearchLeafNodeForRead(key, is_closed);
-      node = Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      node = SearchLeafNode(key, is_closed);
+      Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -470,42 +470,36 @@ class BTree
   /**
    * @brief Search a leaf node that may have a target key.
    *
-   * This function uses only shared locks, and a returned leaf node is also locked with
-   * a shared lock.
-   *
    * @param key a search key.
    * @param is_closed a flag for indicating closed/open-interval.
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
-  SearchLeafNodeForRead(  //
+  SearchLeafNode(  //
       const Key &key,
       const bool is_closed) const  //
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (true) {
-      // traverse side links if needed
-      node = Node_t::CheckKeyRange(node, key, is_closed);
+    while (!node->IsLeaf()) {
+      auto *child = Node_t::SearchChild(node, key, is_closed);
       if (node == nullptr) {
-        // a root node is removed
+        // a root node was removed
         node = root_.load(std::memory_order_acquire);
         continue;
       }
-      if (node->IsLeaf()) return node;  // reach a valid leaf node
 
       // go down to the next level
-      node = node->SearchChild(key, is_closed);
+      node = child;
     }
+
+    return node;
   }
 
   /**
    * @brief Search a leftmost leaf node.
    *
-   * This function uses only shared locks, and a returned leaf node is also locked with
-   * a shared lock.
-   *
-   * @return a leftmost leaf node.
+   * @return a leftmost leaf node with a shared lock.
    */
   [[nodiscard]] auto
   SearchLeftmostLeaf()  //
@@ -526,9 +520,6 @@ class BTree
   /**
    * @brief Search a leaf node that may have a target key.
    *
-   * This function uses shared locks while traversing a tree, and a returned leaf node
-   * is locked by a shared with intent-exclusive lock.
-   *
    * @param key a search key.
    * @return a stack of nodes that may have a target key.
    */
@@ -540,29 +531,22 @@ class BTree
     stack.reserve(kExpectedTreeHeight);
 
     auto *node = root_.load(std::memory_order_acquire);
-    while (true) {
-      if (node->IsLeaf()) {
-        // require an SIX lock for write operations
-        node = Node_t::CheckKeyRangeAndLockForWrite(node, key);
-        stack.emplace_back(node);
-        return stack;
-      }
-
-      // traverse side links if needed
-      node = Node_t::CheckKeyRange(node, key, kClosed);
+    while (!node->IsLeaf()) {
+      auto *child = Node_t::SearchChild(node, key, is_closed);
       if (node == nullptr) {
-        // a root node is removed
+        // a root node was removed
         stack.clear();
         node = root_.load(std::memory_order_acquire);
         continue;
       }
 
       // go down to the next level
-      auto *child = node->SearchChild(key, kClosed);
-      if (child == node) continue;  // version check failed, so retry
       stack.emplace_back(node);
       node = child;
     }
+
+    stack.emplace_back(node);
+    return stack;
   }
 
   /**
@@ -581,7 +565,7 @@ class BTree
     if (key) {
       // search a target node with its lowest key
       while (true) {
-        node = Node_t::CheckKeyRange(node, *key, !kClosed);
+        auto *child = Node_t::SearchChild(node, *key, !kClosed);
         if (node == target_node) return;
         if (node == nullptr) {
           // a root node is removed
@@ -591,8 +575,6 @@ class BTree
         }
 
         // go down to the next level
-        auto *child = node->SearchChild(*key, !kClosed);
-        if (child == node) continue;  // version check failed, so retry
         stack.emplace_back(node);
         node = child;
       }
@@ -687,7 +669,7 @@ class BTree
       }
 
       // traverse horizontally to reach a valid parent node
-      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
       if (node == nullptr) {
         // a root node is removed
         SearchParentNode(stack, l_child);
@@ -796,7 +778,7 @@ class BTree
       }
 
       // traverse horizontally to reach a valid parent node
-      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
       if (node == nullptr) {
         // a root node is removed
         SearchParentNode(stack, l_child);

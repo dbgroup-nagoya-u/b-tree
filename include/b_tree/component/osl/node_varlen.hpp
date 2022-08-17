@@ -394,10 +394,10 @@ class NodeVarLen
         end_pos = pos - 1;
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
-      } else if (meta_array_[pos].is_deleted) {
-        return {kKeyAlreadyDeleted, pos};
-      } else {
+      } else if (!meta_array_[pos].is_deleted) {
         return {kKeyAlreadyInserted, pos};
+      } else {
+        return {kKeyAlreadyDeleted, pos};
       }
     }
 
@@ -410,38 +410,33 @@ class NodeVarLen
    * If there is no specified key in this node, this returns the minimum position that
    * is greater than the specified key.
    *
+   * @param node a current node to be searched.
    * @param key a search key.
    * @param is_closed a flag for indicating closed-interval.
    * @return the child node that includes the given key.
    */
-  [[nodiscard]] auto
+  [[nodiscard]] static auto
   SearchChild(  //
+      Node *&node,
       const Key &key,
       const bool is_closed)  //
       -> Node *
   {
-    const auto ver = mutex_.GetVersion();
+    Node *child{};
+    while (true) {
+      const auto ver = node->CheckKeyRange(node, key, is_closed);
+      if (node == nullptr) break;  // a root node was removed
 
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-
-      const auto &index_key = GetKey(meta_array_[pos]);
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
-        break;
+      auto [rc, pos] = node->SearchRecord(key);
+      if (!is_closed && rc == kKeyAlreadyInserted) {
+        ++pos;
       }
+
+      child = node->GetPayload<Node *>(pos);
+      if (node->mutex_.HasSameVersion(ver)) break;
     }
 
-    auto *child = GetPayload<Node *>(begin_pos);
-    return (mutex_.HasSameVersion(ver)) ? child : this;
+    return child;
   }
 
   /**
@@ -471,17 +466,17 @@ class NodeVarLen
   /**
    * @brief Check the key range of a given node and traverse side links if needed.
    *
-   * @param node a current node to be locked.
+   * @param node a current node to be checked.
    * @param key a search key.
    * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
   [[nodiscard]] static auto
   CheckKeyRange(  //
-      Node *node,
+      const Node *&node,
       const Key &key,
       const bool is_closed)  //
-      -> Node *
+      -> uint64_t
   {
     while (true) {
       const auto ver = node->mutex_.GetVersion();
@@ -490,22 +485,22 @@ class NodeVarLen
       if (node->is_removed_ == 0) {
         // check the node includes a target key
         if (node->h_key_len_ == 0) {
-          if (node->mutex_.HasSameVersion(ver)) return node;
+          if (node->mutex_.HasSameVersion(ver)) return ver;
           continue;
         }
         const auto &high_key = node->GetHighKey();
         if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
-          if (node->mutex_.HasSameVersion(ver)) return node;
+          if (node->mutex_.HasSameVersion(ver)) return ver;
           continue;
         }
       }
 
       // go to the next node
-      auto *next = node->next_;
+      const auto *next = node->next_;
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
       node = next;
-      if (node == nullptr) return node;
+      if (node == nullptr) return ver;
     }
   }
 
@@ -519,12 +514,11 @@ class NodeVarLen
    * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  [[nodiscard]] static void
   CheckKeyRangeAndLockForRead(  //
-      Node *node,
+      Node *&node,
       const Key &key,
-      const bool is_closed)  //
-      -> Node *
+      const bool is_closed)
   {
     while (true) {
       const auto ver = node->mutex_.GetVersion();
@@ -533,12 +527,12 @@ class NodeVarLen
       if (node->is_removed_ == 0) {
         // check the node includes a target key
         if (node->h_key_len_ == 0) {
-          if (node->mutex_.TryLockS(ver)) return node;
+          if (node->mutex_.TryLockS(ver)) return;
           continue;
         }
         const auto &high_key = node->GetHighKey();
         if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
-          if (node->mutex_.TryLockS(ver)) return node;
+          if (node->mutex_.TryLockS(ver)) return;
           continue;
         }
       }
@@ -548,7 +542,7 @@ class NodeVarLen
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
       node = next;
-      if (node == nullptr) return node;
+      if (node == nullptr) return;
     }
   }
 
@@ -561,11 +555,10 @@ class NodeVarLen
    * @param key a search key.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  [[nodiscard]] static void
   CheckKeyRangeAndLockForWrite(  //
-      Node *node,
-      const Key &key)  //
-      -> Node *
+      Node *&node,
+      const Key &key)
   {
     while (true) {
       const auto ver = node->mutex_.GetVersion();
@@ -574,7 +567,7 @@ class NodeVarLen
       if (node->is_removed_ == 0) {
         // check the node includes a target key
         if (node->h_key_len_ == 0 || !Comp{}(node->GetHighKey(), key)) {
-          if (node->mutex_.TryLockSIX(ver)) return node;
+          if (node->mutex_.TryLockSIX(ver)) return;
           continue;
         }
       }
@@ -584,7 +577,7 @@ class NodeVarLen
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
       node = next;
-      if (node == nullptr) return node;
+      if (node == nullptr) return;
     }
   }
 
