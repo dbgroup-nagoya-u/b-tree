@@ -151,7 +151,7 @@ class BTree
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
       node = SearchLeafNodeForRead(key, is_closed);
-      node->LockS();
+      Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -452,14 +452,8 @@ class BTree
         if (node->IsLeaf()) {
           return node;
         } else {
-          const auto [pos, ver] = node->SearchChild(key, is_closed);
-          auto *child = node->GetChild(pos);
-          const auto rc = node->NeedRetryInner(key, ver);
-          if (rc == kNeedRetry) {
-            continue;
-          } else if (rc == kNeedRootRetry) {
-            break;
-          }
+          auto [pos, ver, child, rc] = node->SearchAndGetChild(key, is_closed);
+          if (rc == kNeedRootRetry) break;
           node = child;
         }
       }
@@ -507,15 +501,8 @@ class BTree
           return node;
         } else {
           // search a child node
-          const auto [pos, ver] = node->SearchChild(key, kClosed);
-          auto *child = node->GetChild(pos);
-          auto rc = node->NeedRetryInner(key, ver);
-
-          if (rc == kNeedRootRetry) {
-            break;
-          } else if (rc == kNeedRetry) {
-            continue;
-          }
+          auto [pos, ver, child, rc] = node->SearchAndGetChild(key, kClosed);
+          if (rc == kNeedRootRetry) break;
 
           // perform internal SMOs eagerly
           rc = NeedSplit(node, child, ver);

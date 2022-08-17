@@ -531,31 +531,41 @@ class NodeVarLen
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
+  SearchAndGetChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::pair<size_t, uint64_t>
+      -> std::tuple<size_t, uint64_t, Node *, NodeRC>
   {
-    const auto ver = mutex_.GetVersion();
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-      const auto &index_key = GetKey(meta_array_[pos]);
+      int64_t begin_pos = 0;
+      int64_t end_pos = record_count_ - 2;
+      while (begin_pos <= end_pos) {
+        size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
-        break;
+        const auto &index_key = GetKey(meta_array_[pos]);
+
+        if (Comp{}(key, index_key)) {  // a target key is in a left side
+          end_pos = pos - 1;
+        } else if (Comp{}(index_key, key)) {  // a target key is in a right side
+          begin_pos = pos + 1;
+        } else {  // find an equivalent key
+          if (!is_closed) ++pos;
+          begin_pos = pos;
+          break;
+        }
       }
-    }
 
-    return {begin_pos, ver};
+      auto *child = GetPayload<Node *>(begin_pos);
+      const auto &high_key = GetHighKey();
+
+      if (!mutex_.HasSameVersion(ver)) continue;
+
+      const auto rc =
+          (is_removed_ || (high_key && Comp{}(*high_key, key))) ? kNeedRootRetry : kCompleted;
+      return {begin_pos, ver, child, rc};
+    }
   }
 
   /**
@@ -624,6 +634,48 @@ class NodeVarLen
     }
 
     return ver;
+  }
+
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * This function acquires a shared lock for a returned node.
+   *
+   * @param node a current node to be locked.
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   * @return a node whose key range includes the search key.
+   */
+  static void
+  CheckKeyRangeAndLockForRead(  //
+      Node *&node,
+      const Key &key,
+      const bool is_closed)
+  {
+    while (true) {
+      const auto ver = node->mutex_.GetVersion();
+
+      // check the node is not removed
+      if (node->is_removed_ == 0) {
+        // check the node includes a target key
+        if (!node->GetHighKey()) {
+          if (node->mutex_.TryLockS(ver)) return;
+          continue;
+        }
+        const auto &high_key = node->GetHighKey();
+        if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
+          if (node->mutex_.TryLockS(ver)) return;
+          continue;
+        }
+      }
+
+      // go to the next node
+      auto *next = node->next_;
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
+      if (next == nullptr) return;
+      node = next;
+    }
   }
 
   /**
