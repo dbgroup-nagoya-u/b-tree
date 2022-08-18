@@ -645,8 +645,8 @@ class NodeVarLen
       auto *next = node->next_;
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
-      if (next == nullptr) break;
       node = next;
+      if (node == nullptr) break;
     }
 
     return ver;
@@ -689,8 +689,8 @@ class NodeVarLen
       auto *next = node->next_;
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
-      if (next == nullptr) return;
       node = next;
+      if (node == nullptr) return;
     }
   }
 
@@ -725,8 +725,8 @@ class NodeVarLen
       auto *next = node->next_;
       if (!node->mutex_.HasSameVersion(ver)) continue;
 
-      if (next == nullptr) return;
       node = next;
+      if (node == nullptr) return;
     }
   }
 
@@ -748,19 +748,21 @@ class NodeVarLen
   Read(Node *&node,
        const Key &key,
        Payload &out_payload)  //
-      -> ReturnCode
+      -> NodeRC
   {
     while (true) {
       const auto ver = CheckKeyRange(node, key, kClosed);
+
+      if (node == nullptr) return kNeedRootRetry;
 
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
         const auto meta = node->meta_array_[pos];
         memcpy(&out_payload, node->GetPayloadAddr(meta), sizeof(Payload));
-        if (node->mutex_.HasSameVersion(ver)) return kSuccess;
+        if (node->mutex_.HasSameVersion(ver)) return kCompleted;
       }
 
-      if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+      if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
     }
   }
 
@@ -822,19 +824,19 @@ class NodeVarLen
       const size_t key_len,
       const void *payload,
       const size_t pay_len)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
 
     // perform insert operation if possible
-    auto rc = kSuccess;
+    auto rc = kCompleted;
     if (existence == kKeyNotInserted) {
       InsertRecord(key, key_len, payload, pay_len, pos);
     } else if (existence == kKeyAlreadyDeleted) {
       ReuseRecord(payload, pay_len, pos);
     } else {  // a target key has been inserted
-      rc = kKeyExist;
+      rc = kKeyAlreadyInserted;
     }
 
     mutex_.UnlockX();
@@ -859,16 +861,16 @@ class NodeVarLen
       const Key &key,
       const void *payload,
       const size_t pay_len)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
 
     // perform update operation if possible
-    auto rc = kKeyNotExist;
+    auto rc = kKeyNotInserted;
     if (existence == kKeyAlreadyInserted) {
       memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
-      rc = kSuccess;
+      rc = kCompleted;
     }
 
     mutex_.UnlockX();
@@ -888,17 +890,17 @@ class NodeVarLen
    */
   auto
   Delete(const Key &key)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
 
     // perform update operation if possible
-    auto rc = kKeyNotExist;
+    auto rc = kKeyNotInserted;
     if (existence == kKeyAlreadyInserted) {
       meta_array_[pos].is_deleted = 1;
       deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
-      rc = kSuccess;
+      rc = kCompleted;
     }
 
     mutex_.UnlockX();

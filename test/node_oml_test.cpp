@@ -141,7 +141,7 @@ class NodeFixture : public testing::Test
       const Payload expected_val,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
 
     Payload payload{};
     const auto rc = Node::Read(node_, key, payload);
@@ -158,7 +158,7 @@ class NodeFixture : public testing::Test
       const Payload payload,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyExist;
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyAlreadyInserted;
     auto rc = Insert(key, payload);
 
     EXPECT_EQ(expected_rc, rc);
@@ -170,7 +170,7 @@ class NodeFixture : public testing::Test
       const Payload payload,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
     auto rc = Update(key, payload);
 
     EXPECT_EQ(expected_rc, rc);
@@ -181,7 +181,7 @@ class NodeFixture : public testing::Test
       const Key key,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
     auto rc = Delete(key);
 
     EXPECT_EQ(expected_rc, rc);

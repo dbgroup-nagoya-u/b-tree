@@ -122,12 +122,14 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForRead(key, kClosed);
-    Payload payload{};
-    const auto rc = Node_t::Read(node, key, payload);
-
-    if (rc == kSuccess) return payload;
-    return std::nullopt;
+    while (true) {
+      auto *node = SearchLeafNodeForRead(key, kClosed);
+      Payload payload{};
+      const auto rc = Node_t::Read(node, key, payload);
+      if (rc == kNeedRootRetry) continue;
+      if (rc == kCompleted) return payload;
+      return std::nullopt;
+    }
   }
 
   /**
@@ -183,10 +185,13 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    node->Write(key, key_len, &payload, kPayLen);
-    return kSuccess;
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      if (node == nullptr) continue;
+      node->Write(key, key_len, &payload, kPayLen);
+      return kSuccess;
+    }
   }
 
   /**
@@ -207,9 +212,13 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    return node->Insert(key, key_len, &payload, kPayLen);
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      if (node == nullptr) continue;
+      const auto rc = node->Insert(key, key_len, &payload, kPayLen);
+      return (rc == kCompleted) ? kSuccess : kKeyExist;
+    }
   }
 
   /**
@@ -230,9 +239,13 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    return node->Update(key, &payload, kPayLen);
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      if (node == nullptr) continue;
+      const auto rc = node->Update(key, &payload, kPayLen);
+      return (rc == kCompleted) ? kSuccess : kKeyNotExist;
+    }
   }
 
   /**
@@ -251,9 +264,13 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    return node->Delete(key);
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      if (node == nullptr) continue;
+      const auto rc = node->Delete(key);
+      return (rc == kCompleted) ? kSuccess : kKeyNotExist;
+    }
   }
 
   /*####################################################################################
@@ -446,15 +463,16 @@ class BTree
       const bool is_closed)  //
       -> Node_t *
   {
-    while (true) {  // for retry from root
-      auto *node = root_.load(std::memory_order_acquire);
-      while (true) {
-        if (node->IsLeaf()) return node;
+    auto *node = root_.load(std::memory_order_acquire);
+    while (true) {
+      if (node->IsLeaf()) return node;
 
-        auto [pos, ver, child, rc] = node->SearchChild(key, is_closed);
-        if (rc == kNeedRootRetry) break;
-        node = child;
+      auto [pos, ver, child, rc] = node->SearchChild(key, is_closed);
+      if (rc == kNeedRootRetry) {
+        node = root_.load(std::memory_order_acquire);
+        continue;
       }
+      node = child;
     }
   }
 
@@ -495,31 +513,32 @@ class BTree
   SearchLeafNodeForWrite(const Key &key)  //
       -> Node_t *
   {
-    while (true) {  // for retry from root
-      auto *node = GetRootForWrite(key);
-      while (true) {
-        if (node->IsLeaf()) return node;
+    auto *node = GetRootForWrite(key);
+    while (true) {
+      if (node->IsLeaf()) return node;
 
-        auto [pos, ver, child, rc] = node->SearchChild(key, kClosed);
-        if (rc == kNeedRootRetry) break;
-
-        // perform internal SMOs eagerly
-        rc = NeedSMO(node, child, ver);
-        switch (rc) {
-          case kNeedRetry:
-            continue;
-          case kNeedSplit:
-            Split(child, node, pos);
-            node = child->GetValidSplitNode(key);
-            continue;
-          case kNeedMerge:
-            Merge(child, node, pos);
-          case kCompleted:
-          default:
-            break;
-        }
-        node = child;
+      auto [pos, ver, child, rc] = node->SearchChild(key, kClosed);
+      if (rc == kNeedRootRetry) {
+        node = GetRootForWrite(key);
+        continue;
       }
+
+      // perform internal SMOs eagerly
+      rc = NeedSMO(node, child, ver);
+      switch (rc) {
+        case kNeedRetry:
+          continue;
+        case kNeedSplit:
+          Split(child, node, pos);
+          node = child->GetValidSplitNode(key);
+          continue;
+        case kNeedMerge:
+          Merge(child, node, pos);
+        case kCompleted:
+        default:
+          break;
+      }
+      node = child;
     }
   }
 
