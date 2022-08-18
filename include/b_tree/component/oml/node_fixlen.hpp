@@ -28,6 +28,7 @@
 
 // local sources
 #include "b_tree/component/common.hpp"
+#include "b_tree/component/metadata.hpp"
 
 namespace dbgroup::index::b_tree::component::oml
 {
@@ -65,7 +66,7 @@ class NodeFixLen
    * @param is_leaf a flag to indicate whether a leaf node is constructed.
    */
   constexpr explicit NodeFixLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}, has_high_key_{0}
+      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}, has_low_key_{0}, has_high_key_{0}
   {
   }
 
@@ -76,11 +77,18 @@ class NodeFixLen
    * @param r_node a right child node.
    */
   NodeFixLen(  //
+      const Key &l_key,
+      [[maybe_unused]] const size_t l_key_len,
       const NodeFixLen *l_node,
       const NodeFixLen *r_node)  //
-      : is_leaf_{0}, is_removed_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
+      : is_leaf_{0},
+        is_removed_{0},
+        block_size_{2 * kPtrLen},
+        record_count_{2},
+        has_low_key_{0},
+        has_high_key_{0}
   {
-    keys_[0] = l_node->GetHighKey();
+    keys_[0] = l_key;
     SetPayload(kPageSize, &l_node);
     SetPayload(kPageSize - kPtrLen, &r_node);
   }
@@ -133,6 +141,41 @@ class NodeFixLen
     return is_leaf_;
   }
 
+  [[nodiscard]] constexpr auto
+  IsRemoved() const  //
+      -> bool
+  {
+    return is_removed_;
+  }
+
+  [[nodiscard]] auto
+  NeedRetryInner(const Key key,             //
+                 const uint64_t ver) const  //
+      -> NodeRC
+  {
+    const auto &high_key = GetHighKey();
+    if (!mutex_.HasSameVersion(ver)) {
+      return kNeedRetry;
+    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
+      return kNeedRootRetry;
+    }
+    return kCompleted;
+  }
+
+  [[nodiscard]] auto
+  NeedRetryLeaf(const Key key,             //
+                const uint64_t ver) const  //
+      -> NodeRC
+  {
+    const auto &high_key = GetHighKey();
+    if (!mutex_.HasSameVersion(ver)) {
+      return kNeedRetry;
+    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
+      return kNeedNextRetry;
+    }
+    return kCompleted;
+  }
+
   /**
    * @param new_rec_len the length of a new record.
    * @retval true if this node requires splitting before inserting a new record.
@@ -140,10 +183,29 @@ class NodeFixLen
    */
   [[nodiscard]] auto
   NeedSplit(const size_t new_rec_len)  //
-      -> bool
+      -> std::pair<bool, uint64_t>
   {
-    // check whether the node has space for a new record
-    return GetUsedSize() + new_rec_len > kPageSize - kHeaderLen;
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+      auto need_split = false;
+
+      // check whether the node has space for a new record
+      const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+      if (total_size <= kPageSize - kHeaderLen) {
+        need_split = false;
+      } else if (total_size - deleted_size_ > kMaxUsedSpaceSize) {
+        need_split = true;
+      } else {
+        // this node has enough space but cleaning up is required
+        if (mutex_.TryLockX(ver)) {
+          CleanUp();
+          mutex_.UnlockX();
+          continue;
+        }
+        need_split = false;
+      }
+      if (mutex_.HasSameVersion(ver)) return {need_split, ver};
+    }
   }
 
   /**
@@ -152,22 +214,25 @@ class NodeFixLen
    */
   [[nodiscard]] auto
   NeedMerge()  //
-      -> bool
+      -> std::pair<bool, uint64_t>
   {
-    // check this node uses enough space
-    return GetUsedSize() < kMinUsedSpaceSize;
-  }
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+      auto need_merge = false;
 
-  /**
-   * @param r_node a right-sibling node to be merged.
-   * @retval true if `r_node` can be merged into this node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  CanMerge(Node *r_node) const  //
-      -> bool
-  {
-    return GetUsedSize() + r_node->GetUsedSize() < kMaxUsedSpaceSize;
+      // check this node uses enough space
+      if (GetUsedSize() < kMinUsedSpaceSize) {
+        need_merge = false;
+      } else {
+        // this node has a lot of dead space
+        if (mutex_.TryLockX(ver)) {
+          CleanUp();
+          mutex_.UnlockX();
+        }
+        need_merge = false;
+      }
+      if (mutex_.HasSameVersion(ver)) return {need_merge, ver};
+    }
   }
 
   /**
@@ -205,10 +270,11 @@ class NodeFixLen
       -> Node *
   {
     auto *node = this;
-    if (!has_high_key_ || Comp{}(GetHighKey(), key)) {
+    const auto &high_key = GetHighKey();
+    if (node->is_removed_) {
       node = next_;
-      node->mutex_.LockSIX();
-      mutex_.UnlockSIX();
+    } else if (!high_key_ || Comp{}(GetHighKey(), key)) {
+      node = next_;
     }
 
     return node;
@@ -376,6 +442,33 @@ class NodeFixLen
     mutex_.UnlockS();
   }
 
+  auto
+  LockX()  //
+      -> void
+  {
+    mutex_.LockX();
+  }
+
+  auto
+  TryLockX(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.TryLockX(ver);
+  }
+
+  void
+  DowngradeToSIX()
+  {
+    mutex_.DowngradeToSIX();
+  }
+
+  auto
+  UnlockX()  //
+      -> void
+  {
+    mutex_.UnlockX();
+  }
+
   /**
    * @brief Acquire a shared lock with intent-exclusive locking for this node.
    *
@@ -386,14 +479,11 @@ class NodeFixLen
     mutex_.LockSIX();
   }
 
-  /**
-   * @brief Release the shared lock with intent-exclusive locking for this node.
-   *
-   */
-  void
-  UnlockSIX()
+  auto
+  TryLockSIX(const uint64_t ver)  //
+      -> bool
   {
-    mutex_.UnlockSIX();
+    return mutex_.TryLockSIX(ver);
   }
 
   /**
@@ -404,6 +494,16 @@ class NodeFixLen
   UpgradeToX()
   {
     mutex_.UpgradeToX();
+  }
+
+  /**
+   * @brief Release the shared lock with intent-exclusive locking for this node.
+   *
+   */
+  void
+  UnlockSIX()
+  {
+    mutex_.UnlockSIX();
   }
 
   /*####################################################################################
@@ -913,6 +1013,9 @@ class NodeFixLen
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node *);
 
+  /// the length of metadata.
+  static constexpr size_t kMetaLen = sizeof(Metadata);
+
   /// the length of a header in each node page.
   static constexpr size_t kHeaderLen = sizeof(Node);
 
@@ -1006,9 +1109,11 @@ class NodeFixLen
   InsertRecord(  //
       const Key &key,
       const void *payload,
-      const size_t pos)
+      const size_t pos)  //
+      ->NodeRc
   {
-    const auto move_num = record_count_ - pos;
+    const auto rec_len = kKeyLen + pay_len_;
+    if (GetUsedSize() + rec_len >) const auto move_num = record_count_ - pos;
 
     // insert a new key
     memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
@@ -1023,6 +1128,29 @@ class NodeFixLen
     // update header information
     ++record_count_;
     block_size_ += pay_len_;
+  }
+
+  /**
+   * @brief Clean up this node.
+   *
+   */
+  void
+  CleanUp()
+  {
+    // copy records to a temporal node
+    auto offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
+
+    // update a header
+    block_size_ = kPageSize - offset;
+    deleted_size_ = 0;
+    record_count_ = temp_node_->record_count_;
+
+    // copy cleaned up records to the original node
+    memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
+    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
+
+    // reset a temp node
+    temp_node_->record_count_ = 0;
   }
 
   /**
@@ -1086,6 +1214,9 @@ class NodeFixLen
   /// the total byte length of records in a node.
   uint32_t block_size_ : 30;
 
+  /// the total byte length of records in a node.
+  uint16_t deleted_size_{0};
+
   /// the number of records in this node.
   uint16_t record_count_{0};
 
@@ -1098,6 +1229,9 @@ class NodeFixLen
   /// the pointer to the next node.
   Node *next_{nullptr};
 
+  /// a flag for a lowest key.
+  uint64_t has_low_key_ : 1;
+
   /// a flag for a highest key.
   uint64_t has_high_key_ : 1;
 
@@ -1106,6 +1240,13 @@ class NodeFixLen
 
   /// an actual data block (it starts with record keys).
   Key keys_[0];
+
+  /// the metadata of a highest key.
+  Metadata high_meta_{kPageSize, 0, 0};
+
+  /// a temporary node for SMOs.
+  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
+      std::make_unique<Node>(0);
 };
 
 }  // namespace dbgroup::index::b_tree::component::oml
