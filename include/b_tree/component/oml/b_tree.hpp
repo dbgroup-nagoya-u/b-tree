@@ -606,7 +606,9 @@ class BTree
       if (!need_split) return {node, kCompleted};
 
       if (!node->TryLockX(ver)) continue;
-      if (node != root_) {  // if the root node has been moved by other thread
+      if (node
+          != root_.load(
+              std::memory_order_acquire)) {  // if the root node has been moved by other thread
         node->UnlockX();
         return {nullptr, kNeedRootRetry};
       }
@@ -659,7 +661,9 @@ class BTree
         auto *child = node->template GetPayload<Node_t *>(0);
 
         if (!node->TryLockX(ver)) continue;
-        if (node != root_) {  // if the root node has been moved by other thread
+        if (node
+            != root_.load(
+                std::memory_order_acquire)) {  // if the root node has been moved by other thread
           node->UnlockX();
           return kNeedRootRetry;
         }
