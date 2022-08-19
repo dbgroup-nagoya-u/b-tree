@@ -184,8 +184,9 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      Node_t::CheckKeyRangeAndLockForWrite(node, key);
-      if (node == nullptr) continue;
+      // Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      const auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
+      if (rc == kNeedRetry) continue;
       node->Write(key, key_len, &payload, kPayLen);
       return kSuccess;
     }
@@ -211,9 +212,10 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      Node_t::CheckKeyRangeAndLockForWrite(node, key);
-      if (node == nullptr) continue;
-      const auto rc = node->Insert(key, key_len, &payload, kPayLen);
+      // Node_t::CheckKeyRangeAndLockForWrite(node, key);
+      auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
+      if (rc == kNeedRetry) continue;
+      rc = node->Insert(key, key_len, &payload, kPayLen);
       return (rc == kCompleted) ? kSuccess : kKeyExist;
     }
   }
@@ -236,13 +238,10 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    while (true) {
-      auto *node = SearchLeafNodeForWrite(key);
-      Node_t::CheckKeyRangeAndLockForWrite(node, key);
-      if (node == nullptr) continue;
-      const auto rc = node->Update(key, &payload, kPayLen);
-      return (rc == kCompleted) ? kSuccess : kKeyNotExist;
-    }
+    auto *node = SearchLeafNodeForWrite(key);
+    Node_t::CheckKeyRangeAndLockForWrite(node, key);
+    const auto rc = node->Update(key, &payload, kPayLen);
+    return (rc == kCompleted) ? kSuccess : kKeyNotExist;
   }
 
   /**
@@ -261,13 +260,10 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    while (true) {
-      auto *node = SearchLeafNodeForWrite(key);
-      Node_t::CheckKeyRangeAndLockForWrite(node, key);
-      if (node == nullptr) continue;
-      const auto rc = node->Delete(key);
-      return (rc == kCompleted) ? kSuccess : kKeyNotExist;
-    }
+    auto *node = SearchLeafNodeForWrite(key);
+    Node_t::CheckKeyRangeAndLockForWrite(node, key);
+    const auto rc = node->Delete(key);
+    return (rc == kCompleted) ? kSuccess : kKeyNotExist;
   }
 
   /*####################################################################################
@@ -436,9 +432,9 @@ class BTree
   {
     while (true) {
       // check this tree requires SMOs
-      if (ShrinkTreeIfNeeded(root_.load(std::memory_order_acquire)) == kNeedRootRetry) continue;
+      if (ShrinkTreeIfNeeded(root_.load(std::memory_order_acquire)) == kNeedRetry) continue;
       auto [node, rc] = RootSplit(root_.load(std::memory_order_acquire), key);
-      if (rc == kNeedRootRetry) continue;
+      if (rc == kNeedRetry) continue;
 
       return node;
     }
@@ -461,16 +457,15 @@ class BTree
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (true) {
-      if (node->IsLeaf()) return node;
-
-      auto [pos, ver, child, rc] = node->SearchChild(key, is_closed);
-      if (rc == kNeedRootRetry) {
+    while (!node->IsLeaf()) {
+      auto [pos, ver, child] = node->SearchChild(key, is_closed);
+      if (child == nullptr) {
         node = root_.load(std::memory_order_acquire);
         continue;
       }
       node = child;
     }
+    return node;
   }
 
   /**
@@ -511,17 +506,15 @@ class BTree
       -> Node_t *
   {
     auto *node = GetRootForWrite(key);
-    while (true) {
-      if (node->IsLeaf()) return node;
-
-      auto [pos, ver, child, rc] = node->SearchChild(key, kClosed);
-      if (rc == kNeedRootRetry) {
+    while (!node->IsLeaf()) {
+      auto [pos, ver, child] = node->SearchChild(key, kClosed);
+      if (child == nullptr) {
         node = GetRootForWrite(key);
         continue;
       }
 
       // perform internal SMOs eagerly
-      rc = NeedSMO(node, child, ver);
+      const auto rc = NeedSMO(node, child, ver);
       switch (rc) {
         case kNeedRetry:
           continue;
@@ -537,6 +530,7 @@ class BTree
       }
       node = child;
     }
+    return node;
   }
 
   /**
@@ -557,7 +551,7 @@ class BTree
       }
     }
 
-    delete node;
+    ::operator delete(node);
   }
 
   [[nodiscard]] auto
@@ -566,16 +560,15 @@ class BTree
           const uint64_t parent_ver)  //
       -> NodeRC
   {
-    auto [need_split, child_ver] = child->NeedSplit(kMaxRecLen);
-    if (need_split) {
+    uint64_t child_ver{};
+    if (child->NeedSplit(kMaxRecLen, child_ver)) {
       if (parent->TryLockX(parent_ver)) {
         if (child->TryLockX(child_ver)) return kNeedSplit;
         parent->UnlockX();
       }
       return kNeedRetry;
     } else {
-      auto [need_merge, child_ver] = child->NeedMerge();
-      if (!need_merge) return kCompleted;
+      if (!child->NeedMerge(child_ver)) return kCompleted;
       if (parent->TryLockX(parent_ver)) {
         if (child->TryLockX(child_ver)) return kNeedMerge;
         parent->UnlockX();
@@ -617,16 +610,16 @@ class BTree
             const Key &key)  //
       -> std::pair<Node_t *, NodeRC>
   {
+    uint64_t ver{};
     while (true) {
-      auto [need_split, ver] = node->NeedSplit(kMaxRecLen);
-      if (!need_split) return {node, kCompleted};
+      if (!node->NeedSplit(kMaxRecLen, ver)) return {node, kCompleted};
 
       if (!node->TryLockX(ver)) continue;
       if (node
           != root_.load(
               std::memory_order_acquire)) {  // if the root node has been moved by other thread
         node->UnlockX();
-        return {nullptr, kNeedRootRetry};
+        return {nullptr, kNeedRetry};
       }
 
       auto *l_node = node;
@@ -681,14 +674,14 @@ class BTree
             != root_.load(
                 std::memory_order_acquire)) {  // if the root node has been moved by other thread
           node->UnlockX();
-          return kNeedRootRetry;
+          return kNeedRetry;
         }
 
         node->SetRemove();
         gc_.AddGarbage(node);
         node->UnlockX();
         node = child;
-        root_.store(node, std::memory_order_relaxed);
+        root_.store(node, std::memory_order_release);
       } else {
         return kCompleted;
       }

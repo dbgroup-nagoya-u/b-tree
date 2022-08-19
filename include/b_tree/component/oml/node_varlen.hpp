@@ -153,11 +153,12 @@ class NodeVarLen
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  NeedSplit(const size_t new_rec_len)  //
-      -> std::pair<bool, uint64_t>
+  NeedSplit(const size_t new_rec_len,
+            uint64_t &ver)  //
+      -> bool
   {
     while (true) {
-      const auto ver = mutex_.GetVersion();
+      ver = mutex_.GetVersion();
       auto need_split = false;
 
       // check whether the node has space for a new record
@@ -175,7 +176,7 @@ class NodeVarLen
         }
         need_split = false;
       }
-      if (mutex_.HasSameVersion(ver)) return {need_split, ver};
+      if (mutex_.HasSameVersion(ver)) return need_split;
     }
   }
 
@@ -184,11 +185,11 @@ class NodeVarLen
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  NeedMerge()  //
-      -> std::pair<bool, uint64_t>
+  NeedMerge(uint64_t &ver)  //
+      -> bool
   {
     while (true) {
-      const auto ver = mutex_.GetVersion();
+      ver = mutex_.GetVersion();
       auto need_merge = false;
 
       // check this node uses enough space
@@ -204,7 +205,7 @@ class NodeVarLen
         }
         need_merge = false;
       }
-      if (mutex_.HasSameVersion(ver)) return {need_merge, ver};
+      if (mutex_.HasSameVersion(ver)) return need_merge;
     }
   }
 
@@ -550,7 +551,7 @@ class NodeVarLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::tuple<size_t, uint64_t, Node *, NodeRC>
+      -> std::tuple<size_t, uint64_t, Node *>
   {
     while (true) {
       const auto ver = mutex_.GetVersion();
@@ -578,9 +579,8 @@ class NodeVarLen
 
       if (!mutex_.HasSameVersion(ver)) continue;
 
-      const auto rc =
-          (is_removed_ || (high_key && Comp{}(*high_key, key))) ? kNeedRootRetry : kCompleted;
-      return {begin_pos, ver, child, rc};
+      child = (is_removed_ || (high_key && Comp{}(*high_key, key))) ? nullptr : child;
+      return {begin_pos, ver, child};
     }
   }
 
@@ -727,6 +727,27 @@ class NodeVarLen
 
       node = next;
       if (node == nullptr) return;
+    }
+  }
+
+  [[nodiscard]] static auto
+  CheckKeyRangeAndCheckSMOAndLockForWrite(  //
+      Node *&node,
+      const Key &key,
+      const size_t new_rec_len)  //
+      -> NodeRC
+  {
+    while (true) {
+      auto ver = CheckKeyRange(node, key, kClosed);
+      const auto pre_ver = ver;
+
+      if (node->NeedSplit(new_rec_len, ver)) return kNeedRetry;
+      if (pre_ver != ver) continue;
+
+      // if there is a space for a new record, acquire lock
+      if (!node->TryLockSIX(ver)) continue;  // retry on the leaf level
+
+      return kCompleted;
     }
   }
 
