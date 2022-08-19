@@ -184,7 +184,6 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      // Node_t::CheckKeyRangeAndLockForWrite(node, key);
       const auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
       if (rc == kNeedRetry) continue;
       node->Write(key, key_len, &payload, kPayLen);
@@ -212,7 +211,6 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      // Node_t::CheckKeyRangeAndLockForWrite(node, key);
       auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
       if (rc == kNeedRetry) continue;
       rc = node->Insert(key, key_len, &payload, kPayLen);
