@@ -716,7 +716,7 @@ class NodeVarLen
         // check the node includes a target key
         const auto &high_key = node->GetHighKey();
         if (!high_key || !Comp{}(*high_key, key)) {
-          if (node->mutex_.TryLockX(ver)) return;
+          if (node->mutex_.TryLockSIX(ver)) return;
           continue;
         }
       }
@@ -790,6 +790,7 @@ class NodeVarLen
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
+    mutex_.UpgradeToX();
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
       InsertRecord(key, key_len, payload, pay_len, pos);
@@ -828,17 +829,19 @@ class NodeVarLen
     const auto [existence, pos] = SearchRecord(key);
 
     // perform insert operation if possible
-    auto rc = kCompleted;
     if (existence == kKeyNotInserted) {
+      mutex_.UpgradeToX();
       InsertRecord(key, key_len, payload, pay_len, pos);
     } else if (existence == kKeyAlreadyDeleted) {
+      mutex_.UpgradeToX();
       ReuseRecord(payload, pay_len, pos);
     } else {  // a target key has been inserted
-      rc = kKeyAlreadyInserted;
+      mutex_.UnlockSIX();
+      return kKeyAlreadyInserted;
     }
 
     mutex_.UnlockX();
-    return rc;
+    return kCompleted;
   }
 
   /**
@@ -865,14 +868,15 @@ class NodeVarLen
     const auto [existence, pos] = SearchRecord(key);
 
     // perform update operation if possible
-    auto rc = kKeyNotInserted;
     if (existence == kKeyAlreadyInserted) {
+      mutex_.UpgradeToX();
       memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
-      rc = kCompleted;
+      mutex_.UnlockX();
+      return kCompleted;
     }
 
-    mutex_.UnlockX();
-    return rc;
+    mutex_.UnlockSIX();
+    return kKeyNotInserted;
   }
 
   /**
@@ -894,15 +898,16 @@ class NodeVarLen
     const auto [existence, pos] = SearchRecord(key);
 
     // perform update operation if possible
-    auto rc = kKeyNotInserted;
     if (existence == kKeyAlreadyInserted) {
+      mutex_.UpgradeToX();
       meta_array_[pos].is_deleted = 1;
       deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
-      rc = kCompleted;
+      mutex_.UnlockX();
+      return kCompleted;
     }
 
-    mutex_.UnlockX();
-    return rc;
+    mutex_.UnlockSIX();
+    return kKeyNotInserted;
   }
 
   /**
