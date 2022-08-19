@@ -322,6 +322,28 @@ class NodeFixLen
   }
 
   /**
+   * @brief Get a leftmost child node.
+   *
+   * @return the child node.
+   */
+  [[nodiscard]] auto
+  GetLeftmostChid() const  //
+      -> Node *
+  {
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+
+      // check this node is not removed
+      Node *child = nullptr;
+      if (is_removed_ == 0) {
+        child = GetPayload<Node *>(0);
+      }
+
+      if (mutex_.HasSameVersion(ver)) return child;
+    }
+  }
+
+  /**
    * @brief Get a child node in a given position.
    *
    * The returned child node is locked with a shared lock and this node is unlocked.
@@ -330,27 +352,10 @@ class NodeFixLen
    * @return the child node with a shared lock.
    */
   [[nodiscard]] constexpr auto
-  GetChildForRead(const size_t pos)  //
+  GetChild(const size_t pos)  //
       -> Node *
   {
     auto *child = GetPayload<Node *>(pos);
-    child->mutex_.LockS();
-    mutex_.UnlockS();
-    return child;
-  }
-
-  /**
-   * @brief Get a child node in a given position.
-   *
-   * @param pos the position of a child node.
-   * @return the child node with an SIX lock.
-   */
-  [[nodiscard]] constexpr auto
-  GetChildForWrite(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    child->mutex_.LockSIX();
     return child;
   }
 
@@ -376,19 +381,20 @@ class NodeFixLen
     if (r_pos == record_count_) {
       // a rightmost node is cannot be merged
       mutex_.UnlockSIX();
+      l_node->mutex_.UnlockX();
       return nullptr;
     }
 
     // check the right-sibling node has enough capacity for merging
-    auto *r_node = GetChildForWrite(r_pos);
-    if (!l_node->CanMerge(r_node)) {
-      mutex_.UnlockSIX();
-      r_node->mutex_.UnlockSIX();
+    auto *r_node = GetPayload<Node *>(r_pos);
+    r_node->mutex_.LockX();
+    if (l_node->GetUsedSize() + r_node->GetUsedSize() >= kMaxUsedSpaceSize) {
+      mutex_.UnlockX();
+      l_node->mutex_.UnlockX();
+      r_node->mutex_.UnlockX();
       return nullptr;
     }
 
-    UpgradeToX();
-    r_node->UpgradeToX();
     return r_node;
   }
 
@@ -414,12 +420,26 @@ class NodeFixLen
   GetRecord(const size_t pos) const  //
       -> std::pair<Key, Payload>
   {
-    return {GetKey(pos), GetPayload<Payload>(pos)};
+    return {key_[pos], GetPayload<Payload>(pos)};
   }
 
   /*####################################################################################
    * Public lock management APIs
    *##################################################################################*/
+
+  auto
+  GetVersion()  //
+      -> uint64_t
+  {
+    return mutex_.GetVersion();
+  }
+
+  auto
+  HasSameVersion(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.HasSameVersion(ver);
+  }
 
   /**
    * @brief Acquire a shared lock for this node.
