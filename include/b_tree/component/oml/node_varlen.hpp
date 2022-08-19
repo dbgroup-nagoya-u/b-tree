@@ -753,8 +753,6 @@ class NodeVarLen
     while (true) {
       const auto ver = CheckKeyRange(node, key, kClosed);
 
-      if (node == nullptr) return kNeedRootRetry;
-
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
         const auto meta = node->meta_array_[pos];

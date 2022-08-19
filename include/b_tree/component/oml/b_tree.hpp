@@ -122,14 +122,11 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    while (true) {
-      auto *node = SearchLeafNodeForRead(key, kClosed);
-      Payload payload{};
-      const auto rc = Node_t::Read(node, key, payload);
-      if (rc == kNeedRootRetry) continue;
-      if (rc == kCompleted) return payload;
-      return std::nullopt;
-    }
+    auto *node = SearchLeafNodeForRead(key, kClosed);
+    Payload payload{};
+    const auto rc = Node_t::Read(node, key, payload);
+    if (rc == kCompleted) return payload;
+    return std::nullopt;
   }
 
   /**
