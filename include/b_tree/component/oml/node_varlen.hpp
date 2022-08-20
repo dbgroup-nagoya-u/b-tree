@@ -109,23 +109,6 @@ class NodeVarLen
   ~NodeVarLen() = default;
 
   /*####################################################################################
-   * new/delete operators
-   *##################################################################################*/
-
-  static auto
-  operator new([[maybe_unused]] std::size_t n)  //
-      -> void *
-  {
-    return ::operator new(kPageSize);
-  }
-
-  static void
-  operator delete(void *p) noexcept
-  {
-    ::operator delete(p);
-  }
-
-  /*####################################################################################
    * Public getters for header information
    *##################################################################################*/
 
@@ -174,7 +157,6 @@ class NodeVarLen
           mutex_.UnlockX();
           continue;
         }
-        need_split = false;
       }
       if (mutex_.HasSameVersion(ver)) return need_split;
     }
@@ -202,8 +184,8 @@ class NodeVarLen
         if (mutex_.TryLockX(ver)) {
           CleanUp();
           mutex_.UnlockX();
+          continue;
         }
-        need_merge = false;
       }
       if (mutex_.HasSameVersion(ver)) return need_merge;
     }
@@ -247,7 +229,7 @@ class NodeVarLen
     const auto &high_key = GetHighKey();
     if (node->is_removed_) {
       node = next_;
-    } else if (!high_key || Comp{}(*high_key, key)) {
+    } else if (high_key && Comp{}(*high_key, key)) {
       node = next_;
     }
 
@@ -626,15 +608,15 @@ class NodeVarLen
     uint64_t ver{};
     while (true) {
       ver = node->mutex_.GetVersion();
+      const auto &high_key = node->GetHighKey();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (!node->GetHighKey()) {
+        if (!high_key) {
           if (node->mutex_.HasSameVersion(ver)) break;
           continue;
         }
-        const auto &high_key = node->GetHighKey();
         if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
           if (node->mutex_.HasSameVersion(ver)) break;
           continue;
@@ -670,15 +652,15 @@ class NodeVarLen
   {
     while (true) {
       const auto ver = node->mutex_.GetVersion();
+      const auto &high_key = node->GetHighKey();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (!node->GetHighKey()) {
+        if (!high_key) {
           if (node->mutex_.TryLockS(ver)) return;
           continue;
         }
-        const auto &high_key = node->GetHighKey();
         if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
           if (node->mutex_.TryLockS(ver)) return;
           continue;
@@ -739,7 +721,7 @@ class NodeVarLen
   {
     while (true) {
       auto ver = CheckKeyRange(node, key, kClosed);
-      const auto pre_ver = ver;
+      auto pre_ver = ver;
 
       if (node->NeedSplit(new_rec_len, ver)) return kNeedRetry;
       if (pre_ver != ver) continue;
@@ -812,6 +794,7 @@ class NodeVarLen
     const auto [rc, pos] = SearchRecord(key);
 
     mutex_.UpgradeToX();
+
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
       InsertRecord(key, key_len, payload, pay_len, pos);
@@ -1200,10 +1183,27 @@ class NodeVarLen
     }
   }
 
-  void
-  SetRemove()
+  /**
+   * @brief Remove this node from a tree and return a new root node.
+   *
+   * @return a new root node.
+   */
+  auto
+  RemoveRoot()  //
+      -> Node *
   {
+    mutex_.UpgradeToX();
+
+    // get a child node as a new root node
+    auto *child = GetPayload<Node *>(0);
+    child->LockSIX();
+
+    // remove this node from a tree
     is_removed_ = 1;
+    next_ = nullptr;
+
+    mutex_.UnlockX();
+    return child;
   }
 
  private:
@@ -1597,8 +1597,8 @@ class NodeVarLen
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node>          //
+      temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
 };
 
 }  // namespace dbgroup::index::b_tree::component::oml

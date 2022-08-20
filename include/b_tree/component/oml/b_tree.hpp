@@ -79,7 +79,7 @@ class BTree
       const size_t gc_thread_num)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
-    auto *root = new Node_t{kLeafFlag};
+    auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kIsVarLen) {
       root->SetPayloadLength(kPayLen);
     }
@@ -184,7 +184,7 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      const auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
+      const auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, key_len + kPayLen);
       if (rc == kNeedRetry) continue;
       node->Write(key, key_len, &payload, kPayLen);
       return kSuccess;
@@ -211,7 +211,7 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, kMaxRecLen);
+      auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, key_len + kPayLen);
       if (rc == kNeedRetry) continue;
       rc = node->Insert(key, key_len, &payload, kPayLen);
       return (rc == kCompleted) ? kSuccess : kKeyExist;
@@ -425,14 +425,14 @@ class BTree
    * @return a root node or a valid child node if a root node is split.
    */
   [[nodiscard]] auto
-  GetRootForWrite(const Key &key)  //
+  GetRootForWrite()  //
       -> Node_t *
   {
     while (true) {
       // check this tree requires SMOs
-      if (ShrinkTreeIfNeeded(root_.load(std::memory_order_acquire)) == kNeedRetry) continue;
-      auto [node, rc] = RootSplit(root_.load(std::memory_order_acquire), key);
-      if (rc == kNeedRetry) continue;
+      if (ShrinkTreeIfNeeded() == kNeedRetry) continue;
+      auto *node = RootSplit();
+      if (node == nullptr) continue;
 
       return node;
     }
@@ -503,11 +503,11 @@ class BTree
   SearchLeafNodeForWrite(const Key &key)  //
       -> Node_t *
   {
-    auto *node = GetRootForWrite(key);
+    auto *node = GetRootForWrite();
     while (!node->IsLeaf()) {
       auto [pos, ver, child] = node->SearchChild(key, kClosed);
       if (child == nullptr) {
-        node = GetRootForWrite(key);
+        node = GetRootForWrite();
         continue;
       }
 
@@ -560,16 +560,22 @@ class BTree
   {
     uint64_t child_ver{};
     if (child->NeedSplit(kMaxRecLen, child_ver)) {
-      if (parent->TryLockX(parent_ver)) {
-        if (child->TryLockX(child_ver)) return kNeedSplit;
-        parent->UnlockX();
+      if (parent->TryLockSIX(parent_ver)) {
+        if (child->TryLockX(child_ver)) {
+          parent->UpgradeToX();
+          return kNeedSplit;
+        }
+        parent->UnlockSIX();
       }
       return kNeedRetry;
     } else {
       if (!child->NeedMerge(child_ver)) return kCompleted;
-      if (parent->TryLockX(parent_ver)) {
-        if (child->TryLockX(child_ver)) return kNeedMerge;
-        parent->UnlockX();
+      if (parent->TryLockSIX(parent_ver)) {
+        if (child->TryLockX(child_ver)) {
+          parent->UpgradeToX();
+          return kNeedMerge;
+        }
+        parent->UnlockSIX();
       }
       return kNeedRetry;
     }
@@ -592,7 +598,7 @@ class BTree
       Node_t *parent,
       const size_t pos)  //
   {
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
   }
@@ -604,29 +610,27 @@ class BTree
    * @return one of the split child nodes that includes a given key.
    */
   [[nodiscard]] auto  //
-  RootSplit(Node_t *node,
-            const Key &key)  //
-      -> std::pair<Node_t *, NodeRC>
+  RootSplit()         //
+      -> Node_t *
   {
+    auto *node = root_.load(std::memory_order_acquire);
     uint64_t ver{};
     while (true) {
-      if (!node->NeedSplit(kMaxRecLen, ver)) return {node, kCompleted};
-
-      if (!node->TryLockX(ver)) continue;
-      if (node
-          != root_.load(
-              std::memory_order_acquire)) {  // if the root node has been moved by other thread
-        node->UnlockX();
-        return {nullptr, kNeedRetry};
+      if (!node->NeedSplit(kMaxRecLen, ver))
+        return (node == root_.load(std::memory_order_acquire)) ? node : nullptr;
+      if (!node->TryLockSIX(ver)) continue;
+      if (node != root_.load(std::memory_order_acquire)) {
+        node->UnlockSIX();
+        return nullptr;
       }
 
+      node->UpgradeToX();
       auto *l_node = node;
-      auto *r_node = new Node_t{l_node->IsLeaf()};
+      auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
       l_node->Split(r_node);
-      node = l_node->GetValidSplitNode(key);
-      auto *new_root = new Node_t{l_node, r_node};
+      auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
       root_.store(new_root, std::memory_order_release);
-      return {node, kCompleted};
+      return root_;
     }
   }
 
@@ -658,30 +662,25 @@ class BTree
    *
    */
   auto
-  ShrinkTreeIfNeeded(Node_t *node)  //
+  ShrinkTreeIfNeeded()  //
       -> NodeRC
   {
+    auto *node = root_.load(std::memory_order_acquire);
     while (true) {
       auto ver = node->GetVersion();
+      // if a root node has only one child, shrink a tree
       if (node->GetRecordCount() == 1 && !node->IsLeaf()) {
-        // if a root node has only one child, shrink a tree
-        auto *child = node->template GetPayload<Node_t *>(0);
-
-        if (!node->TryLockX(ver)) continue;
-        if (node
-            != root_.load(
-                std::memory_order_acquire)) {  // if the root node has been moved by other thread
-          node->UnlockX();
+        if (!node->TryLockSIX(ver)) continue;
+        if (node != root_.load(std::memory_order_acquire)) {
+          node->UnlockSIX();
           return kNeedRetry;
         }
-
-        node->SetRemove();
         gc_.AddGarbage(node);
-        node->UnlockX();
-        node = child;
+        node = node->RemoveRoot();
+        node->UnlockSIX();
         root_.store(node, std::memory_order_release);
       } else {
-        return kCompleted;
+        return (node == root_.load(std::memory_order_acquire)) ? kCompleted : kNeedRetry;
       }
     }
   }
@@ -718,7 +717,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{true};
+      auto *node = new (GetNodePage()) Node_t{true};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -755,7 +754,7 @@ class BTree
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      auto *node = new Node_t{false};
+      auto *node = new (GetNodePage()) Node_t{false};
       node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
     }
