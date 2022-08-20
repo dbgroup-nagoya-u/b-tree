@@ -155,6 +155,7 @@ class BTree
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
       node = SearchLeftmostLeaf();
+      Node_t::CheckKeyRangeAndLockForRead(node);
     }
 
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
@@ -485,7 +486,6 @@ class BTree
         node = root_.load(std::memory_order_acquire);
       }
     }
-    node->LockS();
     return node;
   }
 
@@ -630,7 +630,7 @@ class BTree
       l_node->Split(r_node);
       auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
       root_.store(new_root, std::memory_order_release);
-      return root_;
+      return new_root;
     }
   }
 

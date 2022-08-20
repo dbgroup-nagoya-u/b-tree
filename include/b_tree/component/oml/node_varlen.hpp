@@ -676,6 +676,27 @@ class NodeVarLen
     }
   }
 
+  static void
+  CheckKeyRangeAndLockForRead(Node *&node)
+  {
+    while (true) {
+      const auto ver = node->mutex_.GetVersion();
+
+      // check the node is not removed
+      if (node->is_removed_ == 0) {
+        if (node->mutex_.TryLockS(ver)) return;
+        continue;
+      }
+
+      // go to the next node
+      auto *next = node->next_;
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
+      node = next;
+      if (node == nullptr) return;
+    }
+  }
+
   /**
    * @brief Check the key range of a given node and traverse side links if needed.
    *
