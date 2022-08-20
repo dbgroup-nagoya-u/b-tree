@@ -48,6 +48,9 @@ enum NodeRC {
   kNeedRootRetry,
 };
 
+/// a flag for indicating closed-interval.
+constexpr bool kClosed = true;
+
 /*######################################################################################
  * Internal utility functions
  *####################################################################################*/
