@@ -939,15 +939,15 @@ class NodeVarLen
 
     // copy consolidated records to the original node
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
-    record_count_ = temp_node_->record_count_;
+    const auto rec_count = temp_node_->record_count_;
     if (!is_leaf_) {
       offset = temp_node_->CopyHighKeyFrom(this, offset);
-      temp_node_->meta_array_[record_count_ - 1] =
-          Metadata{offset, h_key_len_, h_key_len_ + kPtrLen};
+      temp_node_->meta_array_[rec_count - 1] = Metadata{offset, h_key_len_, h_key_len_ + kPtrLen};
     }
 
     mutex_.UpgradeToX();
 
+    record_count_ = rec_count;
     h_key_offset_ = temp_node_->h_key_offset_;
     h_key_len_ = r_node->h_key_len_;
     memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
