@@ -617,7 +617,9 @@ class BTree
     uint64_t ver{};
     while (true) {
       if (!node->NeedSplit(kMaxRecLen, ver))
-        return (node == root_.load(std::memory_order_acquire)) ? node : nullptr;
+        return (node == root_.load(std::memory_order_acquire) && node->HasSameVersion(ver))
+                   ? node
+                   : nullptr;
       if (!node->TryLockSIX(ver)) continue;
       if (node != root_.load(std::memory_order_acquire)) {
         node->UnlockSIX();
@@ -677,10 +679,11 @@ class BTree
         }
         gc_.AddGarbage(node);
         node = node->RemoveRoot();
-        node->UnlockSIX();
         root_.store(node, std::memory_order_release);
       } else {
-        return (node == root_.load(std::memory_order_acquire)) ? kCompleted : kNeedRetry;
+        return (node == root_.load(std::memory_order_acquire) && node->HasSameVersion(ver))
+                   ? kCompleted
+                   : kNeedRetry;
       }
     }
   }

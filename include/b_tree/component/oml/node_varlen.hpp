@@ -154,8 +154,7 @@ class NodeVarLen
         // this node has enough space but cleaning up is required
         if (mutex_.TryLockX(ver)) {
           CleanUp();
-          mutex_.UnlockX();
-          continue;
+          ver = mutex_.UnlockX();
         }
       }
       if (mutex_.HasSameVersion(ver)) return need_split;
@@ -183,8 +182,7 @@ class NodeVarLen
         // this node has a lot of dead space
         if (mutex_.TryLockX(ver)) {
           CleanUp();
-          mutex_.UnlockX();
-          continue;
+          ver = mutex_.UnlockX();
         }
       }
       if (mutex_.HasSameVersion(ver)) return need_merge;
@@ -558,10 +556,8 @@ class NodeVarLen
 
       auto *child = GetPayload<Node *>(begin_pos);
       const auto &high_key = GetHighKey();
-
-      if (!mutex_.HasSameVersion(ver)) continue;
-
       child = (is_removed_ || (high_key && Comp{}(*high_key, key))) ? nullptr : child;
+      if (!mutex_.HasSameVersion(ver)) continue;
       return {begin_pos, ver, child};
     }
   }
@@ -1217,7 +1213,6 @@ class NodeVarLen
 
     // get a child node as a new root node
     auto *child = GetPayload<Node *>(0);
-    child->LockSIX();
 
     // remove this node from a tree
     is_removed_ = 1;
