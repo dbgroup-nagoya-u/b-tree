@@ -27,7 +27,7 @@
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
-// #include "node_fixlen.hpp"
+#include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::osl
@@ -53,7 +53,7 @@ class BTree
   using K = Key;
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
-  using NodeFixLen_t = NodeVarLen<Key, Comp>;  // NodeFixLen<Key, Comp>;
+  using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
