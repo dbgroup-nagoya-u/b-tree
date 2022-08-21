@@ -162,8 +162,9 @@ class NodeVarLen
     auto *node = this;
     if (Comp{}(sep_key, key)) {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
+    } else {
+      next_->mutex_.UnlockSIX();
     }
 
     return {node, sep_key, sep_key_len};
@@ -966,7 +967,7 @@ class NodeVarLen
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
 
-    r_node->mutex_.UnlockX();
+    r_node->mutex_.DowngradeToSIX();
 
     /*------------------------------
      * reflect left-split
