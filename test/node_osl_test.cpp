@@ -111,8 +111,11 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockSIX();
-    return node_->Insert(key, kKeyLen, &payload, kPayLen);
+    auto rc = Node::Insert(node_, key, kKeyLen, &payload, kPayLen);
+    if (rc == kNeedSplit) {
+      node_->UnlockSIX();
+    }
+    return rc;
   }
 
   auto

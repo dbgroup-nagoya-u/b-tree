@@ -647,23 +647,31 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
-    CleanUpIfNeeded(key_len + pay_len);
+    const auto rec_len = key_len + pay_len;
+
+    if (NeedCleanUp(rec_len)) {
+      // this node has a lot of dead space
+      mutex_.UpgradeToX();
+      CleanUp();
+      mutex_.DowngradeToSIX();
+    }
 
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
-
-    mutex_.UpgradeToX();
-
-    if (existence == kKeyAlreadyDeleted) {
+    if (existence == kKeyNotInserted) {
+      // inserting a new record is required
+      if (NeedSplit(rec_len)) return kNeedSplit;
+      InsertRecord(key, key_len, payload, pay_len, pos);
+    } else if (existence == kKeyAlreadyDeleted) {
       // there is a deleted record with the same key, so reuse it
       ReuseRecord(payload, pay_len, pos);
     } else {
-      // there is a record with the same key, so reuse it
+      // there is a record with the same key, so update it
+      mutex_.UpgradeToX();
       memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
+      mutex_.UnlockX();
     }
 
-    mutex_.UnlockX();
     return kCompleted;
   }
 
@@ -674,6 +682,7 @@ class NodeVarLen
    * target leaf node. If a specified key exists in a target leaf node, this function
    * does nothing and returns kKeyExist as a return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
@@ -682,31 +691,84 @@ class NodeVarLen
    * @retval kKeyAlreadyInserted if there is a record with the same key.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
-  auto
+  static auto
   Insert(  //
+      Node *&node,
       const Key &key,
       const size_t key_len,
       const void *payload,
       const size_t pay_len)  //
       -> NodeRC
   {
-    CleanUpIfNeeded(key_len + pay_len);
+    const auto rec_len = key_len + pay_len;
 
-    // search position where this key has to be set
-    const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
-    if (existence == kKeyAlreadyInserted) {
-      mutex_.UnlockSIX();
-      return kKeyAlreadyInserted;
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
+
+      if (node->NeedCleanUp(rec_len)) {
+        // this node has a lot of dead space
+        if (!node->mutex_.TryLockX(ver)) continue;
+        node->CleanUp();
+        node->mutex_.UnlockX();
+        continue;
+      }
+
+      // search position where this key has to be set
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        if (!node->mutex_.HasSameVersion(ver)) continue;
+        return kKeyAlreadyInserted;
+      }
+
+      // there is no a live target record, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockSIX(ver)) continue;
+
+      if (existence == kKeyNotInserted) {
+        // inserting a new record is required
+        if (node->NeedSplit(rec_len)) return kNeedSplit;
+        node->InsertRecord(key, key_len, payload, pay_len, pos);
+      } else {
+        // there is a deleted record with the same key, so reuse it
+        node->ReuseRecord(payload, pay_len, pos);
+      }
+
+      return kCompleted;
     }
+  }
+
+  /**
+   * @brief Insert a given record into this node.
+   *
+   * @param key a target key to be set.
+   * @param key_len the length of the key.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
+   * @param pos an insertion position.
+   */
+  void
+  InsertRecord(  //
+      const Key &key,
+      const size_t key_len,
+      const void *payload,
+      const size_t pay_len,
+      const size_t pos)
+  {
+    const auto rec_len = key_len + pay_len;
 
     mutex_.UpgradeToX();
 
-    // there is a deleted record with the same key, so reuse it
-    ReuseRecord(payload, pay_len, pos);
+    // insert a new record
+    auto offset = kPageSize - block_size_;
+    offset = SetPayload(offset, payload, pay_len);
+    offset = SetKey(offset, key, key_len);
+    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
+    meta_array_[pos] = Metadata{offset, key_len, rec_len};
+
+    // update header information
+    ++record_count_;
+    block_size_ += rec_len;
 
     mutex_.UnlockX();
-    return kCompleted;
   }
 
   /**
@@ -816,7 +878,12 @@ class NodeVarLen
   {
     // check free space in this node
     const auto rec_len = sep_key_len + kPtrLen;
-    CleanUpIfNeeded(rec_len);
+    if (NeedCleanUp(rec_len)) {
+      // this node has a lot of dead space
+      mutex_.UpgradeToX();
+      CleanUp();
+      mutex_.DowngradeToSIX();
+    }
 
     // check an inserting position and concurrent SMOs
     const auto [existence, pos] = SearchRecord(sep_key);
@@ -1265,22 +1332,18 @@ class NodeVarLen
   }
 
   /**
-   * @brief Clean up this node if this includes a lot of dead space.
-   *
-   * @param new_rec_len the length of a record to be inserted.
+   * @param new_rec_len the length of a new record.
+   * @retval true if this node requires cleaning up before inserting a new record.
+   * @retval false otherwise.
    */
-  void
-  CleanUpIfNeeded(const size_t new_rec_len)
+  [[nodiscard]] auto
+  NeedCleanUp(const size_t new_rec_len) const  //
+      -> bool
   {
     // check whether the node has space for a new record
     const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
     const auto used_size = total_size - deleted_size_;
-    if (total_size <= kPageSize - kHeaderLen || used_size > kMaxUsedSpaceSize) return;
-
-    // this node has a lot of dead space
-    mutex_.UpgradeToX();
-    CleanUp();
-    mutex_.DowngradeToSIX();
+    return total_size > kPageSize - kHeaderLen && used_size <= kMaxUsedSpaceSize;
   }
 
   /**
@@ -1467,46 +1530,6 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @brief Insert a given record into this node.
-   *
-   * @param key a target key to be set.
-   * @param key_len the length of the key.
-   * @param payload a target payload to be written.
-   * @param pay_len the length of a target payload.
-   * @param pos an insertion position.
-   * @retval kCompleted if a record is inserted.
-   * @retval kNeedSplit if this node should be split before inserting a record.
-   */
-  auto
-  InsertRecord(  //
-      const Key &key,
-      const size_t key_len,
-      const void *payload,
-      const size_t pay_len,
-      const size_t pos)  //
-      -> NodeRC
-  {
-    const auto rec_len = key_len + pay_len;
-    if (NeedSplit(rec_len)) return kNeedSplit;
-
-    mutex_.UpgradeToX();
-
-    // insert a new record
-    auto offset = kPageSize - block_size_;
-    offset = SetPayload(offset, payload, pay_len);
-    offset = SetKey(offset, key, key_len);
-    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, key_len, rec_len};
-
-    // update header information
-    ++record_count_;
-    block_size_ += rec_len;
-
-    mutex_.UnlockX();
-    return kCompleted;
-  }
-
-  /**
    * @brief Reuse the deleted record to insert a new record.
    *
    * @param payload a target payload to be written.
@@ -1519,6 +1542,8 @@ class NodeVarLen
       const size_t pay_len,
       const size_t pos)
   {
+    mutex_.UpgradeToX();
+
     // reuse a deleted record
     const auto meta = meta_array_[pos];
     meta_array_[pos].is_deleted = 0;
@@ -1526,6 +1551,8 @@ class NodeVarLen
 
     // update header information
     deleted_size_ -= meta.rec_len + kMetaLen;
+
+    mutex_.UnlockX();
   }
 
   /**

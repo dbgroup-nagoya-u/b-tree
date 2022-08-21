@@ -641,16 +641,23 @@ class NodeFixLen
       [[maybe_unused]] const size_t pay_len)  //
       -> NodeRC
   {
+    const auto rec_len = kKeyLen + pay_len_;
+
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, payload, pos);
+    if (existence == kKeyNotInserted) {
+      if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
-    mutex_.UpgradeToX();
+      // insert a new record
+      InsertRecord(key, kKeyLen, payload, pay_len_, pos);
+      return kCompleted;
+    }
 
     // there is a record with the same key, so reuse it
+    mutex_.UpgradeToX();
     memcpy(GetPayloadAddr(pos), payload, pay_len_);
-
     mutex_.UnlockX();
+
     return kCompleted;
   }
 
@@ -661,6 +668,7 @@ class NodeFixLen
    * target leaf node. If a specified key exists in a target leaf node, this function
    * does nothing and returns kKeyExist as a return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
@@ -669,20 +677,72 @@ class NodeFixLen
    * @retval kKeyAlreadyInserted if there is a record with the same key.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
-  auto
+  static auto
   Insert(  //
+      Node *&node,
       const Key &key,
       [[maybe_unused]] const size_t key_len,
       const void *payload,
       [[maybe_unused]] const size_t pay_len)  //
       -> NodeRC
   {
-    // search position where this key has to be set
-    const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, payload, pos);
+    const auto rec_len = kKeyLen + node->pay_len_;
 
-    mutex_.UnlockSIX();
-    return kKeyAlreadyInserted;
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
+
+      // search position where this key has to be set
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        if (!node->mutex_.HasSameVersion(ver)) continue;
+        return kKeyAlreadyInserted;
+      }
+
+      // inserting a new record is required
+      if (!node->mutex_.TryLockSIX(ver)) continue;
+      if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
+
+      // insert a new record
+      node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos);
+      return kCompleted;
+    }
+  }
+
+  /**
+   * @brief Insert a given record into this node.
+   *
+   * @param key a target key to be set.
+   * @param key_len the length of the key.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
+   * @param pos an insertion position.
+   */
+  void
+  InsertRecord(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len,
+      const void *payload,
+      [[maybe_unused]] const size_t pay_len,
+      const size_t pos)
+  {
+    mutex_.UpgradeToX();
+
+    // insert a new key
+    const auto move_num = record_count_ - pos;
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
+    keys_[pos] = key;
+
+    // insert a new payload
+    const auto top_offset = kPageSize - block_size_;
+    const auto move_size = pay_len_ * move_num;
+    memmove(ShiftAddr(this, top_offset - pay_len_), ShiftAddr(this, top_offset), move_size);
+    SetPayload(top_offset + move_size, payload);
+
+    // update header information
+    ++record_count_;
+    block_size_ += pay_len_;
+
+    mutex_.UnlockX();
   }
 
   /**
@@ -1246,46 +1306,6 @@ class NodeFixLen
   /*####################################################################################
    * Internal utility functions
    *##################################################################################*/
-
-  /**
-   * @brief Insert a given record into this node.
-   *
-   * @param key a target key to be set.
-   * @param payload a target payload to be written.
-   * @param pos an insertion position.
-   * @retval kCompleted if a record is inserted.
-   * @retval kNeedSplit if this node should be split before inserting a record.
-   */
-  auto
-  InsertRecord(  //
-      const Key &key,
-      const void *payload,
-      const size_t pos)  //
-      -> NodeRC
-  {
-    const auto rec_len = kKeyLen + pay_len_;
-    if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
-
-    mutex_.UpgradeToX();
-
-    // insert a new key
-    const auto move_num = record_count_ - pos;
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
-    keys_[pos] = key;
-
-    // insert a new payload
-    const auto top_offset = kPageSize - block_size_;
-    const auto move_size = pay_len_ * move_num;
-    memmove(ShiftAddr(this, top_offset - pay_len_), ShiftAddr(this, top_offset), move_size);
-    SetPayload(top_offset + move_size, payload);
-
-    // update header information
-    ++record_count_;
-    block_size_ += pay_len_;
-
-    mutex_.UnlockX();
-    return kCompleted;
-  }
 
   /**
    * @brief Copy a record from a given node.

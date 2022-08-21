@@ -192,7 +192,8 @@ class BTree
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
       auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
-      target_node->Write(key, key_len, &payload, kPayLen);
+      const auto pos = target_node->SearchRecord(key).second;
+      target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
@@ -224,15 +225,15 @@ class BTree
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    auto rc = node->Insert(key, key_len, &payload, kPayLen);
+    const auto rc = Node_t::Insert(node, key, key_len, &payload, kPayLen);
     if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
 
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
       auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
-      target_node->Insert(key, key_len, &payload, kPayLen);
+      const auto pos = target_node->SearchRecord(key).second;
+      target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
