@@ -787,21 +787,24 @@ class NodeFixLen
    * @retval kKeyNotExist otherwise.
    */
   template <class Payload>
-  auto
-  Read(  //
-      const Key &key,
-      Payload &out_payload)  //
-      -> ReturnCode
+  static auto
+  Read(Node *&node,
+       const Key &key,
+       Payload &out_payload)  //
+      -> NodeRC
   {
-    const auto [existence, pos] = SearchRecord(key);
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      memcpy(&out_payload, GetPayloadAddr(pos), sizeof(Payload));
-      rc = kSuccess;
-    }
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
 
-    mutex_.UnlockS();
-    return rc;
+      const auto [existence, pos] = node->SearchRecord(key);
+      // auto rc = kKeyNotExist;
+      if (existence == kKeyAlreadyInserted) {
+        memcpy(&out_payload, GetPayloadAddr(pos), sizeof(Payload));
+        if (node->mutex_.HasSameVersion(ver)) return kCompleted;
+      }
+
+      if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
+    }
   }
 
   /*####################################################################################
@@ -830,9 +833,13 @@ class NodeFixLen
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
+    mutex_.UpgradeToX();
+
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
       InsertRecord(key, payload, pos);
+    } else if (rc == kKeyAlreadyDeleted) {
+      ReuseRecord(payload, pay_len, pos);
     } else {  // update operation
       memcpy(GetPayloadAddr(pos), payload, pay_len_);
     }
@@ -860,20 +867,24 @@ class NodeFixLen
       [[maybe_unused]] const size_t key_len,
       const void *payload,
       [[maybe_unused]] const size_t pay_len)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
 
     // perform insert operation if possible
-    auto rc = kKeyExist;
     if (existence == kKeyNotInserted) {
       InsertRecord(key, payload, pos);
-      rc = kSuccess;
+    } else if (existence == kKeyAlreadyDeleted) {
+      mutex_.UpgradeToX();
+      ReuseRecord(payload, pay_len, pos);
+    } else {  // a target key has been inserted
+      mutex_.UnlockSIX();
+      return kKeyAlreadyInserted;
     }
 
-    mutex_.UnlockX();
-    return rc;
+    mutex_.UnlockSIX();
+    return kCompleted;
   }
 
   /**
@@ -894,20 +905,21 @@ class NodeFixLen
       const Key &key,
       const void *payload,
       [[maybe_unused]] const size_t pay_len)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
 
     // perform update operation if possible
-    auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
+      mutex_.UpgradeToX();
       memcpy(GetPayloadAddr(pos), payload, pay_len_);
-      rc = kSuccess;
+      mutex_.UnlockX();
+      return kCompleted;
     }
 
-    mutex_.UnlockX();
-    return rc;
+    mutex_.UnlockSIX();
+    return kKeyNotInserted;
   }
 
   /**
@@ -923,12 +935,11 @@ class NodeFixLen
    */
   auto
   Delete(const Key &key)  //
-      -> ReturnCode
+      -> NodeRC
   {
     // check this node has a target record
     const auto [existence, pos] = SearchRecord(key);
 
-    auto rc = kKeyNotExist;
     if (existence == kKeyAlreadyInserted) {
       // remove a key and a payload
       const auto move_num = record_count_ - 1 - pos;
@@ -940,11 +951,17 @@ class NodeFixLen
       --record_count_;
       block_size_ -= pay_len_;
 
-      rc = kSuccess;
+      if (GetUsedSize() < kMinUsedSpaceSize) {
+        mutex_.DowngradeToSIX();
+        return kNeedMerge;
+      }
+
+      mutex_.UnlockX();
+      return kCompleted;
     }
 
-    mutex_.UnlockX();
-    return rc;
+    mutex_.UnlockSIX();
+    return kKeyNotInserted;
   }
 
   /**
@@ -958,9 +975,25 @@ class NodeFixLen
   InsertChild(  //
       const Node *l_node,
       const Node *r_node,
-      const size_t pos)  //
+      const size_t sep_key_len)  //
   {
-    // insert a right child
+    // check free space in this node
+    const auto rec_len = sep_key_len + kPtrLen;
+
+    // check an inserting position and concurrent SMOs
+    const auto [existence, pos] = SearchRecord(sep_key);
+    if (existence == kKeyAlreadyInserted) {
+      // previous merging has not been applied, so unlock and retry
+      mutex_.UnlockSIX();
+      return kNeedRetry;
+    }
+
+    // recheck free space in this node
+    if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
+
+    mutex_.UpgradeToX();
+
+    // insert a split-right child node
     const auto move_num = record_count_ - 1 - pos;
     const auto move_size = kPtrLen * move_num;
     const auto top_offset = kPageSize - block_size_;
@@ -968,14 +1001,15 @@ class NodeFixLen
     SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
-    keys_[pos] = l_node->GetHighKey();
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
+    keys_[pos] = sep_key;
 
     // update header information
     ++record_count_;
     block_size_ += kPtrLen;
 
     mutex_.UnlockX();
+    return kCompleted;
   }
 
   /**
@@ -986,20 +1020,18 @@ class NodeFixLen
    */
   void
   DeleteChild(  //
-      [[maybe_unused]] const Node *l_node,
+      const Node *l_node,
       const size_t pos)  //
   {
-    // delete a separator key
-    const auto move_num = record_count_ - 2 - pos;
-    memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    const auto del_rec_len = meta_array_[pos].rec_len;  // keep a record length to be deleted
 
-    // delete a right child
-    auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
-    memmove(ShiftAddr(top_addr, kPtrLen), top_addr, kPtrLen * move_num);
+    // delete a right child by shifting metadata
+    memmove(&(meta_array_[pos]), &(meta_array_[pos + 1]), kMetaLen * (record_count_ - 1 - pos));
+    memcpy(GetPayloadAddr(meta_array_[pos]), &l_node, kPtrLen);
 
     // update this header
     --record_count_;
-    block_size_ -= kPtrLen;
+    deleted_size_ += del_rec_len;
 
     mutex_.UnlockX();
   }
@@ -1302,6 +1334,24 @@ class NodeFixLen
   }
 
   /**
+   * @brief Reuse the deleted record to insert a new record.
+   *
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
+   * @param pos the position of the deleted record.
+   */
+  void
+  ReuseRecord(  //
+      const void *payload,
+      const size_t pay_len,
+      const size_t pos)
+  {
+    // reuse a deleted record
+    const auto meta = meta_array_[pos];
+    meta_array_
+  }
+
+  /**
    * @brief Clean up this node.
    *
    */
@@ -1414,6 +1464,9 @@ class NodeFixLen
 
   /// the metadata of a highest key.
   Metadata high_meta_{kPageSize, 0, 0};
+
+  /// an actual data block (it starts with record metadata).
+  Metadata meta_array_[0];
 
   /// a temporary node for SMOs.
   static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
