@@ -33,7 +33,6 @@ using TestTargets = ::testing::Types<              //
     IndexInfo<BTreeOSLFixLen, UInt4, UInt8>,       // small keys
     IndexInfo<BTreeOSLFixLen, UInt8, UInt4>,       // small payloads
     IndexInfo<BTreeOSLFixLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreeOSLFixLen, Ptr, Ptr>,           // pointer keys/payloads
     IndexInfo<BTreeOSLFixLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
