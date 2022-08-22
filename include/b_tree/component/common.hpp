@@ -18,6 +18,7 @@
 #ifndef B_TREE_COMPONENT_COMMON_HPP
 #define B_TREE_COMPONENT_COMMON_HPP
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 
@@ -45,6 +46,18 @@ enum NodeRC {
   kAbortMerge,
   kNeedRetry,
 };
+
+/// an expected maximum height of a tree.
+constexpr size_t kExpectedTreeHeight = 8;
+
+/// a sleep time for retrying.
+constexpr auto kRetryWait = std::chrono::microseconds{10};
+
+/// a flag for indicating leaf nodes.
+constexpr uint32_t kLeafFlag = 1;
+
+/// a flag for indicating internal nodes.
+constexpr uint32_t kInnerFlag = 0;
 
 /// a flag for indicating closed-interval.
 constexpr bool kClosed = true;
