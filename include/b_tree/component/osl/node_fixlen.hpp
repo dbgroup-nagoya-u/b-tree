@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
-#define B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
+#ifndef B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
+#define B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
 
 #include <atomic>
 #include <optional>
@@ -24,33 +24,32 @@
 #include <vector>
 
 // organization libraries
-#include "lock/pessimistic_lock.hpp"
+#include "lock/optimistic_lock.hpp"
 
 // local sources
 #include "b_tree/component/common.hpp"
-#include "b_tree/component/metadata.hpp"
 
-namespace dbgroup::index::b_tree::component::psl
+namespace dbgroup::index::b_tree::component::osl
 {
 
 /**
  * @brief A class for representing nodes in B+trees.
  *
- * This class uses pessimistic single-layer locking for concurrency controls and can
- * contain variable-length data.
+ * This class uses optimistic single-layer locking for concurrency controls and
+ * optimizes a page layout for fixed-length data.
  *
  * @tparam Key a target key class.
  * @tparam Comp a comparetor class for keys.
  */
 template <class Key, class Comp>
-class NodeVarLen
+class NodeFixLen
 {
  public:
   /*####################################################################################
    * Type aliases
    *##################################################################################*/
 
-  using Node = NodeVarLen;
+  using Node = NodeFixLen;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -61,8 +60,8 @@ class NodeVarLen
    *
    * @param is_leaf a flag to indicate whether a leaf node is constructed.
    */
-  constexpr explicit NodeVarLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}
+  constexpr explicit NodeFixLen(const uint32_t is_leaf)
+      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}, has_low_key_{0}, has_high_key_{0}
   {
   }
 
@@ -72,31 +71,28 @@ class NodeVarLen
    * @param l_node a left child node which is the previous root node.
    * @param r_node a right child node.
    */
-  NodeVarLen(  //
+  NodeFixLen(  //
       const Key &l_key,
-      const size_t l_key_len,
-      const NodeVarLen *l_node,
-      const NodeVarLen *r_node)  //
-      : is_leaf_{0}, is_removed_{0}, record_count_{2}
+      [[maybe_unused]] const size_t l_key_len,
+      const NodeFixLen *l_node,
+      const NodeFixLen *r_node)  //
+      : is_leaf_{0},
+        is_removed_{0},
+        block_size_{2 * kPtrLen},
+        record_count_{2},
+        has_low_key_{0},
+        has_high_key_{0}
   {
-    // insert l_node
-    auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
-    offset = SetKey(offset, l_key, l_key_len);
-    meta_array_[0] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
-
-    // insert r_node
-    offset = SetPayload(offset, &r_node, kPtrLen);
-    meta_array_[1] = Metadata{offset, 0, kPtrLen};
-
-    // update header information
-    block_size_ = kPageSize - offset;
+    keys_[0] = l_key;
+    SetPayload(kPageSize, &l_node);
+    SetPayload(kPageSize - kPtrLen, &r_node);
   }
 
-  NodeVarLen(const NodeVarLen &) = delete;
-  NodeVarLen(NodeVarLen &&) = delete;
+  NodeFixLen(const NodeFixLen &) = delete;
+  NodeFixLen(NodeFixLen &&) = delete;
 
-  auto operator=(const NodeVarLen &) -> NodeVarLen & = delete;
-  auto operator=(NodeVarLen &&) -> NodeVarLen & = delete;
+  auto operator=(const NodeFixLen &) -> NodeFixLen & = delete;
+  auto operator=(NodeFixLen &&) -> NodeFixLen & = delete;
 
   /*####################################################################################
    * Public destructors
@@ -106,7 +102,7 @@ class NodeVarLen
    * @brief Destroy the node object.
    *
    */
-  ~NodeVarLen() = default;
+  ~NodeFixLen() = default;
 
   /*####################################################################################
    * Public getters for header information
@@ -157,16 +153,17 @@ class NodeVarLen
   GetValidSplitNode(const Key &key)  //
       -> std::tuple<Node *, Key, size_t>
   {
-    const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
+    auto sep_key = GetHighKey();
 
     auto *node = this;
     if (Comp{}(sep_key, key)) {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
+    } else {
+      next_->mutex_.UnlockSIX();
     }
 
-    return {node, sep_key, sep_key_len};
+    return {node, std::move(sep_key), kKeyLen};
   }
 
   /**
@@ -207,21 +204,17 @@ class NodeVarLen
   GetLowKey()  //
       -> std::optional<Key>
   {
-    mutex_.LockS();
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-    std::optional<Key> low_key = std::nullopt;
-    if (l_key_len_ > 0) {
-      if constexpr (IsVarLenData<Key>()) {
-        low_key = reinterpret_cast<Key>(GetLowKeyAddr());
-      } else {
-        Key key{};
-        memcpy(&key, GetLowKeyAddr(), sizeof(Key));
-        low_key = std::move(key);
+      std::optional<Key> low_key = std::nullopt;
+      if (has_low_key_) {
+        const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+        low_key = keys_[record_count_ - is_inner + has_high_key_];
       }
-    }
 
-    mutex_.UnlockS();
-    return low_key;
+      if (mutex_.HasSameVersion(ver)) return low_key;
+    }
   }
 
   /**
@@ -232,14 +225,18 @@ class NodeVarLen
   GetHighKeyForSMOs() const  //
       -> std::pair<Key, size_t>
   {
-    if constexpr (IsVarLenData<Key>()) {
-      // allocate space dynamically to keep a copied key
-      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len_));
-      memcpy(h_key, GetHighKeyAddr(), h_key_len_);
-      return {h_key, h_key_len_};
-    } else {
-      return {GetHighKey(), h_key_len_};
-    }
+    return {GetHighKey(), kKeyLen};
+  }
+
+  /**
+   * @brief Set the length of payloads for leaf read/write operations.
+   *
+   * @param pay_len the length of payloads.
+   */
+  void
+  SetPayloadLength(const size_t pay_len)
+  {
+    pay_len_ = pay_len;
   }
 
   /*####################################################################################
@@ -254,7 +251,7 @@ class NodeVarLen
   GetKey(const size_t pos) const  //
       -> Key
   {
-    return GetKey(meta_array_[pos]);
+    return keys_[pos];
   }
 
   /**
@@ -267,7 +264,9 @@ class NodeVarLen
   GetPayload(const size_t pos) const  //
       -> Payload
   {
-    return GetPayload<Payload>(meta_array_[pos]);
+    Payload payload{};
+    memcpy(&payload, GetPayloadAddr(pos), sizeof(Payload));
+    return payload;
   }
 
   /**
@@ -279,16 +278,17 @@ class NodeVarLen
   GetLeftmostChild()  //
       -> Node *
   {
-    Node *child = nullptr;
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-    // check this node is not removed
-    mutex_.LockS();
-    if (is_removed_ == 0) {
-      child = GetPayload<Node *>(0);
+      // check this node is not removed
+      Node *child = nullptr;
+      if (is_removed_ == 0) {
+        child = GetPayload<Node *>(0);
+      }
+
+      if (mutex_.HasSameVersion(ver)) return child;
     }
-    mutex_.UnlockS();
-
-    return child;
   }
 
   /**
@@ -296,11 +296,11 @@ class NodeVarLen
    * @retval true if the record is deleted.
    * @retval false otherwise.
    */
-  [[nodiscard]] auto
-  RecordIsDeleted(const size_t pos) const  //
+  [[nodiscard]] constexpr auto
+  RecordIsDeleted([[maybe_unused]] const size_t pos) const  //
       -> bool
   {
-    return meta_array_[pos].is_deleted;
+    return false;
   }
 
   /**
@@ -314,7 +314,7 @@ class NodeVarLen
   GetRecord(const size_t pos) const  //
       -> std::pair<Key, Payload>
   {
-    return {GetKey(pos), GetPayload<Payload>(pos)};
+    return {keys_[pos], GetPayload<Payload>(pos)};
   }
 
   /*####################################################################################
@@ -386,15 +386,13 @@ class NodeVarLen
     int64_t end_pos = record_count_ - 1 - inner_diff;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-      const auto &index_key = GetKey(meta_array_[pos]);
+      const auto &index_key = keys_[pos];
 
       if (Comp{}(key, index_key)) {  // a target key is in a left side
         end_pos = pos - 1;
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
-      } else if (meta_array_[pos].is_deleted) {
-        return {kKeyAlreadyDeleted, pos};
-      } else {
+      } else {  // find an equivalent key
         return {kKeyAlreadyInserted, pos};
       }
     }
@@ -408,36 +406,32 @@ class NodeVarLen
    * If there is no specified key in this node, this returns the minimum position that
    * is greater than the specified key.
    *
+   * @param node a current node to be searched.
    * @param key a search key.
    * @param is_closed a flag for indicating closed-interval.
    * @return the child node that includes the given key.
    */
-  [[nodiscard]] auto
+  [[nodiscard]] static auto
   SearchChild(  //
+      Node *&node,
       const Key &key,
       const bool is_closed)  //
       -> Node *
   {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+    Node *child{};
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, is_closed);
+      if (node == nullptr) break;  // a root node was removed
 
-      const auto &index_key = GetKey(meta_array_[pos]);
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
-        break;
+      auto [rc, pos] = node->SearchRecord(key);
+      if (!is_closed && rc == kKeyAlreadyInserted) {
+        ++pos;
       }
+
+      child = node->GetPayload<Node *>(pos);
+      if (node->mutex_.HasSameVersion(ver)) break;
     }
 
-    auto *child = GetPayload<Node *>(begin_pos);
-    mutex_.UnlockS();
     return child;
   }
 
@@ -468,6 +462,50 @@ class NodeVarLen
   /**
    * @brief Check the key range of a given node and traverse side links if needed.
    *
+   * @param node a current node to be checked.
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   * @return a node whose key range includes the search key.
+   */
+  [[nodiscard]] static auto
+  CheckKeyRange(  //
+      Node *&node,
+      const Key &key,
+      const bool is_closed)  //
+      -> uint64_t
+  {
+    uint64_t ver{};
+    while (true) {
+      ver = node->mutex_.GetVersion();
+
+      // check the node is not removed
+      if (node->is_removed_ == 0) {
+        // check the node includes a target key
+        if (node->has_high_key_ == 0) {
+          if (node->mutex_.HasSameVersion(ver)) break;
+          continue;
+        }
+        const auto &high_key = node->GetHighKey();
+        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+          if (node->mutex_.HasSameVersion(ver)) break;
+          continue;
+        }
+      }
+
+      // go to the next node
+      auto *next = node->next_;
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
+      node = next;
+      if (node == nullptr) break;
+    }
+
+    return ver;
+  }
+
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
    * This function acquires a shared lock for a returned node.
    *
    * @param node a current node to be locked.
@@ -475,29 +513,35 @@ class NodeVarLen
    * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  static void
   CheckKeyRangeAndLockForRead(  //
-      Node *node,
+      Node *&node,
       const Key &key,
-      const bool is_closed)  //
-      -> Node *
+      const bool is_closed)
   {
     while (true) {
-      node->mutex_.LockS();
+      const auto ver = node->mutex_.GetVersion();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->h_key_len_ == 0) return node;
+        if (node->has_high_key_ == 0) {
+          if (node->mutex_.TryLockS(ver)) return;
+          continue;
+        }
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) return node;
+        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+          if (node->mutex_.TryLockS(ver)) return;
+          continue;
+        }
       }
 
       // go to the next node
       auto *next = node->next_;
-      node->mutex_.UnlockS();
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
       node = next;
-      if (node == nullptr) return node;
+      if (node == nullptr) return;
     }
   }
 
@@ -510,26 +554,29 @@ class NodeVarLen
    * @param key a search key.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  static void
   CheckKeyRangeAndLockForWrite(  //
-      Node *node,
-      const Key &key)  //
-      -> Node *
+      Node *&node,
+      const Key &key)
   {
     while (true) {
-      node->mutex_.LockSIX();
+      const auto ver = node->mutex_.GetVersion();
 
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->h_key_len_ == 0 || !Comp{}(node->GetHighKey(), key)) return node;
+        if (node->has_high_key_ == 0 || !Comp{}(node->GetHighKey(), key)) {
+          if (node->mutex_.TryLockSIX(ver)) return;
+          continue;
+        }
       }
 
       // go to the next node
       auto *next = node->next_;
-      node->mutex_.UnlockSIX();
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
       node = next;
-      if (node == nullptr) return node;
+      if (node == nullptr) return;
     }
   }
 
@@ -541,28 +588,31 @@ class NodeVarLen
    * @brief Read a payload of a specified key if it exists.
    *
    * @tparam Payload a class of payload.
+   * @param node a current node to be read.
    * @param key a target key.
    * @param out_payload a reference to be stored a target payload.
-   * @retval kSuccess if a target record is read.
-   * @retval kKeyNotExist otherwise.
+   * @retval kKeyAlreadyInserted if a target record is read.
+   * @retval kKeyAlreadyDeleted if a target record is deleted.
+   * @retval kKeyNotInserted otherwise.
    */
   template <class Payload>
-  auto
+  static auto
   Read(  //
+      Node *&node,
       const Key &key,
       Payload &out_payload)  //
-      -> ReturnCode
+      -> NodeRC
   {
-    const auto [existence, pos] = SearchRecord(key);
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      const auto meta = meta_array_[pos];
-      memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
-      rc = kSuccess;
-    }
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
 
-    mutex_.UnlockS();
-    return rc;
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        memcpy(&out_payload, node->GetPayloadAddr(pos), sizeof(Payload));
+      }
+
+      if (node->mutex_.HasSameVersion(ver)) return existence;
+    }
   }
 
   /*####################################################################################
@@ -586,29 +636,28 @@ class NodeVarLen
   auto
   Write(  //
       const Key &key,
-      const size_t key_len,
+      [[maybe_unused]] const size_t key_len,
       const void *payload,
-      const size_t pay_len)  //
+      [[maybe_unused]] const size_t pay_len)  //
       -> NodeRC
   {
-    const auto rec_len = key_len + pay_len;
-    CleanUpIfNeeded(rec_len);
+    const auto rec_len = kKeyLen + pay_len_;
 
     // search position where this key has to be set
     const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
+    if (existence == kKeyNotInserted) {
+      if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
-    mutex_.UpgradeToX();
-
-    if (existence == kKeyAlreadyDeleted) {
-      // there is a deleted record with the same key, so reuse it
-      ReuseRecord(payload, pay_len, pos);
-    } else {
-      // there is a record with the same key, so reuse it
-      memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
+      // insert a new record
+      InsertRecord(key, kKeyLen, payload, pay_len_, pos);
+      return kCompleted;
     }
 
+    // there is a record with the same key, so reuse it
+    mutex_.UpgradeToX();
+    memcpy(GetPayloadAddr(pos), payload, pay_len_);
     mutex_.UnlockX();
+
     return kCompleted;
   }
 
@@ -619,6 +668,7 @@ class NodeVarLen
    * target leaf node. If a specified key exists in a target leaf node, this function
    * does nothing and returns kKeyExist as a return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
@@ -627,32 +677,72 @@ class NodeVarLen
    * @retval kKeyAlreadyInserted if there is a record with the same key.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
-  auto
+  static auto
   Insert(  //
+      Node *&node,
       const Key &key,
-      const size_t key_len,
+      [[maybe_unused]] const size_t key_len,
       const void *payload,
-      const size_t pay_len)  //
+      [[maybe_unused]] const size_t pay_len)  //
       -> NodeRC
   {
-    const auto rec_len = key_len + pay_len;
-    CleanUpIfNeeded(rec_len);
+    const auto rec_len = kKeyLen + node->pay_len_;
 
-    // search position where this key has to be set
-    const auto [existence, pos] = SearchRecord(key);
-    if (existence == kKeyNotInserted) return InsertRecord(key, key_len, payload, pay_len, pos);
-    if (existence == kKeyAlreadyInserted) {
-      mutex_.UnlockSIX();
-      return kKeyAlreadyInserted;
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
+
+      // search position where this key has to be set
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        if (!node->mutex_.HasSameVersion(ver)) continue;
+        return kKeyAlreadyInserted;
+      }
+
+      // inserting a new record is required
+      if (!node->mutex_.TryLockSIX(ver)) continue;
+      if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
+
+      // insert a new record
+      node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos);
+      return kCompleted;
     }
+  }
 
+  /**
+   * @brief Insert a given record into this node.
+   *
+   * @param key a target key to be set.
+   * @param key_len the length of the key.
+   * @param payload a target payload to be written.
+   * @param pay_len the length of a target payload.
+   * @param pos an insertion position.
+   */
+  void
+  InsertRecord(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len,
+      const void *payload,
+      [[maybe_unused]] const size_t pay_len,
+      const size_t pos)
+  {
     mutex_.UpgradeToX();
 
-    // there is a deleted record with the same key, so reuse it
-    ReuseRecord(payload, pay_len, pos);
+    // insert a new key
+    const auto move_num = record_count_ - pos;
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
+    keys_[pos] = key;
+
+    // insert a new payload
+    const auto top_offset = kPageSize - block_size_;
+    const auto move_size = pay_len_ * move_num;
+    memmove(ShiftAddr(this, top_offset - pay_len_), ShiftAddr(this, top_offset), move_size);
+    SetPayload(top_offset + move_size, payload);
+
+    // update header information
+    ++record_count_;
+    block_size_ += pay_len_;
 
     mutex_.UnlockX();
-    return kCompleted;
   }
 
   /**
@@ -662,33 +752,40 @@ class NodeVarLen
    * does not exist in a target leaf node, this function does nothing and returns
    * kKeyNotExist as a return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyNotExist otherwise.
    */
-  auto
+  static auto
   Update(  //
+      Node *&node,
       const Key &key,
       const void *payload,
-      const size_t pay_len)  //
+      [[maybe_unused]] const size_t pay_len)  //
       -> ReturnCode
   {
-    // check this node has a target record
-    const auto [existence, pos] = SearchRecord(key);
-    if (existence != kKeyAlreadyInserted) {
-      mutex_.UnlockSIX();
-      return kKeyNotExist;
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
+
+      // check this node has a target record
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence != kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+        continue;
+      }
+
+      // a target record exists, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      // perform update operation
+      memcpy(node->GetPayloadAddr(pos), payload, node->pay_len_);
+
+      node->mutex_.UnlockX();
+      return kSuccess;
     }
-
-    mutex_.UpgradeToX();
-
-    // perform update operation if possible
-    memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
-
-    mutex_.UnlockX();
-    return kSuccess;
   }
 
   /**
@@ -698,34 +795,51 @@ class NodeVarLen
    * exist in a leaf node, this function does nothing and returns kKeyNotExist as a
    * return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @retval kCompleted if a record is deleted.
    * @retval kKeyNotInserted if there is not record with the same key.
    * @retval kNeedMerge if this node should be merged.
    */
-  auto
-  Delete(const Key &key)  //
+  static auto
+  Delete(  //
+      Node *&node,
+      const Key &key)  //
       -> NodeRC
   {
-    // check this node has a target record
-    const auto [existence, pos] = SearchRecord(key);
-    if (existence != kKeyAlreadyInserted) {
-      mutex_.UnlockSIX();
-      return kKeyNotInserted;
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
+
+      // check this node has a target record
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence != kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
+        continue;
+      }
+
+      // a target record exists, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      // remove a key and a payload
+      const auto pay_len = node->pay_len_;
+      const auto move_num = node->record_count_ - 1 - pos;
+      memmove(&(node->keys_[pos]), &(node->keys_[pos + 1]),
+              kKeyLen * (move_num + node->has_low_key_ + node->has_high_key_));
+      auto *top_addr = ShiftAddr(node, kPageSize - node->block_size_);
+      memmove(ShiftAddr(top_addr, pay_len), top_addr, pay_len * move_num);
+
+      // update header information
+      --node->record_count_;
+      node->block_size_ -= pay_len;
+
+      if (node->GetUsedSize() < kMinUsedSpaceSize) {
+        node->mutex_.DowngradeToSIX();
+        return kNeedMerge;
+      }
+
+      node->mutex_.UnlockX();
+      return kCompleted;
     }
-
-    mutex_.UpgradeToX();
-
-    // perform delete operation
-    meta_array_[pos].is_deleted = 1;
-    deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
-    if (NeedMerge()) {
-      mutex_.DowngradeToSIX();
-      return kNeedMerge;
-    }
-
-    mutex_.UnlockX();
-    return kCompleted;
   }
 
   /**
@@ -747,7 +861,6 @@ class NodeVarLen
   {
     // check free space in this node
     const auto rec_len = sep_key_len + kPtrLen;
-    CleanUpIfNeeded(rec_len);
 
     // check an inserting position and concurrent SMOs
     const auto [existence, pos] = SearchRecord(sep_key);
@@ -758,21 +871,24 @@ class NodeVarLen
     }
 
     // recheck free space in this node
-    if (NeedSplit(rec_len)) return kNeedSplit;  // this node is full, so perform splitting
+    if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
     mutex_.UpgradeToX();
 
     // insert a split-right child node
-    const auto *l_node = GetPayload<Node *>(pos);
-    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);           // update as a right child
-    auto offset = SetPayload(kPageSize - block_size_, &l_node, kPtrLen);  // insert a left node
-    offset = SetKey(offset, sep_key, sep_key_len);
-    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, sep_key_len, rec_len};
+    const auto move_num = record_count_ - 1 - pos;
+    const auto move_size = kPtrLen * move_num;
+    const auto top_offset = kPageSize - block_size_;
+    memmove(ShiftAddr(this, top_offset - kPtrLen), ShiftAddr(this, top_offset), move_size);
+    SetPayload(top_offset + move_size, &r_node);
+
+    // insert a separator key
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
+    keys_[pos] = sep_key;
 
     // update header information
     ++record_count_;
-    block_size_ += rec_len;
+    block_size_ += kPtrLen;
 
     mutex_.UnlockX();
     return kCompleted;
@@ -784,7 +900,7 @@ class NodeVarLen
    * @param r_child a right child (i.e., removed) node.
    * @param del_key a separater key to be deleted.
    * @retval kCompleted if the entry is deleted.
-   * @retval kNeedRetry if previous splitting has not been finished.
+   * @retval kNeedWaitAndRetry if previous splitting has not been finished.
    * @retval kNeedMerge if this node should be merged.
    * @retval kAbortMerge if this merge operation should be aborted.
    */
@@ -795,7 +911,7 @@ class NodeVarLen
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
-    if (h_key_len_ > 0 && !Comp{}(del_key, GetHighKey())) {
+    if (has_high_key_ && !Comp{}(del_key, GetHighKey())) {
       mutex_.UnlockSIX();
       return kAbortMerge;
     }
@@ -814,21 +930,20 @@ class NodeVarLen
 
     mutex_.UpgradeToX();
 
-    // get a current left child node
-    const auto l_meta = meta_array_[l_pos];
-    const auto *l_child = GetPayload<Node *>(l_meta);
+    // delete a separator key
+    const auto move_num = record_count_ - 2 - l_pos;
+    memmove(&(keys_[l_pos]), &(keys_[l_pos + 1]),
+            kKeyLen * (move_num + has_low_key_ + has_high_key_));
 
-    // delete metadata of a deleted key
-    const auto del_rec_len = meta_array_[l_pos].rec_len;  // keep a record length to be deleted
-    const auto r_pos = l_pos + 1;
-    memmove(&(meta_array_[l_pos]), &(meta_array_[r_pos]), kMetaLen * (record_count_ - r_pos));
-    memcpy(GetPayloadAddr(meta_array_[l_pos]), &l_child, kPtrLen);
+    // delete a right child
+    auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
+    memmove(ShiftAddr(top_addr, kPtrLen), top_addr, kPtrLen * move_num);
 
     // update this header
     --record_count_;
-    deleted_size_ += del_rec_len;
+    block_size_ -= kPtrLen;
 
-    if (NeedMerge()) {
+    if (GetUsedSize() < kMinUsedSpaceSize) {
       mutex_.DowngradeToSIX();
       return kNeedMerge;
     }
@@ -849,79 +964,38 @@ class NodeVarLen
   void
   Split(Node *r_node)
   {
-    const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
-
-    /*------------------------------
-     * temporal left-split
-     *----------------------------*/
-
-    // set a lowest key for a split-left node
-    auto offset = temp_node_->CopyLowKeyFrom(this);
-
-    // copy left half records to a temporal node
-    size_t pos = 0;
-    for (size_t used_size = 0; used_size < half_size; ++pos) {
-      const auto meta = meta_array_[pos];
-      if (!meta.is_deleted) {
-        offset = temp_node_->CopyRecordFrom(this, meta, offset);
-        used_size += meta.rec_len + kMetaLen;
-      }
-    }
-    const auto sep_key_len = meta_array_[pos - 1].key_len;
-    temp_node_->h_key_offset_ = offset;
-    temp_node_->h_key_len_ = sep_key_len;
-    if (is_leaf_) {
-      offset -= sep_key_len;  // reserve space for a highest key
-    } else {
-      const auto rightmost_pos = temp_node_->record_count_ - 1;
-      temp_node_->meta_array_[rightmost_pos] = Metadata{offset + sep_key_len, 0, kPtrLen};
-    }
-
-    /*------------------------------
-     * right-split
-     *----------------------------*/
+    const auto l_count = record_count_ / 2;
+    const auto r_count = record_count_ - l_count;
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     r_node->mutex_.LockX();
 
-    // set lowest/highest keys for a split-right node
-    auto r_offset = r_node->CopyHighKeyFrom(temp_node_.get(), kPageSize);
-    r_node->l_key_offset_ = r_offset;
-    r_node->l_key_len_ = sep_key_len;
-    r_offset = r_node->CopyHighKeyFrom(this, r_offset);
-    r_node->h_key_offset_ = r_offset;
-    r_node->h_key_len_ = h_key_len_;
-
     // copy right half records to a right node
-    r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
+    r_node->pay_len_ = pay_len_;
+    auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
+    r_node->keys_[r_count - is_inner] = keys_[record_count_ - is_inner];     // a highest key
+    r_node->keys_[r_count - is_inner + has_high_key_] = keys_[l_count - 1];  // a lowest key
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
+    r_node->has_low_key_ = 1;
+    r_node->has_high_key_ = has_high_key_;
 
-    r_node->mutex_.UnlockX();
-
-    /*------------------------------
-     * reflect left-split
-     *----------------------------*/
-
+    r_node->mutex_.DowngradeToSIX();
     mutex_.UpgradeToX();
 
-    // update a header
-    block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
-    record_count_ = temp_node_->record_count_;
-    next_ = r_node;
+    // update lowest/highest keys
+    keys_[l_count - is_inner] = keys_[l_count - 1];
+    keys_[l_count - is_inner + 1] = keys_[record_count_ - is_inner + has_high_key_];
 
-    // copy temporal node to this node
-    h_key_offset_ = temp_node_->h_key_offset_;
-    h_key_len_ = sep_key_len;
-    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
+    // update a header
+    record_count_ = l_count;
+    block_size_ -= r_node->block_size_;
+    next_ = r_node;
+    has_high_key_ = 1;
 
     mutex_.DowngradeToSIX();
-
-    // reset a temp node
-    temp_node_->record_count_ = 0;
   }
 
   /**
@@ -932,34 +1006,20 @@ class NodeVarLen
   void
   Merge(Node *r_node)
   {
-    // copy lowest/highest keys of merged nodes to a temporal node
-    auto offset = temp_node_->CopyLowKeyFrom(this);
-    offset = temp_node_->CopyHighKeyFrom(r_node, offset);
-    temp_node_->h_key_offset_ = offset;
-
-    // copy consolidated records to the original node
-    offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
-    const auto rec_count = temp_node_->record_count_;
-    if (!is_leaf_) {
-      offset = temp_node_->CopyHighKeyFrom(this, offset);
-      temp_node_->meta_array_[rec_count - 1] = Metadata{offset, h_key_len_, h_key_len_ + kPtrLen};
-    }
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     mutex_.UpgradeToX();
 
-    record_count_ = rec_count;
-    h_key_offset_ = temp_node_->h_key_offset_;
-    h_key_len_ = r_node->h_key_len_;
-    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
-
     // copy right records to this nodes
-    offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, offset);
+    const auto lowest_key = keys_[record_count_ - is_inner + 1];
+    auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
+    keys_[record_count_ - is_inner] = r_node->keys_[r_node->record_count_ - is_inner];
+    keys_[record_count_ - is_inner + r_node->has_high_key_] = std::move(lowest_key);
 
     // update a header
     block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
     next_ = r_node->next_;
+    has_high_key_ = r_node->has_high_key_;
 
     mutex_.DowngradeToSIX();
     r_node->mutex_.UpgradeToX();
@@ -969,9 +1029,6 @@ class NodeVarLen
     r_node->next_ = this;
 
     r_node->mutex_.DowngradeToSIX();
-
-    // reset a temp node
-    temp_node_->record_count_ = 0;
   }
 
   /**
@@ -985,7 +1042,7 @@ class NodeVarLen
   AbortMerge(  //
       Node *r_node,
       const Key &l_key,
-      const size_t l_key_len)
+      [[maybe_unused]] const size_t l_key_len)
   {
     // upgrade locks to abort merging
     mutex_.UpgradeToX();
@@ -997,27 +1054,24 @@ class NodeVarLen
     r_node->mutex_.UnlockX();
 
     // check the top position of a record block
-    size_t offset{};
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    const auto rec_count = record_count_;
     if (is_leaf_) {
       // set a highest key for leaf nodes
       auto [existence, pos] = SearchRecord(l_key);
       record_count_ = (existence == kKeyAlreadyInserted) ? pos + 1 : (((pos > 0)) ? pos : 0);
-      offset = (record_count_ > 0) ? meta_array_[record_count_ - 1].offset : kPageSize;
-      offset = SetKey(offset, l_key, l_key_len);
     } else {
       // remove a key of a rightmost record in internal nodes
       const auto pos = SearchRecord(l_key).second;
-      offset = meta_array_[pos].offset;
-      meta_array_[pos] = Metadata{offset + l_key_len, 0, kPtrLen};
       record_count_ = pos + 1;
     }
+    keys_[record_count_ - is_inner] = l_key;
+    keys_[record_count_ - is_inner + 1] = keys_[rec_count - is_inner + has_high_key_];
 
     // update header information
-    block_size_ = kPageSize - offset;
-    deleted_size_ = h_key_len_;
+    block_size_ = record_count_ * pay_len_;
     next_ = r_node;
-    h_key_offset_ = offset;
-    h_key_len_ = l_key_len;
+    has_high_key_ = 1;
 
     mutex_.UnlockX();
   }
@@ -1067,32 +1121,35 @@ class NodeVarLen
       const bool is_rightmost,
       Node *l_node)
   {
+    constexpr auto kRecLen = kKeyLen + sizeof(Payload);
+    pay_len_ = sizeof(Payload);
+
     // extract and insert entries for the leaf node
-    auto offset = (l_node != nullptr) ? l_node->LinkNext(this) : kPageSize - kMaxKeyLen;
+    auto offset = kPageSize;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
-      const auto rec_len = key_len + sizeof(Payload);
+      const auto &[key, payload] = *iter;
 
       // check whether the node has sufficient space
-      node_size += rec_len + kMetaLen;
-      if (node_size + key_len > kPageSize - kMinFreeSpaceSize) break;
+      node_size += kRecLen;
+      if (node_size > kPageSize - kMinFreeSpaceSize - 2 * kKeyLen) break;
 
       // insert an entry to the leaf node
-      offset = SetPayload(offset, &payload, sizeof(Payload));
-      offset = SetKey(offset, key, key_len);
-      meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
+      keys_[record_count_++] = key;
+      offset = SetPayload(offset, &payload);
     }
 
     // set a highest key if this node is not rightmost
     if (iter < iter_end || !is_rightmost) {
-      h_key_offset_ = offset;
-      h_key_len_ = meta_array_[record_count_ - 1].key_len;
-      offset -= h_key_len_;  // reserve space for a highest key
+      has_high_key_ = 1;
+      keys_[record_count_] = keys_[record_count_ - 1];
     }
 
     // update header information
     block_size_ = kPageSize - offset;
+    if (l_node != nullptr) {
+      l_node->LinkNext(this);
+    }
   }
 
   /**
@@ -1108,31 +1165,32 @@ class NodeVarLen
       const typename std::vector<Node *>::const_iterator &iter_end,
       Node *l_node)
   {
-    auto offset = (l_node != nullptr) ? l_node->LinkNext(this) : kPageSize - kMaxKeyLen;
+    constexpr auto kRecLen = kKeyLen + kPtrLen;
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>((*iter)->is_leaf_));
+
+    auto offset = kPageSize;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       const auto *child = *iter;
-      const auto high_key_len = child->h_key_len_;
-      const auto rec_len = high_key_len + kPtrLen;
 
       // check whether the node has sufficient space
-      node_size += rec_len + kMetaLen;
-      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+      node_size += kRecLen;
+      if (node_size > kPageSize - kMinFreeSpaceSize - kKeyLen) break;
 
       // insert an entry to the inner node
-      offset = SetPayload(offset, &child, kPtrLen);
-      offset = CopyHighKeyFrom(child, offset);
-      meta_array_[record_count_++] = Metadata{offset, high_key_len, rec_len};
+      keys_[record_count_++] = child->keys_[child->record_count_ - is_inner];
+      offset = SetPayload(offset, &child);
     }
 
     // move a highest key to header
-    const auto rightmost_pos = record_count_ - 1;
-    h_key_offset_ = offset;
-    h_key_len_ = meta_array_[rightmost_pos].key_len;
-    meta_array_[rightmost_pos] = Metadata{offset + h_key_len_, 0, kPtrLen};
+    const auto *last_child = *std::prev(iter);
+    has_high_key_ = last_child->has_high_key_;
 
     // update header information
     block_size_ = kPageSize - offset;
+    if (l_node != nullptr) {
+      l_node->LinkNext(this);
+    }
   }
 
   /**
@@ -1162,14 +1220,11 @@ class NodeVarLen
    * Internal constants
    *##################################################################################*/
 
-  /// the maximum length of keys.
-  static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+  /// the length of keys.
+  static constexpr size_t kKeyLen = sizeof(Key);
 
-  /// the length of child pointers.
-  static constexpr size_t kPtrLen = sizeof(Node *);
-
-  /// the length of metadata.
-  static constexpr size_t kMetaLen = sizeof(Metadata);
+  /// the length of node pointers.
+  static constexpr size_t kPtrLen = sizeof(uintptr_t);
 
   /// the length of a header in each node page.
   static constexpr size_t kHeaderLen = sizeof(Node);
@@ -1196,83 +1251,13 @@ class NodeVarLen
   }
 
   /**
-   * @brief Clean up this node if this includes a lot of dead space.
-   *
-   * @param new_rec_len the length of a record to be inserted.
-   */
-  void
-  CleanUpIfNeeded(const size_t new_rec_len)
-  {
-    // check whether the node has space for a new record
-    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    const auto used_size = total_size - deleted_size_;
-    if (total_size <= kPageSize - kHeaderLen || used_size > kMaxUsedSpaceSize) return;
-
-    // this node has a lot of dead space
-    mutex_.UpgradeToX();
-    CleanUp();
-    mutex_.DowngradeToSIX();
-  }
-
-  /**
-   * @param new_rec_len the length of a new record.
-   * @retval true if this node requires splitting before inserting a new record.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  NeedSplit(const size_t new_rec_len)  //
-      -> bool
-  {
-    // check whether the node has space for a new record
-    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    return total_size > kPageSize - kHeaderLen;
-  }
-
-  /**
-   * @retval true if this node requires merging.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  NeedMerge()  //
-      -> bool
-  {
-    // check this node uses enough space
-    if (GetUsedSize() < kMinUsedSpaceSize) return true;
-    if (deleted_size_ <= kMaxDeletedSpaceSize) return false;
-
-    // this node has a lot of dead space
-    CleanUp();
-    return false;
-  }
-
-  /**
    * @return Current usage of the record block.
    */
   [[nodiscard]] auto
   GetUsedSize() const  //
       -> size_t
   {
-    return kMetaLen * record_count_ + block_size_ - deleted_size_;
-  }
-
-  /**
-   * @return an address of a lowest key.
-   */
-  [[nodiscard]] constexpr auto
-  GetLowKeyAddr() const  //
-      -> void *
-  {
-    return ShiftAddr(this, l_key_offset_);
-  }
-
-  /**
-   * @return an address of a highest key.
-   */
-  [[nodiscard]] constexpr auto
-  GetHighKeyAddr() const  //
-      -> void *
-  {
-    return ShiftAddr(this, h_key_offset_);
+    return kKeyLen * (record_count_ + has_low_key_ + (is_leaf_ & has_high_key_)) + block_size_;
   }
 
   /**
@@ -1280,15 +1265,10 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> Key
+      -> const Key &
   {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
-    } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
-    }
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    return keys_[record_count_ - is_inner];
   }
 
   /*####################################################################################
@@ -1296,82 +1276,14 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @param meta metadata of a corresponding record.
-   * @return an address of a target key.
-   */
-  [[nodiscard]] constexpr auto
-  GetKeyAddr(const Metadata meta) const  //
-      -> void *
-  {
-    return ShiftAddr(this, meta.offset);
-  }
-
-  /**
-   * @param meta metadata of a corresponding record.
-   * @return a key in a target record.
-   */
-  [[nodiscard]] auto
-  GetKey(const Metadata meta) const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
-    } else {
-      Key key{};
-      memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
-    }
-  }
-
-  /**
-   * @param meta metadata of a corresponding record.
+   * @param pos the position of a target record.
    * @return an address of a target payload.
    */
   [[nodiscard]] constexpr auto
-  GetPayloadAddr(const Metadata meta) const  //
+  GetPayloadAddr(const size_t pos) const  //
       -> void *
   {
-    return ShiftAddr(this, meta.offset + meta.key_len);
-  }
-
-  /**
-   * @tparam Payload a class of payload.
-   * @param meta metadata of a corresponding record.
-   * @return a payload in a target record.
-   */
-  template <class Payload>
-  [[nodiscard]] auto
-  GetPayload(const Metadata meta) const  //
-      -> Payload
-  {
-    Payload payload{};
-    memcpy(&payload, GetPayloadAddr(meta), sizeof(Payload));
-    return payload;
-  }
-
-  /**
-   * @brief Set a target key directly.
-   *
-   * @param offset an offset to the top of the record block.
-   * @param key a target key to be set.
-   * @param key_len the length of the key.
-   */
-  auto
-  SetKey(  //
-      size_t offset,
-      const Key &key,
-      [[maybe_unused]] const size_t key_len)  //
-      -> size_t
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), key, key_len);
-    } else {
-      offset -= sizeof(Key);
-      memcpy(ShiftAddr(this, offset), &key, sizeof(Key));
-    }
-
-    return offset;
+    return ShiftAddr(this, kPageSize - (pos + 1) * pay_len_);
   }
 
   /**
@@ -1379,17 +1291,15 @@ class NodeVarLen
    *
    * @param offset an offset to the top of the record block.
    * @param payload a target payload to be written.
-   * @param pay_len the length of a target payload.
    */
   auto
   SetPayload(  //
       size_t offset,
-      const void *payload,
-      const size_t pay_len)  //
+      const void *payload)  //
       -> size_t
   {
-    offset -= pay_len;
-    memcpy(ShiftAddr(this, offset), payload, pay_len);
+    offset -= pay_len_;
+    memcpy(ShiftAddr(this, offset), payload, pay_len_);
     return offset;
   }
 
@@ -1398,181 +1308,24 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @brief Insert a given record into this node.
-   *
-   * @param key a target key to be set.
-   * @param key_len the length of the key.
-   * @param payload a target payload to be written.
-   * @param pay_len the length of a target payload.
-   * @param pos an insertion position.
-   * @retval kCompleted if a record is inserted.
-   * @retval kNeedSplit if this node should be split before inserting a record.
-   */
-  auto
-  InsertRecord(  //
-      const Key &key,
-      const size_t key_len,
-      const void *payload,
-      const size_t pay_len,
-      const size_t pos)  //
-      -> NodeRC
-  {
-    const auto rec_len = key_len + pay_len;
-    if (NeedSplit(rec_len)) return kNeedSplit;
-
-    mutex_.UpgradeToX();
-
-    // insert a new record
-    auto offset = kPageSize - block_size_;
-    offset = SetPayload(offset, payload, pay_len);
-    offset = SetKey(offset, key, key_len);
-    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, key_len, rec_len};
-
-    // update header information
-    ++record_count_;
-    block_size_ += rec_len;
-
-    mutex_.UnlockX();
-    return kCompleted;
-  }
-
-  /**
-   * @brief Reuse the deleted record to insert a new record.
-   *
-   * @param payload a target payload to be written.
-   * @param pay_len the length of a target payload.
-   * @param pos the position of the deleted record.
-   */
-  void
-  ReuseRecord(  //
-      const void *payload,
-      const size_t pay_len,
-      const size_t pos)
-  {
-    // reuse a deleted record
-    const auto meta = meta_array_[pos];
-    meta_array_[pos].is_deleted = 0;
-    memcpy(GetPayloadAddr(meta), payload, pay_len);
-
-    // update header information
-    deleted_size_ -= meta.rec_len + kMetaLen;
-  }
-
-  /**
-   * @brief Clean up this node.
-   *
-   */
-  void
-  CleanUp()
-  {
-    // copy records to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(this, kPageSize);
-    temp_node_->h_key_offset_ = offset;
-    offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
-
-    // update a header
-    block_size_ = kPageSize - offset;
-    deleted_size_ = 0;
-    record_count_ = temp_node_->record_count_;
-    h_key_offset_ = temp_node_->h_key_offset_;
-
-    // copy cleaned up records to the original node
-    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
-    memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
-
-    // reset a temp node
-    temp_node_->record_count_ = 0;
-  }
-
-  /**
-   * @brief Copy a key from a given node.
-   *
-   * @param node an original node that has a target key.
-   * @param meta the corresponding metadata of a target key.
-   * @param offset an offset to the top of the record block.
-   * @return the updated offset value.
-   */
-  auto
-  CopyKeyFrom(  //
-      const Node *node,
-      const Metadata meta,
-      size_t offset)  //
-      -> size_t
-  {
-    // copy a record from the given node
-    const auto key_len = meta.key_len;
-    offset -= key_len;
-    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), key_len);
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a lowest key from a given node.
-   *
-   * @param node an original node that has a lowest key.
-   * @return the updated offset value.
-   */
-  auto
-  CopyLowKeyFrom(const Node *node)  //
-      -> size_t
-  {
-    const auto key_len = node->l_key_len_;
-    auto offset = kPageSize;
-    if (key_len > 0) {
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), node->GetLowKeyAddr(), key_len);
-    }
-    l_key_offset_ = offset;
-    l_key_len_ = key_len;
-
-    return offset;
-  }
-
-  /**
-   * @brief Copy a highest key from a given node.
-   *
-   * @param node an original node that has a highest key.
-   * @return the updated offset value.
-   */
-  auto
-  CopyHighKeyFrom(  //
-      const Node *node,
-      size_t offset)  //
-      -> size_t
-  {
-    const auto key_len = node->h_key_len_;
-    if (key_len > 0) {
-      offset -= key_len;
-      memcpy(ShiftAddr(this, offset), node->GetHighKeyAddr(), key_len);
-    }
-
-    return offset;
-  }
-
-  /**
    * @brief Copy a record from a given node.
    *
    * @param node an original node that has a target record.
-   * @param meta the corresponding metadata of a target record.
+   * @param pos the position of a target record.
    * @param offset an offset to the top of the record block.
    * @return the updated offset value.
    */
   auto
   CopyRecordFrom(  //
       const Node *node,
-      const Metadata meta,
+      const size_t pos,
       size_t offset)  //
       -> size_t
   {
     // copy a record from the given node
-    const auto rec_len = meta.rec_len;
-    offset -= rec_len;
-    memcpy(ShiftAddr(this, offset), node->GetKeyAddr(meta), rec_len);
-
-    // set new metadata
-    meta_array_[record_count_++] = Metadata{offset, meta.key_len, rec_len};
+    keys_[record_count_++] = node->keys_[pos];
+    offset -= pay_len_;
+    memcpy(ShiftAddr(this, offset), node->GetPayloadAddr(pos), pay_len_);
 
     return offset;
   }
@@ -1596,36 +1349,10 @@ class NodeVarLen
   {
     // copy records from the given node
     for (size_t i = begin_pos; i < end_pos; ++i) {
-      const auto meta = node->meta_array_[i];
-      if (!meta.is_deleted) {
-        offset = CopyRecordFrom(node, meta, offset);
-      }
+      offset = CopyRecordFrom(node, i, offset);
     }
 
     return offset;
-  }
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Payload a payload type.
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Payload, class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, Payload, size_t>
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
   }
 
   /**
@@ -1634,20 +1361,17 @@ class NodeVarLen
    * @param r_node a right sibling node.
    * @return an offset to a lowest key in a right sibling node.
    */
-  auto
+  void
   LinkNext(Node *r_node)  //
-      -> size_t
   {
     // set a sibling link in a left node
     next_ = r_node;
 
     // copy a highest key in a left node as a lowest key in a right node
-    const auto offset = kPageSize - h_key_len_;
-    memcpy(ShiftAddr(r_node, offset), GetHighKeyAddr(), h_key_len_);
-    r_node->l_key_offset_ = offset;
-    r_node->l_key_len_ = h_key_len_;
-
-    return offset;
+    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    r_node->has_low_key_ = 1;
+    r_node->keys_[r_node->record_count_ - is_inner + r_node->has_high_key_] =
+        keys_[record_count_ - is_inner];
   }
 
   /*####################################################################################
@@ -1663,38 +1387,31 @@ class NodeVarLen
   /// the total byte length of records in a node.
   uint32_t block_size_ : 30;
 
-  /// the total byte length of deleted records in a node.
-  uint16_t deleted_size_{0};
-
   /// the number of records in this node.
   uint16_t record_count_{0};
 
+  /// the length of payloads in this node.
+  uint16_t pay_len_{kPtrLen};
+
   /// a lock for concurrency controls.
-  ::dbgroup::lock::PessimisticLock mutex_{};
+  ::dbgroup::lock::OptimisticLock mutex_{};
 
   /// the pointer to the next node.
   Node *next_{nullptr};
 
-  /// the offset to a lowest key.
-  uint16_t l_key_offset_{kPageSize};
+  /// a flag for a lowest key.
+  uint64_t has_low_key_ : 1;
 
-  /// the length of a lowest key.
-  uint16_t l_key_len_{0};
+  /// a flag for a highest key.
+  uint64_t has_high_key_ : 1;
 
-  /// the offset to a highest key.
-  uint16_t h_key_offset_{kPageSize};
+  /// an alignment block.
+  uint64_t : 0;
 
-  /// the length of a highest key.
-  uint16_t h_key_len_{0};
-
-  /// an actual data block (it starts with record metadata).
-  Metadata meta_array_[0];
-
-  // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node>          //
-      temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
+  /// an actual data block (it starts with record keys).
+  Key keys_[0];
 };
 
-}  // namespace dbgroup::index::b_tree::component::psl
+}  // namespace dbgroup::index::b_tree::component::osl
 
-#endif  // B_TREE_COMPONENT_PSL_NODE_VARLEN_HPP
+#endif  // B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
