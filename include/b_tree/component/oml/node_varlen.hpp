@@ -130,63 +130,38 @@ class NodeVarLen
     return is_removed_;
   }
 
-  /**
-   * @param new_rec_len the length of a new record.
-   * @retval true if this node requires splitting before inserting a new record.
-   * @retval false otherwise.
-   */
   [[nodiscard]] auto
-  NeedSplit(const size_t new_rec_len,
-            uint64_t &ver)  //
-      -> bool
+  CheckSMOs(const size_t new_rec_len)  //
+      -> std::pair<NodeRC, uint64_t>
   {
+    NodeRC rc{};
+    uint64_t ver{};
     while (true) {
       ver = mutex_.GetVersion();
-      auto need_split = false;
 
-      // check whether the node has space for a new record
-      const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-      if (total_size <= kPageSize - kHeaderLen) {
-        need_split = false;
-      } else if (total_size - deleted_size_ > kMaxUsedSpaceSize) {
-        need_split = true;
-      } else {
-        // this node has enough space but cleaning up is required
-        if (mutex_.TryLockX(ver)) {
-          CleanUp();
-          ver = mutex_.UnlockX();
-        }
+      // check this node is not removed
+      if (is_removed_) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        rc = kNeedRetry;
+        break;
       }
-      if (mutex_.HasSameVersion(ver)) return need_split;
-    }
-  }
 
-  /**
-   * @retval true if this node requires merging.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  NeedMerge(uint64_t &ver)  //
-      -> bool
-  {
-    while (true) {
-      ver = mutex_.GetVersion();
-      auto need_merge = false;
+      // check splitting is needed
+      rc = NeedSplit(new_rec_len, ver);
+      if (rc == kNeedRetry) continue;
+      if (rc == kNeedSplit) break;
 
-      // check this node uses enough space
-      if (GetUsedSize() < kMinUsedSpaceSize) {
-        need_merge = true;
-      } else if (deleted_size_ <= kMaxDeletedSpaceSize) {
-        need_merge = false;
-      } else {
-        // this node has a lot of dead space
-        if (mutex_.TryLockX(ver)) {
-          CleanUp();
-          ver = mutex_.UnlockX();
-        }
-      }
-      if (mutex_.HasSameVersion(ver)) return need_merge;
+      // check merging is needed
+      rc = NeedMerge(ver);
+      if (rc == kNeedRetry) continue;
+      if (rc == kNeedMerge) break;
+
+      // SMOs are not required
+      rc = kCompleted;
+      break;
     }
+
+    return {rc, ver};
   }
 
   /**
@@ -221,17 +196,22 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> Node *
+      -> std::pair<Node *, uint64_t>
   {
-    auto *node = this;
+    Node *node{};
+    uint64_t ver{};
     const auto &high_key = GetHighKey();
-    if (node->is_removed_) {
+    if (Comp{}(*high_key, key)) {
       node = next_;
-    } else if (high_key && Comp{}(*high_key, key)) {
-      node = next_;
+      ver = next_->mutex_.UnlockX();
+      mutex_.UnlockX();
+    } else {
+      node = this;
+      next_->mutex_.UnlockX();
+      ver = mutex_.UnlockX();
     }
 
-    return node;
+    return {node, ver};
   }
 
   /*####################################################################################
@@ -321,18 +301,18 @@ class NodeVarLen
     const auto r_pos = l_pos + 1;
     if (r_pos == record_count_) {
       // a rightmost node is cannot be merged
-      mutex_.UnlockX();
-      l_node->mutex_.UnlockX();
+      mutex_.UnlockSIX();
+      l_node->mutex_.UnlockSIX();
       return nullptr;
     }
 
     // check the right-sibling node has enough capacity for merging
     auto *r_node = GetPayload<Node *>(r_pos);
-    r_node->mutex_.LockX();
+    r_node->mutex_.LockSIX();
     if (l_node->GetUsedSize() + r_node->GetUsedSize() >= kMaxUsedSpaceSize) {
-      mutex_.UnlockX();
-      l_node->mutex_.UnlockX();
-      r_node->mutex_.UnlockX();
+      mutex_.UnlockSIX();
+      l_node->mutex_.UnlockSIX();
+      r_node->mutex_.UnlockSIX();
       return nullptr;
     }
 
@@ -533,22 +513,25 @@ class NodeVarLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::tuple<size_t, uint64_t, Node *>
+      -> Node *
   {
+    Node *child{};
     while (true) {
       const auto ver = mutex_.GetVersion();
 
       // check the current node is not removed
       if (is_removed_) {
         if (!mutex_.HasSameVersion(ver)) continue;
-        return {0, 0, nullptr};  // retry from a root node
+        child = nullptr;  // retry from a root node
+        break;
       }
 
       // check the current node has a target key
       const auto &high_key = GetHighKey();
       if (high_key && (Comp{}(*high_key, key) || (!is_closed && !Comp{}(key, *high_key)))) {
         if (!mutex_.HasSameVersion(ver)) continue;
-        return {0, 0, nullptr};  // retry from a root node
+        child = nullptr;  // retry from a root node
+        break;
       }
 
       // search a child node
@@ -556,10 +539,44 @@ class NodeVarLen
       if (!is_closed && rc == kKeyAlreadyInserted) {
         ++pos;
       }
-      auto *child = GetPayload<Node *>(pos);
+      child = GetPayload<Node *>(pos);
 
-      if (!mutex_.HasSameVersion(ver)) continue;
-      return {pos, ver, child};
+      if (mutex_.HasSameVersion(ver)) break;
+    }
+
+    return child;
+  }
+
+  [[nodiscard]] auto
+  SearchChild(  //
+      const Key &key,
+      uint64_t &ver,
+      const size_t rec_len)  //
+      -> std::pair<size_t, Node *>
+  {
+    while (true) {
+      while (mutex_.HasSameVersion(ver)) {
+        // check the current node has a target key
+        const auto &high_key = GetHighKey();
+        if (high_key && Comp{}(*high_key, key)) {
+          if (!mutex_.HasSameVersion(ver)) break;
+          return {0, nullptr};  // retry from a root node
+        }
+
+        // search a child node
+        const auto pos = SearchRecord(key).second;
+        auto *child = GetPayload<Node *>(pos);
+
+        if (!mutex_.HasSameVersion(ver)) break;
+        return {pos, child};
+      }
+
+      // check a current node status
+      const auto [rc, new_ver] = CheckSMOs(rec_len);
+      if (rc != kCompleted) return {0, nullptr};  // retry from a root node
+
+      // this node is modified, but it may includes a target key
+      ver = new_ver;
     }
   }
 
@@ -945,6 +962,8 @@ class NodeVarLen
       const Node *r_node,
       const size_t pos)  //
   {
+    mutex_.UpgradeToX();
+
     // update a current pointer and prepare space for a left child
     memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
@@ -976,6 +995,8 @@ class NodeVarLen
       const size_t pos)  //
   {
     const auto del_rec_len = meta_array_[pos].rec_len;  // keep a record length to be deleted
+
+    mutex_.UpgradeToX();
 
     // delete a right child by shifting metadata
     memmove(&(meta_array_[pos]), &(meta_array_[pos + 1]), kMetaLen * (record_count_ - 1 - pos));
@@ -1021,6 +1042,7 @@ class NodeVarLen
     }
 
     // copy right half records to a right node
+    r_node->mutex_.LockX();
     auto r_offset = r_node->CopyHighKeyFrom(this);
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
@@ -1029,6 +1051,7 @@ class NodeVarLen
     r_node->next_ = next_;
 
     // update a header
+    mutex_.UpgradeToX();
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
@@ -1040,8 +1063,6 @@ class NodeVarLen
 
     // reset a temp node
     temp_node_->record_count_ = 0;
-
-    mutex_.UnlockX();
   }
 
   /**
@@ -1049,20 +1070,25 @@ class NodeVarLen
    *
    * @param r_node a right node to be merged.
    */
-  void
-  Merge(Node *r_node)
+  auto
+  Merge(Node *r_node)  //
+      -> uint64_t
   {
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
 
     // copy consolidated records to the original node
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
-    record_count_ = temp_node_->record_count_;
+    const auto rec_count = temp_node_->record_count_;
     if (!is_leaf_) {
       offset = temp_node_->CopyKeyFrom(this, high_meta_, offset);
       const auto key_len = high_meta_.key_len;
-      temp_node_->meta_array_[record_count_ - 1] = Metadata{offset, key_len, key_len + kPtrLen};
+      temp_node_->meta_array_[rec_count - 1] = Metadata{offset, key_len, key_len + kPtrLen};
     }
+
+    mutex_.UpgradeToX();
+
+    record_count_ = rec_count;
     memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
 
@@ -1074,6 +1100,9 @@ class NodeVarLen
     deleted_size_ = 0;
     next_ = r_node->next_;
 
+    const auto new_ver = mutex_.UnlockX();
+    r_node->mutex_.UpgradeToX();
+
     // update a header of a right node
     r_node->is_removed_ = 1;
     r_node->next_ = this;
@@ -1083,7 +1112,7 @@ class NodeVarLen
     // reset a temp node
     temp_node_->record_count_ = 0;
 
-    mutex_.UnlockX();
+    return new_ver;
   }
 
   /*####################################################################################
@@ -1279,6 +1308,64 @@ class NodeVarLen
   {
     if (high_meta_.key_len == 0) return std::nullopt;
     return GetKey(high_meta_);
+  }
+
+  /**
+   * @param new_rec_len the length of a new record.
+   * @retval true if this node requires splitting before inserting a new record.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  NeedSplit(  //
+      const size_t new_rec_len,
+      uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check whether the node has space for a new record
+    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+    if (total_size <= kPageSize - kHeaderLen) {
+      if (mutex_.HasSameVersion(ver)) return kCompleted;
+      return kNeedRetry;
+    }
+
+    // check the node requires splitting
+    if (total_size - deleted_size_ > kMaxUsedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kNeedSplit;
+      return kNeedRetry;
+    }
+
+    // this node has enough space but cleaning up is required
+    if (!mutex_.TryLockX(ver)) return kNeedRetry;
+    CleanUp();
+    ver = mutex_.UnlockX();
+    return kCompleted;
+  }
+
+  /**
+   * @retval true if this node requires merging.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  NeedMerge(uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check this node uses enough space
+    if (GetUsedSize() < kMinUsedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kNeedMerge;
+      return kNeedRetry;
+    }
+
+    // check this node has a lot of dead space
+    if (deleted_size_ <= kMaxDeletedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kCompleted;
+      return kNeedRetry;
+    }
+
+    // this node has a lot of dead space
+    if (!mutex_.TryLockX(ver)) return kNeedRetry;
+    CleanUp();
+    ver = mutex_.UnlockX();
+    return kCompleted;
   }
 
   /*####################################################################################
