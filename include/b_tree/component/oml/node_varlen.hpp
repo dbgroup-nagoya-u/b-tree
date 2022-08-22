@@ -497,8 +497,10 @@ class NodeVarLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
+    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+
     int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1;
+    int64_t end_pos = record_count_ - 1 - inner_diff;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
@@ -507,10 +509,10 @@ class NodeVarLen
         end_pos = pos - 1;
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
-      } else if (meta_array_[pos].is_deleted) {
-        return {kKeyAlreadyDeleted, pos};
-      } else {
+      } else if (!meta_array_[pos].is_deleted) {
         return {kKeyAlreadyInserted, pos};
+      } else {
+        return {kKeyAlreadyDeleted, pos};
       }
     }
 
@@ -536,29 +538,28 @@ class NodeVarLen
     while (true) {
       const auto ver = mutex_.GetVersion();
 
-      int64_t begin_pos = 0;
-      int64_t end_pos = record_count_ - 2;
-      while (begin_pos <= end_pos) {
-        size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-
-        const auto &index_key = GetKey(meta_array_[pos]);
-
-        if (Comp{}(key, index_key)) {  // a target key is in a left side
-          end_pos = pos - 1;
-        } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-          begin_pos = pos + 1;
-        } else {  // find an equivalent key
-          if (!is_closed) ++pos;
-          begin_pos = pos;
-          break;
-        }
+      // check the current node is not removed
+      if (is_removed_) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        return {0, 0, nullptr};  // retry from a root node
       }
 
-      auto *child = GetPayload<Node *>(begin_pos);
+      // check the current node has a target key
       const auto &high_key = GetHighKey();
-      child = (is_removed_ || (high_key && Comp{}(*high_key, key))) ? nullptr : child;
+      if (high_key && (Comp{}(*high_key, key) || (!is_closed && !Comp{}(key, *high_key)))) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        return {0, 0, nullptr};  // retry from a root node
+      }
+
+      // search a child node
+      auto [rc, pos] = SearchRecord(key);
+      if (!is_closed && rc == kKeyAlreadyInserted) {
+        ++pos;
+      }
+      auto *child = GetPayload<Node *>(pos);
+
       if (!mutex_.HasSameVersion(ver)) continue;
-      return {begin_pos, ver, child};
+      return {pos, ver, child};
     }
   }
 

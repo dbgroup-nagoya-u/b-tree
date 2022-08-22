@@ -457,7 +457,7 @@ class BTree
   {
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      auto [pos, ver, child] = node->SearchChild(key, is_closed);
+      auto *child = std::get<2>(node->SearchChild(key, is_closed));
       if (child == nullptr) {
         node = root_.load(std::memory_order_acquire);
         continue;

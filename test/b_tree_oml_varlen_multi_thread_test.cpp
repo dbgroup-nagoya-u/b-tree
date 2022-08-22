@@ -34,7 +34,6 @@ using TestTargets = ::testing::Types<              //
     IndexInfo<BTreeOMLVarLen, UInt8, UInt4>,       // small payloads
     IndexInfo<BTreeOMLVarLen, UInt4, UInt4>,       // small keys/payloads
     IndexInfo<BTreeOMLVarLen, Var, UInt8>,         // variable-length keys
-    IndexInfo<BTreeOMLVarLen, Ptr, Ptr>,           // pointer keys/payloads
     IndexInfo<BTreeOMLVarLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
