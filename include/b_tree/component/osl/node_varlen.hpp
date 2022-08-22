@@ -703,14 +703,13 @@ class NodeVarLen
     const auto rec_len = key_len + pay_len;
 
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      auto ver = CheckKeyRange(node, key, kClosed);
 
       if (node->NeedCleanUp(rec_len)) {
         // this node has a lot of dead space
         if (!node->mutex_.TryLockX(ver)) continue;
         node->CleanUp();
-        node->mutex_.UnlockX();
-        continue;
+        ver = node->mutex_.UnlockX();
       }
 
       // search position where this key has to be set
