@@ -69,13 +69,13 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = new Node{kLeafFlag};
+    node_ = CreateNode(kLeafFlag);
   }
 
   void
   TearDown() override
   {
-    node_ = nullptr;
+    ::operator delete(node_);
   }
 
   /*####################################################################################
@@ -102,7 +102,7 @@ class NodeFixture : public testing::Test
       const Key key,
       const Payload payload)
   {
-    node_->LockX();
+    node_->LockSIX();
     node_->Write(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -111,7 +111,7 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockX();
+    node_->LockSIX();
     return node_->Insert(key, kKeyLen, &payload, kPayLen);
   }
 
@@ -120,14 +120,14 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockX();
+    node_->LockSIX();
     return node_->Update(key, &payload, kPayLen);
   }
 
   auto
   Delete(const size_t key)
   {
-    node_->LockX();
+    node_->LockSIX();
     return node_->Delete(key);
   }
 
@@ -282,9 +282,11 @@ class NodeFixture : public testing::Test
     }
 
     // perform splitting
-    auto *r_node = new Node{kLeafFlag};
-    node_->LockX();
+    auto *r_node = CreateNode(kLeafFlag);
+    node_->LockSIX();
     node_->Split(r_node);
+    node_->UnlockX();
+    r_node->UnlockX();
 
     // check the split nodes have the same number of records
     const auto l_count = node_->GetRecordCount();
@@ -294,6 +296,7 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
+        ::operator delete(node_);
         node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
@@ -312,15 +315,15 @@ class NodeFixture : public testing::Test
     auto *r_node = node_;
 
     // fill a left node
-    node_ = new Node{kLeafFlag};
+    node_ = CreateNode(kLeafFlag);
     for (size_t i = 0; i < kHalfNum; ++i) {
       Write(i, i);
     }
 
     // merge the two nodes
-    node_->LockX();
+    node_->LockSIX();
     node_->Merge(r_node);
-    delete r_node;
+    ::operator delete(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {

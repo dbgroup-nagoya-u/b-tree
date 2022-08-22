@@ -356,15 +356,6 @@ class BTree
    * Internal constants
    *##################################################################################*/
 
-  /// an expected maximum height of a tree.
-  static constexpr size_t kExpectedTreeHeight = 8;
-
-  /// a flag for indicating leaf nodes.
-  static constexpr uint32_t kLeafFlag = 1;
-
-  /// a flag for indicating delete operations
-  static constexpr bool kDelOps = true;
-
   /// the length of payloads.
   static constexpr size_t kPayLen = sizeof(Payload);
 
