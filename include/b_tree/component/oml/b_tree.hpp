@@ -568,17 +568,17 @@ class BTree
         parent->UnlockSIX();
       }
       return kNeedRetry;
-    } else {
-      if (!child->NeedMerge(child_ver)) return kCompleted;
-      if (parent->TryLockSIX(parent_ver)) {
-        if (child->TryLockX(child_ver)) {
-          parent->UpgradeToX();
-          return kNeedMerge;
-        }
-        parent->UnlockSIX();
-      }
-      return kNeedRetry;
     }
+
+    if (!child->NeedMerge(child_ver)) return kCompleted;
+    if (parent->TryLockSIX(parent_ver)) {
+      if (child->TryLockX(child_ver)) {
+        parent->UpgradeToX();
+        return kNeedMerge;
+      }
+      parent->UnlockSIX();
+    }
+    return kNeedRetry;
   }
 
   /*####################################################################################
@@ -616,10 +616,10 @@ class BTree
     auto *node = root_.load(std::memory_order_acquire);
     uint64_t ver{};
     while (true) {
-      if (!node->NeedSplit(kMaxRecLen, ver))
-        return (node == root_.load(std::memory_order_acquire) && node->HasSameVersion(ver))
-                   ? node
-                   : nullptr;
+      if (!node->NeedSplit(kMaxRecLen, ver)) {
+        if (node == root_.load(std::memory_order_acquire) && node->HasSameVersion(ver)) return node;
+        return nullptr;
+      }
       if (!node->TryLockSIX(ver)) continue;
       if (node != root_.load(std::memory_order_acquire)) {
         node->UnlockSIX();
