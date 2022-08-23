@@ -665,49 +665,9 @@ class NodeVarLen
       const bool is_closed)
   {
     while (true) {
-      const auto ver = node->mutex_.GetVersion();
-      const auto &high_key = node->GetHighKey();
-
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (!high_key) {
-          if (node->mutex_.TryLockS(ver)) return;
-          continue;
-        }
-        if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
-          if (node->mutex_.TryLockS(ver)) return;
-          continue;
-        }
-      }
-
-      // go to the next node
-      auto *next = node->next_;
-      if (!node->mutex_.HasSameVersion(ver)) continue;
-
-      node = next;
-      if (node == nullptr) return;
-    }
-  }
-
-  static void
-  CheckKeyRangeAndLockForRead(Node *&node)
-  {
-    while (true) {
-      const auto ver = node->mutex_.GetVersion();
-
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        if (node->mutex_.TryLockS(ver)) return;
-        continue;
-      }
-
-      // go to the next node
-      auto *next = node->next_;
-      if (!node->mutex_.HasSameVersion(ver)) continue;
-
-      node = next;
-      if (node == nullptr) return;
+      auto ver = CheckKeyRange(node, key, is_closed);
+      if (node->mutex_.TryLockS(ver)) return;
+      continue;
     }
   }
 
@@ -726,24 +686,9 @@ class NodeVarLen
       const Key &key)
   {
     while (true) {
-      const auto ver = node->mutex_.GetVersion();
-
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        const auto &high_key = node->GetHighKey();
-        if (!high_key || !Comp{}(*high_key, key)) {
-          if (node->mutex_.TryLockSIX(ver)) return;
-          continue;
-        }
-      }
-
-      // go to the next node
-      auto *next = node->next_;
-      if (!node->mutex_.HasSameVersion(ver)) continue;
-
-      node = next;
-      if (node == nullptr) return;
+      auto ver = CheckKeyRange(node, key, kClosed);
+      if (node->mutex_.TryLockSIX(ver)) return;
+      continue;
     }
   }
 
@@ -755,14 +700,15 @@ class NodeVarLen
       -> NodeRC
   {
     while (true) {
-      auto ver = CheckKeyRange(node, key, kClosed);
-      auto pre_ver = ver;
+      const auto old_ver = CheckKeyRange(node, key, kClosed);
 
-      if (node->NeedSplit(new_rec_len, ver)) return kNeedRetry;
-      if (pre_ver != ver) continue;
+      auto [rc, ver] = node->CheckSMOs(new_rec_len);
+
+      if (rc == kNeedRetry) continue;
+      if (rc == kNeedSplit) return kNeedRetry;
 
       // if there is a space for a new record, acquire lock
-      if (!node->TryLockSIX(ver)) continue;  // retry on the leaf level
+      if (!node->TryLockSIX(old_ver)) continue;  // retry on the leaf level
 
       return kCompleted;
     }
