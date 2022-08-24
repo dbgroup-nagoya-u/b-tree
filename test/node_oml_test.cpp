@@ -111,8 +111,7 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockSIX();
-    return node_->Insert(key, kKeyLen, &payload, kPayLen);
+    return Node::Insert(node_, key, kKeyLen, &payload, kPayLen);
   }
 
   auto
@@ -120,15 +119,13 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    node_->LockSIX();
-    return node_->Update(key, &payload, kPayLen);
+    return Node::Update(node_, key, &payload, kPayLen);
   }
 
   auto
   Delete(const size_t key)
   {
-    node_->LockSIX();
-    return node_->Delete(key);
+    return Node::Delete(node_, key);
   }
 
   /*####################################################################################

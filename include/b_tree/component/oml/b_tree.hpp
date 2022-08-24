@@ -184,7 +184,7 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      const auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, key_len + kPayLen);
+      const auto rc = Node_t::CheckKeyRangeAndLockForWrite(node, key, key_len + kPayLen);
       if (rc == kNeedRetry) continue;
       node->Write(key, key_len, &payload, kPayLen);
       return kSuccess;
@@ -211,9 +211,8 @@ class BTree
 
     while (true) {
       auto *node = SearchLeafNodeForWrite(key);
-      auto rc = Node_t::CheckKeyRangeAndCheckSMOAndLockForWrite(node, key, key_len + kPayLen);
+      const auto rc = Node_t::Insert(node, key, key_len, &payload, kPayLen);
       if (rc == kNeedRetry) continue;
-      rc = node->Insert(key, key_len, &payload, kPayLen);
       return (rc == kCompleted) ? kSuccess : kKeyExist;
     }
   }
@@ -237,8 +236,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    const auto rc = node->Update(key, &payload, kPayLen);
+    const auto rc = Node_t::Update(node, key, &payload, kPayLen);
     return (rc == kCompleted) ? kSuccess : kKeyNotExist;
   }
 
@@ -259,8 +257,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    const auto rc = node->Delete(key);
+    const auto rc = Node_t::Delete(node, key);
     return (rc == kCompleted) ? kSuccess : kKeyNotExist;
   }
 
