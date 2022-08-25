@@ -167,7 +167,7 @@ class NodeFixture : public testing::Test
       const Payload payload,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
+    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
     auto rc = Update(key, payload);
 
     EXPECT_EQ(expected_rc, rc);
@@ -178,7 +178,7 @@ class NodeFixture : public testing::Test
       const Key key,
       const bool expect_success)
   {
-    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
+    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
     auto rc = Delete(key);
 
     EXPECT_EQ(expected_rc, rc);

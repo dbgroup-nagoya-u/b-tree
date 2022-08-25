@@ -123,30 +123,6 @@ class NodeVarLen
     return is_leaf_;
   }
 
-  [[nodiscard]] auto
-  CheckNodeStatus(const size_t new_rec_len)  //
-      -> std::pair<NodeRC, uint64_t>
-  {
-    NodeRC rc{};
-    uint64_t ver{};
-    while (true) {
-      ver = mutex_.GetVersion();
-
-      // check this node is not removed
-      if (is_removed_) {
-        if (!mutex_.HasSameVersion(ver)) continue;
-        rc = kNeedRetry;
-        break;
-      }
-
-      // check a certain SMO is needed
-      rc = CheckSMOs(new_rec_len, ver);
-      if (rc != kNeedRetry) break;
-    }
-
-    return {rc, ver};
-  }
-
   /**
    * @return the number of records in this node.
    */
@@ -197,6 +173,40 @@ class NodeVarLen
     return {node, ver};
   }
 
+  /**
+   * @brief
+   *
+   * @param new_rec_len the length of a new record.
+   * @retval 1st: kNeedSplit if this node requires splitting before modification.
+   * @retval 1st: kNeedMerge if this node requires splitting before modification.
+   * @retval 1st: kNeedRetry if this node is removed.
+   * @retval 1st: kCompleted otherwise.
+   * @retval 2nd: a version value for optimistic concurrency controls.
+   */
+  [[nodiscard]] auto
+  CheckNodeStatus(const size_t new_rec_len)  //
+      -> std::pair<NodeRC, uint64_t>
+  {
+    NodeRC rc{};
+    uint64_t ver{};
+    while (true) {
+      ver = mutex_.GetVersion();
+
+      // check this node is not removed
+      if (is_removed_) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        rc = kNeedRetry;
+        break;
+      }
+
+      // check a certain SMO is needed
+      rc = CheckSMOs(new_rec_len, ver);
+      if (rc != kNeedRetry) break;
+    }
+
+    return {rc, ver};
+  }
+
   /*####################################################################################
    * Public getters for records
    *##################################################################################*/
@@ -245,22 +255,6 @@ class NodeVarLen
 
       if (mutex_.HasSameVersion(ver)) return child;
     }
-  }
-
-  /**
-   * @brief Get a child node in a given position.
-   *
-   * The returned child node is locked with a shared lock and this node is unlocked.
-   *
-   * @param pos the position of a child node.
-   * @return the child node with a shared lock.
-   */
-  [[nodiscard]] constexpr auto
-  GetChild(const size_t pos)  //
-      -> Node *
-  {
-    auto *child = GetPayload<Node *>(pos);
-    return child;
   }
 
   /**
@@ -346,18 +340,22 @@ class NodeVarLen
    * @brief Release the shared lock for this node.
    *
    */
-  auto
-  UnlockS()  //
-      -> void
+  void
+  UnlockS()
   {
     mutex_.UnlockS();
   }
 
+  /**
+   * @brief Release the exclusive lock for this node.
+   *
+   * @return a version value after the exclusive lock is released.
+   */
   auto
   UnlockX()  //
-      -> void
+      -> uint64_t
   {
-    mutex_.UnlockX();
+    return mutex_.UnlockX();
   }
 
   /**
@@ -370,6 +368,11 @@ class NodeVarLen
     mutex_.LockSIX();
   }
 
+  /**
+   * @param ver an expected version value.
+   * @retval true if a shared lock with intent-exclusive locking is acquired.
+   * @retval false otherwise.
+   */
   auto
   TryLockSIX(const uint64_t ver)  //
       -> bool
@@ -398,7 +401,9 @@ class NodeVarLen
    * is greater than the specified key.
    *
    * @param key a search key.
-   * @retval 1st: record's existence.
+   * @retval 1st: kKeyAlreadyInserted if a record is found.
+   * @retval 1st: kKeyAlreadyDeleted if a found record is deleted.
+   * @retval 1st: kKeyNotInserted otherwise.
    * @retval 2nd: the searched position.
    */
   [[nodiscard]] auto
@@ -475,6 +480,19 @@ class NodeVarLen
     return child;
   }
 
+  /**
+   * @brief Get a child node of a specified key by using binary search.
+   *
+   * If there is no specified key in this node, this returns the minimum position that
+   * is greater than the specified key.
+   *
+   * @param key a search key.
+   * @param ver an expected version value.
+   * @param rec_len the length of a record to be inserted.
+   * @retval 1st: the position of a child node.
+   * @retval 2nd: nullptr if the key is out of range of this node.
+   * @retval 2nd: the child node that includes the key otherwise.
+   */
   [[nodiscard]] auto
   SearchChild(  //
       const Key &key,
@@ -538,7 +556,7 @@ class NodeVarLen
    * @param node a current node to be checked.
    * @param key a search key.
    * @param is_closed a flag for indicating closed-interval.
-   * @return a node whose key range includes the search key.
+   * @return a version value for optimistic concurrency controls.
    */
   [[nodiscard]] static auto
   CheckKeyRange(  //
@@ -584,7 +602,6 @@ class NodeVarLen
    * @param node a current node to be locked.
    * @param key a search key.
    * @param is_closed a flag for indicating closed-interval.
-   * @return a node whose key range includes the search key.
    */
   static void
   CheckKeyRangeAndLockForRead(  //
@@ -598,6 +615,17 @@ class NodeVarLen
     }
   }
 
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * This function acquires a shared lock with intent-exclusive locking for the node.
+   *
+   * @param node a current node to be locked.
+   * @param key a search key.
+   * @param new_rec_len the length of a new record.
+   * @retval kNeedRetry if splitting is required.
+   * @retval kCompleted otherwise.
+   */
   [[nodiscard]] static auto
   CheckKeyRangeAndLockForWrite(  //
       Node *&node,
@@ -628,8 +656,8 @@ class NodeVarLen
    * @tparam Payload a class of payload.
    * @param key a target key.
    * @param out_payload a reference to be stored a target payload.
-   * @retval kSuccess if a target record is read.
-   * @retval kKeyNotExist otherwise.
+   * @retval kCompleted if a target record is read.
+   * @retval kKeyNotInserted otherwise.
    */
   template <class Payload>
   static auto
@@ -703,8 +731,9 @@ class NodeVarLen
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
-   * @retval kSuccess if a key/payload pair is written.
-   * @retval kKeyExist otherwise.
+   * @retval kCompleted if a key/payload pair is written.
+   * @retval kNeedRetry if a leaf SMO is required.
+   * @retval kKeyAlreadyInserted otherwise.
    */
   static auto
   Insert(  //
@@ -764,7 +793,7 @@ class NodeVarLen
       const Key &key,
       const void *payload,
       const size_t pay_len)  //
-      -> NodeRC
+      -> ReturnCode
   {
     while (true) {
       const auto ver = CheckKeyRange(node, key, kClosed);
@@ -772,7 +801,7 @@ class NodeVarLen
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence != kKeyAlreadyInserted) {
-        if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
         continue;
       }
 
@@ -781,7 +810,7 @@ class NodeVarLen
 
       memcpy(node->GetPayloadAddr(node->meta_array_[pos]), payload, pay_len);
       node->mutex_.UnlockX();
-      return kCompleted;
+      return kSuccess;
     }
   }
 
@@ -800,7 +829,7 @@ class NodeVarLen
   Delete(  //
       Node *&node,
       const Key &key)  //
-      -> NodeRC
+      -> ReturnCode
   {
     while (true) {
       const auto ver = CheckKeyRange(node, key, kClosed);
@@ -808,7 +837,7 @@ class NodeVarLen
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence != kKeyAlreadyInserted) {
-        if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
         continue;
       }
 
@@ -818,7 +847,7 @@ class NodeVarLen
       node->meta_array_[pos].is_deleted = 1;
       node->deleted_size_ += node->meta_array_[pos].rec_len + kMetaLen;
       node->mutex_.UnlockX();
-      return kCompleted;
+      return kSuccess;
     }
   }
 
@@ -1185,8 +1214,10 @@ class NodeVarLen
 
   /**
    * @param new_rec_len the length of a new record.
-   * @retval true if this node requires splitting before inserting a new record.
-   * @retval false otherwise.
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedSplit if this node requires splitting.
+   * @retval kCompleted otherwise.
    */
   [[nodiscard]] auto
   NeedSplit(  //
@@ -1215,8 +1246,10 @@ class NodeVarLen
   }
 
   /**
-   * @retval true if this node requires merging.
-   * @retval false otherwise.
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedMerge if this node requires merging.
+   * @retval kCompleted otherwise.
    */
   [[nodiscard]] auto
   NeedMerge(uint64_t &ver)  //
@@ -1241,6 +1274,14 @@ class NodeVarLen
     return kCompleted;
   }
 
+  /**
+   * @param new_rec_len the length of a new record.
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedSplit if this node requires splitting.
+   * @retval kNeedMerge if this node requires merging.
+   * @retval kCompleted otherwise.
+   */
   [[nodiscard]] auto
   CheckSMOs(  //
       const size_t new_rec_len,

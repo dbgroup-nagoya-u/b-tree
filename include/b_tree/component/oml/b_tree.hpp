@@ -236,8 +236,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    const auto rc = Node_t::Update(node, key, &payload, kPayLen);
-    return (rc == kCompleted) ? kSuccess : kKeyNotExist;
+    return Node_t::Update(node, key, &payload, kPayLen);
   }
 
   /**
@@ -257,8 +256,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    const auto rc = Node_t::Delete(node, key);
-    return (rc == kCompleted) ? kSuccess : kKeyNotExist;
+    return Node_t::Delete(node, key);
   }
 
   /*####################################################################################
