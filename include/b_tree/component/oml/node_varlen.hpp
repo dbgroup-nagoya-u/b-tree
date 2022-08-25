@@ -123,13 +123,6 @@ class NodeVarLen
     return is_leaf_;
   }
 
-  [[nodiscard]] constexpr auto
-  IsRemoved() const  //
-      -> bool
-  {
-    return is_removed_;
-  }
-
   [[nodiscard]] auto
   CheckSMOs(const size_t new_rec_len)  //
       -> std::pair<NodeRC, uint64_t>
@@ -349,20 +342,6 @@ class NodeVarLen
    * Public lock management APIs
    *##################################################################################*/
 
-  auto
-  GetVersion()  //
-      -> uint64_t
-  {
-    return mutex_.GetVersion();
-  }
-
-  auto
-  HasSameVersion(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.HasSameVersion(ver);
-  }
-
   /**
    * @brief Acquire a shared lock for this node.
    *
@@ -374,17 +353,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Acquire a shared lock for this node if the version is same.
-   *
-   */
-  auto
-  TryLockS(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.TryLockS(ver);
-  }
-
-  /**
    * @brief Release the shared lock for this node.
    *
    */
@@ -393,26 +361,6 @@ class NodeVarLen
       -> void
   {
     mutex_.UnlockS();
-  }
-
-  auto
-  LockX()  //
-      -> void
-  {
-    mutex_.LockX();
-  }
-
-  auto
-  TryLockX(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.TryLockX(ver);
-  }
-
-  void
-  DowngradeToSIX()
-  {
-    mutex_.DowngradeToSIX();
   }
 
   auto
@@ -437,16 +385,6 @@ class NodeVarLen
       -> bool
   {
     return mutex_.TryLockSIX(ver);
-  }
-
-  /**
-   * @brief Upgrade the SIX lock to an exclusive lock for this node.
-   *
-   */
-  void
-  UpgradeToX()
-  {
-    mutex_.UpgradeToX();
   }
 
   /**
