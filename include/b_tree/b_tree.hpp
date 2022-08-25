@@ -21,6 +21,7 @@
 #include "utility.hpp"
 
 // actual B+tree implementations
+#include "component/oml/b_tree.hpp"
 #include "component/osl/b_tree.hpp"
 #include "component/pml/b_tree.hpp"
 #include "component/psl/b_tree.hpp"
@@ -57,7 +58,7 @@ class BTree
   using BTreePSL = component::psl::BTree<K, V, C, VAR>;
 
   template <class K, class V, class C, bool VAR>
-  using BTreeOML = component::pml::BTree<K, V, C, VAR>;
+  using BTreeOML = component::oml::BTree<K, V, C, VAR>;
 
   template <class K, class V, class C, bool VAR>
   using BTreeOSL = component::osl::BTree<K, V, C, VAR>;
