@@ -124,7 +124,7 @@ class NodeVarLen
   }
 
   [[nodiscard]] auto
-  CheckSMOs(const size_t new_rec_len)  //
+  CheckNodeStatus(const size_t new_rec_len)  //
       -> std::pair<NodeRC, uint64_t>
   {
     NodeRC rc{};
@@ -139,19 +139,9 @@ class NodeVarLen
         break;
       }
 
-      // check splitting is needed
-      rc = NeedSplit(new_rec_len, ver);
-      if (rc == kNeedRetry) continue;
-      if (rc == kNeedSplit) break;
-
-      // check merging is needed
-      rc = NeedMerge(ver);
-      if (rc == kNeedRetry) continue;
-      if (rc == kNeedMerge) break;
-
-      // SMOs are not required
-      rc = kCompleted;
-      break;
+      // check a certain SMO is needed
+      rc = CheckSMOs(new_rec_len, ver);
+      if (rc != kNeedRetry) break;
     }
 
     return {rc, ver};
@@ -510,7 +500,7 @@ class NodeVarLen
       }
 
       // check a current node status
-      const auto [rc, new_ver] = CheckSMOs(rec_len);
+      const auto [rc, new_ver] = CheckNodeStatus(rec_len);
       if (rc != kCompleted) return {0, nullptr};  // retry from a root node
 
       // this node is modified, but it may includes a target key
@@ -605,7 +595,6 @@ class NodeVarLen
     while (true) {
       auto ver = CheckKeyRange(node, key, is_closed);
       if (node->mutex_.TryLockS(ver)) return;
-      continue;
     }
   }
 
@@ -617,15 +606,13 @@ class NodeVarLen
       -> NodeRC
   {
     while (true) {
-      const auto old_ver = CheckKeyRange(node, key, kClosed);
-
-      auto [rc, ver] = node->CheckSMOs(new_rec_len);
-
+      auto ver = CheckKeyRange(node, key, kClosed);
+      const auto rc = node->CheckSMOs(new_rec_len, ver);
       if (rc == kNeedRetry) continue;
-      if (rc == kNeedSplit) return kNeedRetry;
+      if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
 
       // if there is a space for a new record, acquire lock
-      if (!node->TryLockSIX(old_ver)) continue;  // retry on the leaf level
+      if (!node->TryLockSIX(ver)) continue;  // retry on the leaf level
 
       return kCompleted;
     }
@@ -728,24 +715,23 @@ class NodeVarLen
       const size_t pay_len)  //
       -> NodeRC
   {
+    const auto rec_len = key_len + pay_len;
+
     while (true) {
-      const auto old_ver = CheckKeyRange(node, key, kClosed);
-
-      const auto [rc, new_ver] = node->CheckSMOs(key_len + pay_len);
-
-      if (rc == kNeedRetry) continue;
-      if (rc == kNeedSplit) return kNeedRetry;
+      auto ver = CheckKeyRange(node, key, kClosed);
+      const auto rc = node->CheckSMOs(rec_len, ver);
+      if (rc == kNeedRetry) continue;           // retry on the leaf level
+      if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
 
       // search position where this key has to be set
       const auto [existence, pos] = node->SearchRecord(key);
-
       if (existence == kKeyAlreadyInserted) {
-        if (node->HasSameVersion(old_ver)) return kKeyAlreadyInserted;
+        if (node->mutex_.HasSameVersion(ver)) return kKeyAlreadyInserted;
         continue;
       }
 
       // a target record does not exist, so try to acquire an exclusive lock
-      if (!node->TryLockX(old_ver)) continue;
+      if (!node->mutex_.TryLockX(ver)) continue;
 
       // perform insert operation if possible
       if (existence == kKeyNotInserted) {
@@ -1253,6 +1239,21 @@ class NodeVarLen
     CleanUp();
     ver = mutex_.UnlockX();
     return kCompleted;
+  }
+
+  [[nodiscard]] auto
+  CheckSMOs(  //
+      const size_t new_rec_len,
+      uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check splitting is needed
+    auto rc = NeedSplit(new_rec_len, ver);
+    if (rc != kCompleted) return rc;
+
+    // check merging is needed
+    rc = NeedMerge(ver);
+    return rc;
   }
 
   /*####################################################################################

@@ -420,7 +420,7 @@ class BTree
       auto *node = root_.load(std::memory_order_acquire);
 
       // check this tree requires SMOs
-      auto [rc, ver] = node->CheckSMOs(kMaxRecLen);
+      auto [rc, ver] = node->CheckNodeStatus(kMaxRecLen);
       if (rc == kNeedRetry) continue;  // a root node is removed
       if (rc == kNeedSplit) {
         if (!TryRootSplit(key, node, ver)) continue;
@@ -508,7 +508,7 @@ class BTree
       }
 
       // perform internal SMOs eagerly
-      auto [rc, child_ver] = child->CheckSMOs(kMaxRecLen);
+      auto [rc, child_ver] = child->CheckNodeStatus(kMaxRecLen);
       if (rc == kNeedRetry) continue;  // the child node was removed
       if (rc == kNeedSplit) {
         if (!TrySplit(key, child, child_ver, node, ver, pos)) continue;
