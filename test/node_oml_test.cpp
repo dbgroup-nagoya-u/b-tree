@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "b_tree/component/osl/node_fixlen.hpp"
-#include "b_tree/component/osl/node_varlen.hpp"
+// #include "b_tree/component/oml/node_fixlen.hpp"
+#include "b_tree/component/oml/node_varlen.hpp"
 
 // external libraries
 #include "gtest/gtest.h"
 
-namespace dbgroup::index::b_tree::component::osl::test
+namespace dbgroup::index::b_tree::component::oml::test
 {
 /*######################################################################################
  * Global constants
@@ -40,7 +40,7 @@ using Payload = uint64_t;
 using KeyComp = std::less<Key>;
 using PayloadComp = std::less<Payload>;
 using NodeVarLen_t = NodeVarLen<Key, KeyComp>;
-using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
+// using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
 
 /*######################################################################################
  * Fixture definitions
@@ -87,9 +87,9 @@ class NodeFixture : public testing::Test
       -> Node *
   {
     auto *node = new (::operator new(kPageSize)) Node{is_leaf};
-    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-      node->SetPayloadLength(kPayLen);
-    }
+    // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+    //   node->SetPayloadLength(kPayLen);
+    // }
     return node;
   }
 
@@ -111,11 +111,7 @@ class NodeFixture : public testing::Test
       const size_t key,
       const size_t payload)
   {
-    auto rc = Node::Insert(node_, key, kKeyLen, &payload, kPayLen);
-    if (rc == kNeedSplit) {
-      node_->UnlockSIX();
-    }
-    return rc;
+    return Node::Insert(node_, key, kKeyLen, &payload, kPayLen);
   }
 
   auto
@@ -129,11 +125,7 @@ class NodeFixture : public testing::Test
   auto
   Delete(const size_t key)
   {
-    auto rc = Node::Delete(node_, key);
-    if (rc == kNeedMerge) {
-      node_->UnlockSIX();
-    }
-    return rc;
+    return Node::Delete(node_, key);
   }
 
   /*####################################################################################
@@ -146,14 +138,14 @@ class NodeFixture : public testing::Test
       const Payload expected_val,
       const bool expect_success)
   {
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyNotInserted;
+
     Payload payload{};
     const auto rc = Node::Read(node_, key, payload);
 
+    EXPECT_EQ(expected_rc, rc);
     if (expect_success) {
-      EXPECT_EQ(kKeyAlreadyInserted, rc);
       EXPECT_EQ(expected_val, payload);
-    } else {
-      EXPECT_NE(kKeyAlreadyInserted, rc);
     }
   }
 
@@ -163,12 +155,10 @@ class NodeFixture : public testing::Test
       const Payload payload,
       const bool expect_success)
   {
+    const auto expected_rc = (expect_success) ? kCompleted : kKeyAlreadyInserted;
     auto rc = Insert(key, payload);
-    if (expect_success) {
-      EXPECT_NE(rc, kKeyAlreadyInserted);
-    } else {
-      EXPECT_EQ(rc, kKeyAlreadyInserted);
-    }
+
+    EXPECT_EQ(expected_rc, rc);
   }
 
   void
@@ -188,12 +178,10 @@ class NodeFixture : public testing::Test
       const Key key,
       const bool expect_success)
   {
+    const auto expected_rc = (expect_success) ? kSuccess : kKeyNotExist;
     auto rc = Delete(key);
-    if (expect_success) {
-      EXPECT_NE(rc, kKeyNotInserted);
-    } else {
-      EXPECT_EQ(rc, kKeyNotInserted);
-    }
+
+    EXPECT_EQ(expected_rc, rc);
   }
 
   /*####################################################################################
@@ -294,7 +282,8 @@ class NodeFixture : public testing::Test
     auto *r_node = CreateNode(kLeafFlag);
     node_->LockSIX();
     node_->Split(r_node);
-    node_->UnlockSIX();
+    node_->UnlockX();
+    r_node->UnlockX();
 
     // check the split nodes have the same number of records
     const auto l_count = node_->GetRecordCount();
@@ -330,9 +319,7 @@ class NodeFixture : public testing::Test
 
     // merge the two nodes
     node_->LockSIX();
-    r_node->LockSIX();
     node_->Merge(r_node);
-    node_->UnlockSIX();
     ::operator delete(r_node);
 
     // check the merged node has the written records
@@ -352,7 +339,10 @@ class NodeFixture : public testing::Test
  * Preparation for typed testing
  *####################################################################################*/
 
-using TestTargets = ::testing::Types<NodeVarLen_t, NodeFixLen_t>;
+using TestTargets = ::testing::Types<  //
+    NodeVarLen_t
+    // NodeFixLen_t
+    >;
 TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
 /*######################################################################################
@@ -371,4 +361,4 @@ TYPED_TEST(NodeFixture, SplitDivideWrittenRecordsIntoTwoNodes) { TestFixture::Te
 
 TYPED_TEST(NodeFixture, MergeTwoNodesIntoSingleNode) { TestFixture::TestMerge(); }
 
-}  // namespace dbgroup::index::b_tree::component::osl::test
+}  // namespace dbgroup::index::b_tree::component::oml::test

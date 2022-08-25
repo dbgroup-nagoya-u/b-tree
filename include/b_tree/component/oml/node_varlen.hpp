@@ -109,23 +109,6 @@ class NodeVarLen
   ~NodeVarLen() = default;
 
   /*####################################################################################
-   * new/delete operators
-   *##################################################################################*/
-
-  static auto
-  operator new([[maybe_unused]] std::size_t n)  //
-      -> void *
-  {
-    return ::operator new(kPageSize);
-  }
-
-  static void
-  operator delete(void *p) noexcept
-  {
-    ::operator delete(p);
-  }
-
-  /*####################################################################################
    * Public getters for header information
    *##################################################################################*/
 
@@ -140,87 +123,6 @@ class NodeVarLen
     return is_leaf_;
   }
 
-  [[nodiscard]] constexpr auto
-  IsRemoved() const  //
-      -> bool
-  {
-    return is_removed_;
-  }
-
-  [[nodiscard]] auto
-  NeedRetryInner(const Key key,             //
-                 const uint64_t ver) const  //
-      -> NodeRC
-  {
-    const auto &high_key = GetHighKey();
-    if (!mutex_.HasSameVersion(ver)) {
-      return kNeedRetry;
-    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
-      return kNeedRootRetry;
-    }
-    return kCompleted;
-  }
-
-  [[nodiscard]] auto
-  NeedRetryLeaf(const Key key,             //
-                const uint64_t ver) const  //
-      -> NodeRC
-  {
-    const auto &high_key = GetHighKey();
-    if (!mutex_.HasSameVersion(ver)) {
-      return kNeedRetry;
-    } else if (is_removed_ || (high_key && Comp{}(*high_key, key))) {
-      return kNeedNextRetry;
-    }
-    return kCompleted;
-  }
-
-  /**
-   * @param new_rec_len the length of a new record.
-   * @retval true if this node requires splitting before inserting a new record.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  NeedSplit(const size_t new_rec_len)  //
-      -> std::pair<bool, uint64_t>
-  {
-    const auto ver = mutex_.GetVersion();
-
-    // check whether the node has space for a new record
-    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
-    if (total_size <= kPageSize - kHeaderLen) return {false, ver};
-    if (total_size - deleted_size_ > kMaxUsedSpaceSize) return {true, ver};
-
-    // this node has enough space but cleaning up is required
-    if (mutex_.TryLockX(ver)) {
-      CleanUp();
-      mutex_.UnlockX();
-    }
-    return {false, ver};
-  }
-
-  /**
-   * @retval true if this node requires merging.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  NeedMerge()  //
-      -> std::pair<bool, uint64_t>
-  {
-    const auto ver = mutex_.GetVersion();
-
-    // check this node uses enough space
-    if (GetUsedSize() < kMinUsedSpaceSize) return {true, ver};
-    if (deleted_size_ <= kMaxDeletedSpaceSize) return {false, ver};
-
-    // this node has a lot of dead space
-    if (mutex_.TryLockX(ver)) {
-      CleanUp();
-      mutex_.UnlockX();
-    }
-    return {false, ver};
-  }
-
   /**
    * @return the number of records in this node.
    */
@@ -229,13 +131,6 @@ class NodeVarLen
       -> size_t
   {
     return record_count_;
-  }
-
-  [[nodiscard]] auto
-  GetNextNode()  //
-      -> std::pair<Node *, uint64_t>
-  {
-    return {next_, mutex_.GetVersion()};
   }
 
   /**
@@ -260,15 +155,56 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> Node *
+      -> std::pair<Node *, uint64_t>
   {
-    auto *node = this;
+    Node *node{};
+    uint64_t ver{};
     const auto &high_key = GetHighKey();
-    if (!high_key || Comp{}(*high_key, key)) {
+    if (Comp{}(*high_key, key)) {
       node = next_;
+      ver = next_->mutex_.UnlockX();
+      mutex_.UnlockX();
+    } else {
+      node = this;
+      next_->mutex_.UnlockX();
+      ver = mutex_.UnlockX();
     }
 
-    return node;
+    return {node, ver};
+  }
+
+  /**
+   * @brief
+   *
+   * @param new_rec_len the length of a new record.
+   * @retval 1st: kNeedSplit if this node requires splitting before modification.
+   * @retval 1st: kNeedMerge if this node requires splitting before modification.
+   * @retval 1st: kNeedRetry if this node is removed.
+   * @retval 1st: kCompleted otherwise.
+   * @retval 2nd: a version value for optimistic concurrency controls.
+   */
+  [[nodiscard]] auto
+  CheckNodeStatus(const size_t new_rec_len)  //
+      -> std::pair<NodeRC, uint64_t>
+  {
+    NodeRC rc{};
+    uint64_t ver{};
+    while (true) {
+      ver = mutex_.GetVersion();
+
+      // check this node is not removed
+      if (is_removed_) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        rc = kNeedRetry;
+        break;
+      }
+
+      // check a certain SMO is needed
+      rc = CheckSMOs(new_rec_len, ver);
+      if (rc != kNeedRetry) break;
+    }
+
+    return {rc, ver};
   }
 
   /*####################################################################################
@@ -300,19 +236,25 @@ class NodeVarLen
   }
 
   /**
-   * @brief Get a child node in a given position.
+   * @brief Get a leftmost child node.
    *
-   * The returned child node is locked with a shared lock and this node is unlocked.
-   *
-   * @param pos the position of a child node.
-   * @return the child node with a shared lock.
+   * @return the child node.
    */
-  [[nodiscard]] constexpr auto
-  GetChild(const size_t pos)  //
+  [[nodiscard]] auto
+  GetLeftmostChild() const  //
       -> Node *
   {
-    auto *child = GetPayload<Node *>(pos);
-    return child;
+    while (true) {
+      const auto ver = mutex_.GetVersion();
+
+      // check this node is not removed
+      Node *child = nullptr;
+      if (is_removed_ == 0) {
+        child = GetPayload<Node *>(0);
+      }
+
+      if (mutex_.HasSameVersion(ver)) return child;
+    }
   }
 
   /**
@@ -336,18 +278,18 @@ class NodeVarLen
     const auto r_pos = l_pos + 1;
     if (r_pos == record_count_) {
       // a rightmost node is cannot be merged
-      mutex_.UnlockX();
-      l_node->mutex_.UnlockX();
+      mutex_.UnlockSIX();
+      l_node->mutex_.UnlockSIX();
       return nullptr;
     }
 
     // check the right-sibling node has enough capacity for merging
     auto *r_node = GetPayload<Node *>(r_pos);
-    r_node->mutex_.LockX();
+    r_node->mutex_.LockSIX();
     if (l_node->GetUsedSize() + r_node->GetUsedSize() >= kMaxUsedSpaceSize) {
-      mutex_.UnlockX();
-      l_node->mutex_.UnlockX();
-      r_node->mutex_.UnlockX();
+      mutex_.UnlockSIX();
+      l_node->mutex_.UnlockSIX();
+      r_node->mutex_.UnlockSIX();
       return nullptr;
     }
 
@@ -384,27 +326,6 @@ class NodeVarLen
    * Public lock management APIs
    *##################################################################################*/
 
-  auto
-  GetVersion()  //
-      -> uint64_t
-  {
-    return mutex_.GetVersion();
-  }
-
-  auto
-  HasSameVersion(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.HasSameVersion(ver);
-  }
-
-  auto
-  TryLockX(const uint64_t ver)  //
-      -> bool
-  {
-    return mutex_.TryLockX(ver);
-  }
-
   /**
    * @brief Acquire a shared lock for this node.
    *
@@ -419,11 +340,22 @@ class NodeVarLen
    * @brief Release the shared lock for this node.
    *
    */
-  auto
-  UnlockS()  //
-      -> void
+  void
+  UnlockS()
   {
     mutex_.UnlockS();
+  }
+
+  /**
+   * @brief Release the exclusive lock for this node.
+   *
+   * @return a version value after the exclusive lock is released.
+   */
+  auto
+  UnlockX()  //
+      -> uint64_t
+  {
+    return mutex_.UnlockX();
   }
 
   /**
@@ -437,6 +369,18 @@ class NodeVarLen
   }
 
   /**
+   * @param ver an expected version value.
+   * @retval true if a shared lock with intent-exclusive locking is acquired.
+   * @retval false otherwise.
+   */
+  auto
+  TryLockSIX(const uint64_t ver)  //
+      -> bool
+  {
+    return mutex_.TryLockSIX(ver);
+  }
+
+  /**
    * @brief Release the shared lock with intent-exclusive locking for this node.
    *
    */
@@ -444,30 +388,6 @@ class NodeVarLen
   UnlockSIX()
   {
     mutex_.UnlockSIX();
-  }
-
-  /**
-   * @brief Upgrade the SIX lock to an exclusive lock for this node.
-   *
-   */
-  void
-  UpgradeToX()
-  {
-    mutex_.UpgradeToX();
-  }
-
-  auto
-  LockX()  //
-      -> void
-  {
-    mutex_.LockX();
-  }
-
-  auto
-  UnlockX()  //
-      -> void
-  {
-    mutex_.UnlockX();
   }
 
   /*####################################################################################
@@ -481,15 +401,19 @@ class NodeVarLen
    * is greater than the specified key.
    *
    * @param key a search key.
-   * @retval 1st: record's existence.
+   * @retval 1st: kKeyAlreadyInserted if a record is found.
+   * @retval 1st: kKeyAlreadyDeleted if a found record is deleted.
+   * @retval 1st: kKeyNotInserted otherwise.
    * @retval 2nd: the searched position.
    */
   [[nodiscard]] auto
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
+    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+
     int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1;
+    int64_t end_pos = record_count_ - 1 - inner_diff;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
@@ -498,10 +422,10 @@ class NodeVarLen
         end_pos = pos - 1;
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
-      } else if (meta_array_[pos].is_deleted) {
-        return {kKeyAlreadyDeleted, pos};
-      } else {
+      } else if (!meta_array_[pos].is_deleted) {
         return {kKeyAlreadyInserted, pos};
+      } else {
+        return {kKeyAlreadyDeleted, pos};
       }
     }
 
@@ -522,28 +446,84 @@ class NodeVarLen
   SearchChild(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::tuple<size_t, uint64_t>
+      -> Node *
   {
-    const auto ver = mutex_.GetVersion();
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
+    Node *child{};
+    while (true) {
+      const auto ver = mutex_.GetVersion();
 
-      const auto &index_key = GetKey(meta_array_[pos]);
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
+      // check the current node is not removed
+      if (is_removed_) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        child = nullptr;  // retry from a root node
         break;
       }
+
+      // check the current node has a target key
+      const auto &high_key = GetHighKey();
+      if (high_key && (Comp{}(*high_key, key) || (!is_closed && !Comp{}(key, *high_key)))) {
+        if (!mutex_.HasSameVersion(ver)) continue;
+        child = nullptr;  // retry from a root node
+        break;
+      }
+
+      // search a child node
+      auto [rc, pos] = SearchRecord(key);
+      if (!is_closed && rc == kKeyAlreadyInserted) {
+        ++pos;
+      }
+      child = GetPayload<Node *>(pos);
+
+      if (mutex_.HasSameVersion(ver)) break;
     }
 
-    return {begin_pos, ver};
+    return child;
+  }
+
+  /**
+   * @brief Get a child node of a specified key by using binary search.
+   *
+   * If there is no specified key in this node, this returns the minimum position that
+   * is greater than the specified key.
+   *
+   * @param key a search key.
+   * @param ver an expected version value.
+   * @param rec_len the length of a record to be inserted.
+   * @retval 1st: the position of a child node.
+   * @retval 2nd: nullptr if the key is out of range of this node.
+   * @retval 2nd: the child node that includes the key otherwise.
+   */
+  [[nodiscard]] auto
+  SearchChild(  //
+      const Key &key,
+      uint64_t &ver,
+      const size_t rec_len)  //
+      -> std::pair<size_t, Node *>
+  {
+    while (true) {
+      while (mutex_.HasSameVersion(ver)) {
+        // check the current node has a target key
+        const auto &high_key = GetHighKey();
+        if (high_key && Comp{}(*high_key, key)) {
+          if (!mutex_.HasSameVersion(ver)) break;
+          return {0, nullptr};  // retry from a root node
+        }
+
+        // search a child node
+        const auto pos = SearchRecord(key).second;
+        auto *child = GetPayload<Node *>(pos);
+
+        if (!mutex_.HasSameVersion(ver)) break;
+        return {pos, child};
+      }
+
+      // check a current node status
+      const auto [rc, new_ver] = CheckNodeStatus(rec_len);
+      if (rc != kCompleted) return {0, nullptr};  // retry from a root node
+
+      // this node is modified, but it may includes a target key
+      ver = new_ver;
+    }
   }
 
   /**
@@ -570,6 +550,102 @@ class NodeVarLen
     return {is_end, end_pos};
   }
 
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * @param node a current node to be checked.
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   * @return a version value for optimistic concurrency controls.
+   */
+  [[nodiscard]] static auto
+  CheckKeyRange(  //
+      Node *&node,
+      const Key &key,
+      const bool is_closed)  //
+      -> uint64_t
+  {
+    uint64_t ver{};
+    while (true) {
+      ver = node->mutex_.GetVersion();
+      const auto &high_key = node->GetHighKey();
+
+      // check the node is not removed
+      if (node->is_removed_ == 0) {
+        // check the node includes a target key
+        if (!high_key) {
+          if (node->mutex_.HasSameVersion(ver)) break;
+          continue;
+        }
+        if (Comp{}(key, *high_key) || (is_closed && !Comp{}(*high_key, key))) {
+          if (node->mutex_.HasSameVersion(ver)) break;
+          continue;
+        }
+      }
+
+      // go to the next node
+      auto *next = node->next_;
+      if (!node->mutex_.HasSameVersion(ver)) continue;
+
+      node = next;
+      if (node == nullptr) break;
+    }
+
+    return ver;
+  }
+
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * This function acquires a shared lock for a returned node.
+   *
+   * @param node a current node to be locked.
+   * @param key a search key.
+   * @param is_closed a flag for indicating closed-interval.
+   */
+  static void
+  CheckKeyRangeAndLockForRead(  //
+      Node *&node,
+      const Key &key,
+      const bool is_closed)
+  {
+    while (true) {
+      auto ver = CheckKeyRange(node, key, is_closed);
+      if (node->mutex_.TryLockS(ver)) return;
+    }
+  }
+
+  /**
+   * @brief Check the key range of a given node and traverse side links if needed.
+   *
+   * This function acquires a shared lock with intent-exclusive locking for the node.
+   *
+   * @param node a current node to be locked.
+   * @param key a search key.
+   * @param new_rec_len the length of a new record.
+   * @retval kNeedRetry if splitting is required.
+   * @retval kCompleted otherwise.
+   */
+  [[nodiscard]] static auto
+  CheckKeyRangeAndLockForWrite(  //
+      Node *&node,
+      const Key &key,
+      const size_t new_rec_len)  //
+      -> NodeRC
+  {
+    while (true) {
+      auto ver = CheckKeyRange(node, key, kClosed);
+      const auto rc = node->CheckSMOs(new_rec_len, ver);
+      if (rc == kNeedRetry) continue;
+      if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
+
+      // if there is a space for a new record, acquire lock
+      if (!node->TryLockSIX(ver)) continue;  // retry on the leaf level
+
+      return kCompleted;
+    }
+  }
+
   /*####################################################################################
    * Leaf read operations
    *##################################################################################*/
@@ -580,25 +656,28 @@ class NodeVarLen
    * @tparam Payload a class of payload.
    * @param key a target key.
    * @param out_payload a reference to be stored a target payload.
-   * @retval kSuccess if a target record is read.
-   * @retval kKeyNotExist otherwise.
+   * @retval kCompleted if a target record is read.
+   * @retval kKeyNotInserted otherwise.
    */
   template <class Payload>
-  auto
-  Read(  //
-      const Key &key,
-      Payload &out_payload)  //
-      -> ReturnCode
+  static auto
+  Read(Node *&node,
+       const Key &key,
+       Payload &out_payload)  //
+      -> NodeRC
   {
-    const auto [existence, pos] = SearchRecord(key);
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      const auto meta = meta_array_[pos];
-      memcpy(&out_payload, GetPayloadAddr(meta), sizeof(Payload));
-      rc = kSuccess;
-    }
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
 
-    return rc;
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        const auto meta = node->meta_array_[pos];
+        memcpy(&out_payload, node->GetPayloadAddr(meta), sizeof(Payload));
+        if (node->mutex_.HasSameVersion(ver)) return kCompleted;
+      }
+
+      if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
+    }
   }
 
   /*####################################################################################
@@ -627,6 +706,8 @@ class NodeVarLen
     // search position where this key has to be set
     const auto [rc, pos] = SearchRecord(key);
 
+    mutex_.UpgradeToX();
+
     // perform insert or update operation
     if (rc == kKeyNotInserted) {
       InsertRecord(key, key_len, payload, pay_len, pos);
@@ -650,32 +731,47 @@ class NodeVarLen
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
-   * @retval kSuccess if a key/payload pair is written.
-   * @retval kKeyExist otherwise.
+   * @retval kCompleted if a key/payload pair is written.
+   * @retval kNeedRetry if a leaf SMO is required.
+   * @retval kKeyAlreadyInserted otherwise.
    */
-  auto
+  static auto
   Insert(  //
+      Node *&node,
       const Key &key,
       const size_t key_len,
       const void *payload,
       const size_t pay_len)  //
-      -> ReturnCode
+      -> NodeRC
   {
-    // search position where this key has to be set
-    const auto [existence, pos] = SearchRecord(key);
+    const auto rec_len = key_len + pay_len;
 
-    // perform insert operation if possible
-    auto rc = kSuccess;
-    if (existence == kKeyNotInserted) {
-      InsertRecord(key, key_len, payload, pay_len, pos);
-    } else if (existence == kKeyAlreadyDeleted) {
-      ReuseRecord(payload, pay_len, pos);
-    } else {  // a target key has been inserted
-      rc = kKeyExist;
+    while (true) {
+      auto ver = CheckKeyRange(node, key, kClosed);
+      const auto rc = node->CheckSMOs(rec_len, ver);
+      if (rc == kNeedRetry) continue;           // retry on the leaf level
+      if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
+
+      // search position where this key has to be set
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyAlreadyInserted;
+        continue;
+      }
+
+      // a target record does not exist, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      // perform insert operation if possible
+      if (existence == kKeyNotInserted) {
+        node->InsertRecord(key, key_len, payload, pay_len, pos);
+      } else if (existence == kKeyAlreadyDeleted) {
+        node->ReuseRecord(payload, pay_len, pos);
+      }
+
+      node->mutex_.UnlockX();
+      return kCompleted;
     }
-
-    mutex_.UnlockX();
-    return rc;
   }
 
   /**
@@ -691,25 +787,31 @@ class NodeVarLen
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyNotExist otherwise.
    */
-  auto
+  static auto
   Update(  //
+      Node *&node,
       const Key &key,
       const void *payload,
       const size_t pay_len)  //
       -> ReturnCode
   {
-    // check this node has a target record
-    const auto [existence, pos] = SearchRecord(key);
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
 
-    // perform update operation if possible
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      memcpy(GetPayloadAddr(meta_array_[pos]), payload, pay_len);
-      rc = kSuccess;
+      // check this node has a target record
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence != kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+        continue;
+      }
+
+      // a target record exists, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      memcpy(node->GetPayloadAddr(node->meta_array_[pos]), payload, pay_len);
+      node->mutex_.UnlockX();
+      return kSuccess;
     }
-
-    mutex_.UnlockX();
-    return rc;
   }
 
   /**
@@ -723,23 +825,30 @@ class NodeVarLen
    * @retval kSuccess if a record is deleted.
    * @retval kKeyNotExist otherwise.
    */
-  auto
-  Delete(const Key &key)  //
+  static auto
+  Delete(  //
+      Node *&node,
+      const Key &key)  //
       -> ReturnCode
   {
-    // check this node has a target record
-    const auto [existence, pos] = SearchRecord(key);
+    while (true) {
+      const auto ver = CheckKeyRange(node, key, kClosed);
 
-    // perform update operation if possible
-    auto rc = kKeyNotExist;
-    if (existence == kKeyAlreadyInserted) {
-      meta_array_[pos].is_deleted = 1;
-      deleted_size_ += meta_array_[pos].rec_len + kMetaLen;
-      rc = kSuccess;
+      // check this node has a target record
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence != kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+        continue;
+      }
+
+      // a target record exists, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      node->meta_array_[pos].is_deleted = 1;
+      node->deleted_size_ += node->meta_array_[pos].rec_len + kMetaLen;
+      node->mutex_.UnlockX();
+      return kSuccess;
     }
-
-    mutex_.UnlockX();
-    return rc;
   }
 
   /**
@@ -755,6 +864,8 @@ class NodeVarLen
       const Node *r_node,
       const size_t pos)  //
   {
+    mutex_.UpgradeToX();
+
     // update a current pointer and prepare space for a left child
     memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
@@ -786,6 +897,8 @@ class NodeVarLen
       const size_t pos)  //
   {
     const auto del_rec_len = meta_array_[pos].rec_len;  // keep a record length to be deleted
+
+    mutex_.UpgradeToX();
 
     // delete a right child by shifting metadata
     memmove(&(meta_array_[pos]), &(meta_array_[pos + 1]), kMetaLen * (record_count_ - 1 - pos));
@@ -831,6 +944,7 @@ class NodeVarLen
     }
 
     // copy right half records to a right node
+    r_node->mutex_.LockX();
     auto r_offset = r_node->CopyHighKeyFrom(this);
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
@@ -839,6 +953,7 @@ class NodeVarLen
     r_node->next_ = next_;
 
     // update a header
+    mutex_.UpgradeToX();
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
@@ -850,8 +965,6 @@ class NodeVarLen
 
     // reset a temp node
     temp_node_->record_count_ = 0;
-
-    mutex_.UnlockX();
   }
 
   /**
@@ -859,20 +972,25 @@ class NodeVarLen
    *
    * @param r_node a right node to be merged.
    */
-  void
-  Merge(Node *r_node)
+  auto
+  Merge(Node *r_node)  //
+      -> uint64_t
   {
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
 
     // copy consolidated records to the original node
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
-    record_count_ = temp_node_->record_count_;
+    const auto rec_count = temp_node_->record_count_;
     if (!is_leaf_) {
       offset = temp_node_->CopyKeyFrom(this, high_meta_, offset);
       const auto key_len = high_meta_.key_len;
-      temp_node_->meta_array_[record_count_ - 1] = Metadata{offset, key_len, key_len + kPtrLen};
+      temp_node_->meta_array_[rec_count - 1] = Metadata{offset, key_len, key_len + kPtrLen};
     }
+
+    mutex_.UpgradeToX();
+
+    record_count_ = rec_count;
     memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
 
@@ -884,6 +1002,9 @@ class NodeVarLen
     deleted_size_ = 0;
     next_ = r_node->next_;
 
+    const auto new_ver = mutex_.UnlockX();
+    r_node->mutex_.UpgradeToX();
+
     // update a header of a right node
     r_node->is_removed_ = 1;
     r_node->next_ = this;
@@ -893,7 +1014,7 @@ class NodeVarLen
     // reset a temp node
     temp_node_->record_count_ = 0;
 
-    mutex_.UnlockX();
+    return new_ver;
   }
 
   /*####################################################################################
@@ -1011,10 +1132,26 @@ class NodeVarLen
     }
   }
 
-  void
-  SetRemoved()
+  /**
+   * @brief Remove this node from a tree and return a new root node.
+   *
+   * @return a new root node.
+   */
+  auto
+  RemoveRoot()  //
+      -> Node *
   {
+    mutex_.UpgradeToX();
+
+    // get a child node as a new root node
+    auto *child = GetPayload<Node *>(0);
+
+    // remove this node from a tree
     is_removed_ = 1;
+    next_ = nullptr;
+
+    mutex_.UnlockX();
+    return child;
   }
 
  private:
@@ -1073,6 +1210,91 @@ class NodeVarLen
   {
     if (high_meta_.key_len == 0) return std::nullopt;
     return GetKey(high_meta_);
+  }
+
+  /**
+   * @param new_rec_len the length of a new record.
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedSplit if this node requires splitting.
+   * @retval kCompleted otherwise.
+   */
+  [[nodiscard]] auto
+  NeedSplit(  //
+      const size_t new_rec_len,
+      uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check whether the node has space for a new record
+    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+    if (total_size <= kPageSize - kHeaderLen) {
+      if (mutex_.HasSameVersion(ver)) return kCompleted;
+      return kNeedRetry;
+    }
+
+    // check the node requires splitting
+    if (total_size - deleted_size_ > kMaxUsedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kNeedSplit;
+      return kNeedRetry;
+    }
+
+    // this node has enough space but cleaning up is required
+    if (!mutex_.TryLockX(ver)) return kNeedRetry;
+    CleanUp();
+    ver = mutex_.UnlockX();
+    return kCompleted;
+  }
+
+  /**
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedMerge if this node requires merging.
+   * @retval kCompleted otherwise.
+   */
+  [[nodiscard]] auto
+  NeedMerge(uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check this node uses enough space
+    if (GetUsedSize() < kMinUsedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kNeedMerge;
+      return kNeedRetry;
+    }
+
+    // check this node has a lot of dead space
+    if (deleted_size_ <= kMaxDeletedSpaceSize) {
+      if (mutex_.HasSameVersion(ver)) return kCompleted;
+      return kNeedRetry;
+    }
+
+    // this node has a lot of dead space
+    if (!mutex_.TryLockX(ver)) return kNeedRetry;
+    CleanUp();
+    ver = mutex_.UnlockX();
+    return kCompleted;
+  }
+
+  /**
+   * @param new_rec_len the length of a new record.
+   * @param ver an expected version value.
+   * @retval kNeedRetry if a version check fails.
+   * @retval kNeedSplit if this node requires splitting.
+   * @retval kNeedMerge if this node requires merging.
+   * @retval kCompleted otherwise.
+   */
+  [[nodiscard]] auto
+  CheckSMOs(  //
+      const size_t new_rec_len,
+      uint64_t &ver)  //
+      -> NodeRC
+  {
+    // check splitting is needed
+    auto rc = NeedSplit(new_rec_len, ver);
+    if (rc != kCompleted) return rc;
+
+    // check merging is needed
+    rc = NeedMerge(ver);
+    return rc;
   }
 
   /*####################################################################################
@@ -1408,8 +1630,8 @@ class NodeVarLen
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node>          //
+      temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
 };
 
 }  // namespace dbgroup::index::b_tree::component::oml

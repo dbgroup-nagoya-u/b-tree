@@ -79,7 +79,7 @@ class BTree
       const size_t gc_thread_num)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
-    auto *root = new Node_t{kLeafFlag};
+    auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kIsVarLen) {
       root->SetPayloadLength(kPayLen);
     }
@@ -122,25 +122,11 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto &&[node, ver] = SearchLeafNodeForRead(key, kClosed);
-
+    auto *node = SearchLeafNodeForRead(key, kClosed);
     Payload payload{};
-    while (true) {
-      const auto rc = node->Read(key, payload);
-      const auto retry_rc = node->NeedRetryLeaf(key, ver);
-
-      if (retry_rc == kNeedNextRetry) {
-        const auto [next_node, new_ver] = node->GetNextNode();
-        if (new_ver == ver) {
-          node = next_node;
-        }
-      } else if (retry_rc == kCompleted) {
-        if (rc == kSuccess) return payload;
-        return std::nullopt;
-      } else {
-        ver = node->GetVersion();
-      }
-    }
+    const auto rc = Node_t::Read(node, key, payload);
+    if (rc == kCompleted) return payload;
+    return std::nullopt;
   }
 
   /**
@@ -163,8 +149,8 @@ class BTree
 
     if (begin_key) {
       const auto &[key, is_closed] = begin_key.value();
-      node = SearchLeafNodeForRead(key, is_closed).first;
-      node->LockS();
+      node = SearchLeafNodeForRead(key, is_closed);
+      Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -196,9 +182,13 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    node->Write(key, key_len, &payload, kPayLen);
-    return kSuccess;
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      const auto rc = Node_t::CheckKeyRangeAndLockForWrite(node, key, key_len + kPayLen);
+      if (rc == kNeedRetry) continue;
+      node->Write(key, key_len, &payload, kPayLen);
+      return kSuccess;
+    }
   }
 
   /**
@@ -219,8 +209,12 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForWrite(key);
-    return node->Insert(key, key_len, &payload, kPayLen);
+    while (true) {
+      auto *node = SearchLeafNodeForWrite(key);
+      const auto rc = Node_t::Insert(node, key, key_len, &payload, kPayLen);
+      if (rc == kNeedRetry) continue;
+      return (rc == kCompleted) ? kSuccess : kKeyExist;
+    }
   }
 
   /**
@@ -242,7 +236,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Update(key, &payload, kPayLen);
+    return Node_t::Update(node, key, &payload, kPayLen);
   }
 
   /**
@@ -262,7 +256,7 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNodeForWrite(key);
-    return node->Delete(key);
+    return Node_t::Delete(node, key);
   }
 
   /*####################################################################################
@@ -356,18 +350,6 @@ class BTree
    * Internal constants
    *##################################################################################*/
 
-  /// an expected maximum height of a tree.
-  static constexpr size_t kExpectedTreeHeight = 8;
-
-  /// a flag for indicating leaf nodes.
-  static constexpr uint32_t kLeafFlag = 1;
-
-  /// a flag for indicating closed-interval
-  static constexpr bool kClosed = true;
-
-  /// a flag for indicating delete operations
-  static constexpr bool kDelOps = true;
-
   /// the length of payloads.
   static constexpr size_t kPayLen = sizeof(Payload);
 
@@ -430,28 +412,23 @@ class BTree
    */
   [[nodiscard]] auto
   GetRootForWrite(const Key &key)  //
-      -> Node_t *
+      -> std::pair<Node_t *, uint64_t>
   {
-    Node_t *node;
     while (true) {
-      node = root_.load(std::memory_order_acquire);
+      auto *node = root_.load(std::memory_order_acquire);
 
       // check this tree requires SMOs
-      auto rc = ShrinkTreeIfNeeded(node);
-      if (rc == kNeedRootRetry) {
-        continue;
+      auto [rc, ver] = node->CheckNodeStatus(kMaxRecLen);
+      if (rc == kNeedRetry) continue;  // a root node is removed
+      if (rc == kNeedSplit) {
+        if (!TryRootSplit(key, node, ver)) continue;
+        // a valid child node and its version value are selected in TryRootSplit
+      } else if (rc == kNeedMerge) {
+        if (!TryShrinkTree(node, ver)) continue;  // retry to get a new root node
       }
 
-      node = root_.load(std::memory_order_acquire);
-      auto [next_node, next_rc] = RootSplit(node, key);
-      if (next_rc == kNeedRootRetry) {
-        continue;
-      }
-      node = next_node;
-      break;
+      return {node, ver};
     }
-
-    return node;
   }
 
   /**
@@ -468,25 +445,18 @@ class BTree
   SearchLeafNodeForRead(  //
       const Key &key,
       const bool is_closed)  //
-      -> std::pair<Node_t *, uint64_t>
+      -> Node_t *
   {
-    while (true) {  // for root retry
-      auto *node = root_.load(std::memory_order_acquire);
-      while (!node->IsLeaf()) {
-        const auto [pos, ver] = node->SearchChild(key, is_closed);
-        auto *child = node->GetChild(pos);
-        const auto rc = node->NeedRetryInner(key, ver);
-        if (rc == kNeedRetry) {
-          continue;
-        } else if (rc == kNeedRootRetry) {
-          break;
-        } else {
-          node = child;
-        }
+    auto *node = root_.load(std::memory_order_acquire);
+    while (!node->IsLeaf()) {
+      auto *child = node->SearchChild(key, is_closed);
+      if (child == nullptr) {
+        node = root_.load(std::memory_order_acquire);
+        continue;
       }
-      const auto ver = node->GetVersion();
-      return {node, ver};
+      node = child;
     }
+    return node;
   }
 
   /**
@@ -503,9 +473,13 @@ class BTree
   {
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      node = node->GetChild(0);
+      node = node->GetLeftmostChild();
+      if (node == nullptr) {
+        node = root_.load(std::memory_order_acquire);
+      }
     }
     node->LockS();
+
     return node;
   }
 
@@ -523,56 +497,30 @@ class BTree
   SearchLeafNodeForWrite(const Key &key)  //
       -> Node_t *
   {
-    Node_t *node;
-    while (true) {
-      node = GetRootForWrite(key);
-      while (!node->IsLeaf()) {
-        // search a child node
-        const auto [pos, ver] = node->SearchChild(key, kClosed);
-        auto *child = node->GetChild(pos);
-        const auto rc = node->NeedRetryInner(key, ver);
-        if (rc == kNeedRetry) {
-          continue;
-        } else if (rc == kNeedRootRetry) {
-          break;
-        }
-
-        // perform internal SMOs eagerly
-        auto retry_rc = CheckSMO(node, child, ver, true);  // check split
-        if (retry_rc == kNeedRetry) {
-          continue;
-        } else if (retry_rc == kNeedSplit) {
-          Split(child, node, pos);
-          node = child->GetValidSplitNode(key);
-          continue;
-        }
-
-        retry_rc = CheckSMO(node, child, ver, false);  // check merge
-        if (retry_rc == kNeedRetry) {
-          continue;
-        } else if (retry_rc == kNeedMerge) {
-          Merge(child, node, pos);
-        }
-
-        node = child;
-      }
-      break;
-    }
-
-    // search for a valid node in leaf nodes
-    while (true) {
-      const auto ver = node->GetVersion();
-      const auto retry_rc = node->NeedRetryLeaf(key, ver);
-      if (retry_rc == kCompleted) {
-        if (node->TryLockX(ver)) {
-          break;
-        }
-      } else if (retry_rc == kNeedRetry) {
+    auto [node, ver] = GetRootForWrite(key);
+    while (!node->IsLeaf()) {
+      auto [pos, child] = node->SearchChild(key, ver, kMaxRecLen);
+      if (child == nullptr) {
+        std::tie(node, ver) = GetRootForWrite(key);
         continue;
-      } else {
-        node = node->GetValidSplitNode(key);
       }
+
+      // perform internal SMOs eagerly
+      auto [rc, child_ver] = child->CheckNodeStatus(kMaxRecLen);
+      if (rc == kNeedRetry) continue;  // the child node was removed
+      if (rc == kNeedSplit) {
+        if (!TrySplit(key, child, child_ver, node, ver, pos)) continue;
+        // a valid child node and its version value are selected in TrySplit
+      } else if (rc == kNeedMerge) {
+        if (!TryMerge(child, child_ver, node, ver, pos)) continue;
+        // a valid version value is selected in TryMerge
+      }
+
+      // go down to the next level
+      node = child;
+      ver = child_ver;
     }
+
     return node;
   }
 
@@ -597,34 +545,6 @@ class BTree
     ::operator delete(node);
   }
 
-  [[nodiscard]] auto
-  CheckSMO(Node_t *parent,
-           Node_t *child,
-           const uint64_t parent_ver,
-           const bool is_split)  //
-      -> NodeRC
-  {
-    while (true) {
-      auto [should_smo, child_ver] = (is_split) ? child->NeedSplit(kMaxRecLen) : child->NeedMerge();
-      if (!should_smo) {
-        if (!child->HasSameVersion(child_ver)) {
-          continue;
-        } else {
-          return kCompleted;
-        }
-      } else {
-        if (!parent->TryLockX(parent_ver)) {
-          return kNeedRetry;
-        }
-        if (!child->TryLockX(child_ver)) {
-          parent->UnlockX();
-          return kNeedRetry;
-        }
-        return (is_split) ? kNeedSplit : kNeedMerge;
-      }
-    }
-  }
-
   /*####################################################################################
    * Internal structure modification operations
    *##################################################################################*/
@@ -636,15 +556,31 @@ class BTree
    * @param parent a parent node of `l_node`.
    * @param pos the position of `l_node` in its parent node.
    */
-  void
-  Split(  //
-      Node_t *l_node,
+  auto
+  TrySplit(  //
+      const Key &key,
+      Node_t *&child,
+      uint64_t &c_ver,
       Node_t *parent,
+      uint64_t p_ver,
       const size_t pos)  //
+      -> bool
   {
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    // try to acquire locks
+    if (!parent->TryLockSIX(p_ver)) return false;
+    if (!child->TryLockSIX(c_ver)) {
+      parent->UnlockSIX();
+      return false;
+    }
+
+    // perform splitting
+    auto *l_node = child;
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
+    std::tie(child, c_ver) = l_node->GetValidSplitNode(key);
     parent->InsertChild(l_node, r_node, pos);
+
+    return true;
   }
 
   /**
@@ -653,36 +589,32 @@ class BTree
    * @param key a search key.
    * @return one of the split child nodes that includes a given key.
    */
-  [[nodiscard]] auto  //
-  RootSplit(Node_t *node,
-            const Key &key)  //
-      -> std::pair<Node_t *, NodeRC>
+  [[nodiscard]] auto
+  TryRootSplit(  //
+      const Key &key,
+      Node_t *&node,
+      uint64_t &ver)  //
+      -> bool
   {
-    while (true) {
-      auto [need_split, ver] = node->NeedSplit(kMaxRecLen);
-      if (!need_split) {
-        if (!node->HasSameVersion(ver)) {
-          continue;
-        } else {
-          return {node, kCompleted};
-        }
-      } else {
-        if (!node->TryLockX(ver)) {
-          continue;
-        }
-        if (node != root_) {
-          node->UnlockX();
-          return {nullptr, kNeedRootRetry};
-        } else {
-          auto *l_node = node;
-          auto *r_node = new Node_t{l_node->IsLeaf()};
-          l_node->Split(r_node);
-          auto *new_root = new Node_t{l_node, r_node};
-          root_.store(new_root, std::memory_order_release);
-          return {l_node->GetValidSplitNode(key), kCompleted};
-        }
-      }
+    // try to acquire a lock and check the given node is a root node
+    if (!node->TryLockSIX(ver)) return false;
+    if (node != root_.load(std::memory_order_relaxed)) {
+      // other threads modified a root node
+      node->UnlockSIX();
+      return false;
     }
+
+    // perform splitting the root node
+    auto *l_node = node;
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+    l_node->Split(r_node);
+
+    // install a new root node
+    auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
+    root_.store(new_root, std::memory_order_release);
+
+    std::tie(node, ver) = l_node->GetValidSplitNode(key);
+    return true;
   }
 
   /**
@@ -692,20 +624,32 @@ class BTree
    * @param parent a parent node of `l_node`.
    * @param pos the position of `l_node` in its parent node.
    */
-  void
-  Merge(  //
+  auto
+  TryMerge(  //
       Node_t *l_node,
+      uint64_t &c_ver,
       Node_t *parent,
-      const size_t l_pos)
+      uint64_t p_ver,
+      const size_t l_pos)  //
+      -> bool
   {
+    // try to acquire locks
+    if (!parent->TryLockSIX(p_ver)) return false;
+    if (!l_node->TryLockSIX(c_ver)) {
+      parent->UnlockSIX();
+      return false;
+    }
+
     // check there is a mergeable sibling node
     auto *r_node = parent->GetMergeableRightChild(l_node, l_pos);
-    if (r_node == nullptr) return;
+    if (r_node == nullptr) return true;
 
     // perform merging
-    l_node->Merge(r_node);
+    c_ver = l_node->Merge(r_node);
     parent->DeleteChild(l_node, l_pos);
     gc_.AddGarbage(r_node);
+
+    return true;
   }
 
   /**
@@ -713,32 +657,26 @@ class BTree
    *
    */
   auto
-  ShrinkTreeIfNeeded(Node_t *node)  //
-      -> NodeRC
+  TryShrinkTree(  //
+      Node_t *node,
+      uint64_t ver)  //
+      -> bool
   {
-    while (true) {
-      auto ver = node->GetVersion();
-      if (node->GetRecordCount() == 1 && !node->IsLeaf()) {
-        // if a root node has only one child, shrink a tree
-        auto *child = node->template GetPayload<Node_t *>(0);
+    if (node->GetRecordCount() > 1 || node->IsLeaf()) return true;
 
-        if (!node->TryLockX(ver)) {
-          continue;
-        }
-        if (node != root_) {  // if the root node has been moved by another thread
-          node->UnlockX();
-          return kNeedRootRetry;
-        } else {
-          node->SetRemoved();
-          gc_.AddGarbage(node);
-          node->UnlockX();
-          node = child;
-          root_.store(node, std::memory_order_relaxed);
-        }
-      } else {
-        return kCompleted;
-      }
+    // if a internal-root node has only one child, try to shrink a tree
+    if (!node->TryLockSIX(ver)) return false;
+    if (node != root_.load(std::memory_order_relaxed)) {
+      node->UnlockSIX();
+      return false;
     }
+
+    // remove the root node
+    gc_.AddGarbage(node);
+    node = node->RemoveRoot();
+    root_.store(node, std::memory_order_release);
+
+    return false;
   }
 
   /*####################################################################################
@@ -773,7 +711,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{true};
+      auto *node = new (GetNodePage()) Node_t{true};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -810,7 +748,7 @@ class BTree
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      auto *node = new Node_t{false};
+      auto *node = new (GetNodePage()) Node_t{false};
       node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
     }
@@ -834,7 +772,7 @@ class BTree
   GC_t gc_{};
 
   /// a root node of this tree.
-  std::atomic<Node_t *> root_ = new Node_t{kLeafFlag};
+  std::atomic<Node_t *> root_{nullptr};
 };
 }  // namespace dbgroup::index::b_tree::component::oml
 
