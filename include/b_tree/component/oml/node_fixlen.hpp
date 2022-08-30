@@ -148,12 +148,12 @@ class NodeFixLen
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> std::pair<Node *, uint64_t>
+      -> std::tuple<Node *, Key, size_t, uint64_t>
   {
     Node *node{};
     uint64_t ver{};
-    const auto &high_key = GetHighKey();
-    if (Comp{}(high_key, key)) {
+    const auto &sep_key = GetHighKey();
+    if (Comp{}(sep_key, key)) {
       node = next_;
       ver = next_->mutex_.UnlockX();
       mutex_.UnlockX();
@@ -163,7 +163,7 @@ class NodeFixLen
       ver = mutex_.UnlockX();
     }
 
-    return {node, ver};
+    return {node, sep_key, kKeyLen, ver};
   }
 
   /**
@@ -860,12 +860,16 @@ class NodeFixLen
    *
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
+   * @param sep_key a separator key.
+   * @param sep_key_len the length of the separator key.
    * @param pos the position of the left child node.
    */
   void
   InsertChild(  //
-      const Node *l_node,
+      [[maybe_unused]] const Node *l_node,
       const Node *r_node,
+      const Key &sep_key,
+      [[maybe_unused]] const size_t sep_key_len,
       const size_t pos)  //
   {
     // insert a right child
@@ -879,7 +883,7 @@ class NodeFixLen
 
     // insert a separator key
     memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
-    keys_[pos] = l_node->GetHighKey();
+    keys_[pos] = sep_key;
 
     // update header information
     ++record_count_;
