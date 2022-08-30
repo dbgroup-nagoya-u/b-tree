@@ -577,8 +577,8 @@ class BTree
     auto *l_node = child;
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
-    std::tie(child, c_ver) = l_node->GetValidSplitNode(key);
     parent->InsertChild(l_node, r_node, pos);
+    std::tie(child, c_ver) = l_node->GetValidSplitNode(key);
 
     return true;
   }
