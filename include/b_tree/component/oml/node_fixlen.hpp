@@ -152,7 +152,7 @@ class NodeFixLen
   {
     Node *node{};
     uint64_t ver{};
-    const auto &sep_key = GetHighKey();
+    const auto sep_key = GetHighKey();
     if (Comp{}(sep_key, key)) {
       node = next_;
       ver = next_->mutex_.UnlockX();
