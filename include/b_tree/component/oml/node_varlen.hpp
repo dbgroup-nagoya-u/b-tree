@@ -159,9 +159,9 @@ class NodeVarLen
   {
     Node *node{};
     uint64_t ver{};
-    const auto &sep_key = GetHighKey();
-    const auto sep_key_len = high_meta_.key_len;
-    if (Comp{}(*sep_key, key)) {
+    const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
+
+    if (Comp{}(sep_key, key)) {
       node = next_;
       ver = next_->mutex_.UnlockX();
       mutex_.UnlockX();
@@ -171,7 +171,7 @@ class NodeVarLen
       ver = mutex_.UnlockX();
     }
 
-    return {node, *sep_key, sep_key_len, ver};
+    return {node, sep_key, sep_key_len, ver};
   }
 
   /**
@@ -206,6 +206,25 @@ class NodeVarLen
     }
 
     return {rc, ver};
+  }
+
+  /**
+   * @retval 1st: a highest key.
+   * @retval 2nd: the length of the highest key.
+   */
+  [[nodiscard]] auto
+  GetHighKeyForSMOs() const  //
+      -> std::pair<Key, size_t>
+  {
+    const auto h_key_len = high_meta_.key_len;
+    if constexpr (IsVarLenData<Key>()) {
+      // allocate space dynamically to keep a copied key
+      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len));
+      memcpy(h_key, GetKeyAddr(high_meta_), h_key_len);
+      return {h_key, h_key_len};
+    } else {
+      return {*GetHighKey(), h_key_len};
+    }
   }
 
   /*####################################################################################

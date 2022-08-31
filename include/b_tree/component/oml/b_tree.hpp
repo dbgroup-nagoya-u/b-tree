@@ -577,9 +577,9 @@ class BTree
     auto *l_node = child;
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
-    Key sep_key{};
-    size_t sep_key_len{};
-    std::tie(child, sep_key, sep_key_len, c_ver) = l_node->GetValidSplitNode(key);
+    auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key);
+    child = new_child;
+    c_ver = new_c_ver;
     parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
 
     return true;
@@ -614,9 +614,9 @@ class BTree
     // install a new root node
     auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
     root_.store(new_root, std::memory_order_release);
-    Key sep_key{};
-    size_t sep_key_len{};
-    std::tie(node, sep_key, sep_key_len, ver) = l_node->GetValidSplitNode(key);
+    auto &&[new_node, sep_key, sep_key_len, new_ver] = l_node->GetValidSplitNode(key);
+    node = new_node;
+    ver = new_ver;
     return true;
   }
 

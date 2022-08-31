@@ -163,7 +163,7 @@ class NodeFixLen
       ver = mutex_.UnlockX();
     }
 
-    return {node, sep_key, kKeyLen, ver};
+    return {node, std::move(sep_key), kKeyLen, ver};
   }
 
   /**
