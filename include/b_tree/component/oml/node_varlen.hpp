@@ -155,12 +155,13 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> std::pair<Node *, uint64_t>
+      -> std::tuple<Node *, Key, size_t, uint64_t>
   {
     Node *node{};
     uint64_t ver{};
-    const auto &high_key = GetHighKey();
-    if (Comp{}(*high_key, key)) {
+    const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
+
+    if (Comp{}(sep_key, key)) {
       node = next_;
       ver = next_->mutex_.UnlockX();
       mutex_.UnlockX();
@@ -170,7 +171,7 @@ class NodeVarLen
       ver = mutex_.UnlockX();
     }
 
-    return {node, ver};
+    return {node, sep_key, sep_key_len, ver};
   }
 
   /**
@@ -205,6 +206,25 @@ class NodeVarLen
     }
 
     return {rc, ver};
+  }
+
+  /**
+   * @retval 1st: a highest key.
+   * @retval 2nd: the length of the highest key.
+   */
+  [[nodiscard]] auto
+  GetHighKeyForSMOs() const  //
+      -> std::pair<Key, size_t>
+  {
+    const auto h_key_len = high_meta_.key_len;
+    if constexpr (IsVarLenData<Key>()) {
+      // allocate space dynamically to keep a copied key
+      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len));
+      memcpy(h_key, GetKeyAddr(high_meta_), h_key_len);
+      return {h_key, h_key_len};
+    } else {
+      return {*GetHighKey(), h_key_len};
+    }
   }
 
   /*####################################################################################
@@ -856,12 +876,16 @@ class NodeVarLen
    *
    * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
+   * @param sep_key a separator key.
+   * @param sep_key_len the length of the separator key.
    * @param pos the position of the left child node.
    */
   void
   InsertChild(  //
       const Node *l_node,
       const Node *r_node,
+      const Key &sep_key,
+      const size_t sep_key_len,
       const size_t pos)  //
   {
     mutex_.UpgradeToX();
@@ -871,12 +895,10 @@ class NodeVarLen
     memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
 
     // insert a left child
-    const auto l_high_meta = l_node->high_meta_;
-    const auto key_len = l_high_meta.key_len;
-    const auto rec_len = key_len + kPtrLen;
+    const auto rec_len = sep_key_len + kPtrLen;
     auto offset = SetPayload(kPageSize - block_size_, &l_node, kPtrLen);
-    offset = CopyKeyFrom(l_node, l_high_meta, offset);
-    meta_array_[pos] = Metadata{offset, key_len, rec_len};
+    offset = SetKey(offset, sep_key, sep_key_len);
+    meta_array_[pos] = Metadata{offset, sep_key_len, rec_len};
 
     // update header information
     ++record_count_;

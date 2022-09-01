@@ -27,7 +27,7 @@
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
-// #include "node_fixlen.hpp"
+#include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::oml
@@ -53,7 +53,7 @@ class BTree
   using K = Key;
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
-  using NodeFixLen_t = NodeVarLen<Key, Comp>;  // NodeFixLen<Key, Comp>;
+  using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
@@ -577,9 +577,14 @@ class BTree
     auto *l_node = child;
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
-    std::tie(child, c_ver) = l_node->GetValidSplitNode(key);
-    parent->InsertChild(l_node, r_node, pos);
+    auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key);
+    parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
+    if constexpr (IsVarLenData<Key>()) {
+      ::operator delete(sep_key);
+    }
 
+    child = new_child;
+    c_ver = new_c_ver;
     return true;
   }
 
@@ -612,8 +617,12 @@ class BTree
     // install a new root node
     auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
     root_.store(new_root, std::memory_order_release);
-
-    std::tie(node, ver) = l_node->GetValidSplitNode(key);
+    auto &&[new_node, sep_key, sep_key_len, new_ver] = l_node->GetValidSplitNode(key);
+    if constexpr (IsVarLenData<Key>()) {
+      ::operator delete(sep_key);
+    }
+    node = new_node;
+    ver = new_ver;
     return true;
   }
 

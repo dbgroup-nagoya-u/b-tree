@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// #include "b_tree/component/oml/node_fixlen.hpp"
+#include "b_tree/component/oml/node_fixlen.hpp"
 #include "b_tree/component/oml/node_varlen.hpp"
 
 // external libraries
@@ -40,7 +40,7 @@ using Payload = uint64_t;
 using KeyComp = std::less<Key>;
 using PayloadComp = std::less<Payload>;
 using NodeVarLen_t = NodeVarLen<Key, KeyComp>;
-// using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
+using NodeFixLen_t = NodeFixLen<Key, KeyComp>;
 
 /*######################################################################################
  * Fixture definitions
@@ -87,9 +87,9 @@ class NodeFixture : public testing::Test
       -> Node *
   {
     auto *node = new (::operator new(kPageSize)) Node{is_leaf};
-    // if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
-    //   node->SetPayloadLength(kPayLen);
-    // }
+    if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
+      node->SetPayloadLength(kPayLen);
+    }
     return node;
   }
 
@@ -340,9 +340,8 @@ class NodeFixture : public testing::Test
  *####################################################################################*/
 
 using TestTargets = ::testing::Types<  //
-    NodeVarLen_t
-    // NodeFixLen_t
-    >;
+    NodeVarLen_t,
+    NodeFixLen_t>;
 TYPED_TEST_SUITE(NodeFixture, TestTargets);
 
 /*######################################################################################
