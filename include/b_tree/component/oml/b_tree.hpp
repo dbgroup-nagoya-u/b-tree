@@ -578,10 +578,13 @@ class BTree
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key);
+    parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
+    if constexpr (IsVarLenData<Key>()) {
+      ::operator delete(sep_key);
+    }
+
     child = new_child;
     c_ver = new_c_ver;
-    parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
-
     return true;
   }
 
