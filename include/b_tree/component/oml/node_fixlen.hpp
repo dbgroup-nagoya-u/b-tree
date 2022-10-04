@@ -936,6 +936,9 @@ class NodeFixLen
     const auto r_count = record_count_ - l_count;
     const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
+    // prevent deadlock
+    mutex_.UpgradeToX();  // upgrade the lock to modify the left node
+
     // copy right half records to a right node
     r_node->mutex_.LockX();
     r_node->pay_len_ = pay_len_;
@@ -946,8 +949,6 @@ class NodeFixLen
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
     r_node->has_high_key_ = has_high_key_;
-
-    mutex_.UpgradeToX();  // upgrade the lock to modify the left node
 
     // update a header
     block_size_ -= r_node->block_size_;

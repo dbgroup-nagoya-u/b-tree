@@ -965,6 +965,9 @@ class NodeVarLen
       temp_node_->meta_array_[rightmost_pos] = Metadata{offset + sep_key_len, 0, kPtrLen};
     }
 
+    // prevent deadlock
+    mutex_.UpgradeToX();
+
     // copy right half records to a right node
     r_node->mutex_.LockX();
     auto r_offset = r_node->CopyHighKeyFrom(this);
@@ -975,7 +978,6 @@ class NodeVarLen
     r_node->next_ = next_;
 
     // update a header
-    mutex_.UpgradeToX();
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
