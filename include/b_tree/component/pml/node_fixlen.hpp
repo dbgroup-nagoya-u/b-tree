@@ -187,9 +187,10 @@ class NodeFixLen
   GetNextNodeForRead()  //
       -> Node *
   {
+    auto *next = next_;
     next_->mutex_.LockS();
     mutex_.UnlockS();
-    return next_;
+    return next;
   }
 
   /**
