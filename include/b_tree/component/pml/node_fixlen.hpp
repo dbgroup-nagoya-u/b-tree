@@ -208,8 +208,9 @@ class NodeFixLen
     auto *node = this;
     if (!has_high_key_ || Comp{}(GetHighKey(), key)) {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
+    } else {
+      next_->mutex_.UnlockSIX();
     }
 
     return node;
@@ -770,6 +771,7 @@ class NodeFixLen
     keys_[l_count - is_inner] = keys_[l_count - 1];
 
     mutex_.DowngradeToSIX();
+    r_node->mutex_.LockSIX();
   }
 
   /**

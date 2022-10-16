@@ -216,8 +216,9 @@ class NodeVarLen
     const auto &high_key = GetHighKey();
     if (!high_key || Comp{}(*high_key, key)) {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
+    } else {
+      next_->mutex_.UnlockSIX();
     }
 
     return node;
@@ -787,6 +788,7 @@ class NodeVarLen
     temp_node_->record_count_ = 0;
 
     mutex_.DowngradeToSIX();
+    r_node->mutex_.LockSIX();
   }
 
   /**
