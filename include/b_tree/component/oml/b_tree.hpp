@@ -577,7 +577,7 @@ class BTree
     auto *l_node = child;
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
-    auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key);
+    auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key, r_node);
     parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
     if constexpr (IsVarLenData<Key>()) {
       ::operator delete(sep_key);
@@ -617,7 +617,7 @@ class BTree
     // install a new root node
     auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
     root_.store(new_root, std::memory_order_release);
-    auto &&[new_node, sep_key, sep_key_len, new_ver] = l_node->GetValidSplitNode(key);
+    auto &&[new_node, sep_key, sep_key_len, new_ver] = l_node->GetValidSplitNode(key, r_node);
     if constexpr (IsVarLenData<Key>()) {
       ::operator delete(sep_key);
     }

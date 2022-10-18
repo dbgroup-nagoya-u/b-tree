@@ -194,9 +194,10 @@ class NodeVarLen
   GetNextNodeForRead()  //
       -> Node *
   {
+    auto *next = next_;
     next_->mutex_.LockS();
     mutex_.UnlockS();
-    return next_;
+    return next;
   }
 
   /**
@@ -208,15 +209,18 @@ class NodeVarLen
    * @return this node or a right sibling one.
    */
   [[nodiscard]] auto
-  GetValidSplitNode(const Key &key)  //
+  GetValidSplitNode(  //
+      const Key &key,
+      Node *r_node)  //
       -> Node *
   {
     auto *node = this;
     const auto &high_key = GetHighKey();
     if (!high_key || Comp{}(*high_key, key)) {
-      node = next_;
-      node->mutex_.LockSIX();
+      node = r_node;
       mutex_.UnlockSIX();
+    } else {
+      r_node->mutex_.UnlockSIX();
     }
 
     return node;
@@ -768,7 +772,9 @@ class NodeVarLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    r_node->next_ = next_;
+    if (is_leaf_) {
+      r_node->next_ = next_;
+    }
 
     mutex_.UpgradeToX();  // upgrade the lock to modify the left node
 
@@ -776,7 +782,9 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
-    next_ = r_node;
+    if (is_leaf_) {
+      next_ = r_node;
+    }
 
     // copy temporal node to this node
     memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
@@ -786,6 +794,7 @@ class NodeVarLen
     temp_node_->record_count_ = 0;
 
     mutex_.DowngradeToSIX();
+    r_node->mutex_.LockSIX();
   }
 
   /**
@@ -818,7 +827,9 @@ class NodeVarLen
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
-    next_ = r_node->next_;
+    if (is_leaf_) {
+      next_ = r_node->next_;
+    }
 
     // reset a temp node
     temp_node_->record_count_ = 0;

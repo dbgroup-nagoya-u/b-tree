@@ -469,8 +469,8 @@ class BTree
 
       // perform internal SMOs eagerly
       if (child->NeedSplit(kMaxRecLen)) {
-        Split(child, node, pos);
-        child = child->GetValidSplitNode(key);
+        auto *r_node = Split(child, node, pos);
+        child = child->GetValidSplitNode(key, r_node);
       } else if (child->NeedMerge()) {
         Merge(child, node, pos);
       } else {
@@ -517,16 +517,18 @@ class BTree
    * @param parent a parent node of `l_node`.
    * @param pos the position of `l_node` in its parent node.
    */
-  void
+  auto
   Split(  //
       Node_t *l_node,
       Node_t *parent,
-      const size_t pos)
+      const size_t pos)  //
+      -> Node_t *
   {
     parent->UpgradeToX();
     auto *r_node = new Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
+    return r_node;
   }
 
   /**
@@ -547,7 +549,7 @@ class BTree
     root_ = new Node_t{l_node, r_node};
 
     mutex_.DowngradeToSIX();
-    return l_node->GetValidSplitNode(key);
+    return l_node->GetValidSplitNode(key, r_node);
   }
 
   /**
