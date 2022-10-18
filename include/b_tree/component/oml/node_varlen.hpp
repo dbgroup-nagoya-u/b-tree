@@ -155,8 +155,9 @@ class NodeVarLen
    * @return this node or a right sibling one.
    */
   [[nodiscard]] auto
-  GetValidSplitNode(const Key &key,  //
-                    Node *r_node)    //
+  GetValidSplitNode(  //
+      const Key &key,
+      Node *r_node)  //
       -> std::tuple<Node *, Key, size_t, uint64_t>
   {
     Node *node{};
@@ -974,14 +975,18 @@ class NodeVarLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) r_node->next_ = next_;
+    if (is_leaf_) {
+      r_node->next_ = next_;
+    }
 
     // update a header
     mutex_.UpgradeToX();
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
-    if (is_leaf_) next_ = r_node;
+    if (is_leaf_) {
+      next_ = r_node;
+    }
 
     // copy temporal node to this node
     memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
@@ -1024,14 +1029,18 @@ class NodeVarLen
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
-    if (is_leaf_) next_ = r_node->next_;
+    if (is_leaf_) {
+      next_ = r_node->next_;
+    }
 
     const auto new_ver = mutex_.UnlockX();
     r_node->mutex_.UpgradeToX();
 
     // update a header of a right node
     r_node->is_removed_ = 1;
-    if (is_leaf_) r_node->next_ = this;
+    if (is_leaf_) {
+      r_node->next_ = this;
+    }
 
     r_node->mutex_.UnlockX();
 

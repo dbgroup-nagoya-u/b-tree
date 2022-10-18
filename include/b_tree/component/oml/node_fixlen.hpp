@@ -148,8 +148,9 @@ class NodeFixLen
    * @return this node or a right sibling one.
    */
   [[nodiscard]] auto
-  GetValidSplitNode(const Key &key,  //
-                    Node *r_node)    //
+  GetValidSplitNode(  //
+      const Key &key,
+      Node *r_node)  //
       -> std::tuple<Node *, Key, size_t, uint64_t>
   {
     Node *node{};
@@ -946,7 +947,9 @@ class NodeFixLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) r_node->next_ = next_;
+    if (is_leaf_) {
+      r_node->next_ = next_;
+    }
     r_node->has_high_key_ = has_high_key_;
 
     mutex_.UpgradeToX();  // upgrade the lock to modify the left node
@@ -954,7 +957,9 @@ class NodeFixLen
     // update a header
     block_size_ -= r_node->block_size_;
     record_count_ = l_count;
-    if (is_leaf_) next_ = r_node;
+    if (is_leaf_) {
+      next_ = r_node;
+    }
     has_high_key_ = 1;
     keys_[l_count - is_inner] = keys_[l_count - 1];
   }
@@ -978,7 +983,9 @@ class NodeFixLen
 
     // update a header
     block_size_ = kPageSize - offset;
-    if (is_leaf_) next_ = r_node->next_;
+    if (is_leaf_) {
+      next_ = r_node->next_;
+    }
     has_high_key_ = r_node->has_high_key_;
 
     const auto new_ver = mutex_.UnlockX();
@@ -986,8 +993,9 @@ class NodeFixLen
 
     // update a header of a right node
     r_node->is_removed_ = 1;
-    if (is_leaf_) r_node->next_ = this;
-
+    if (is_leaf_) {
+      r_node->next_ = this;
+    }
     r_node->mutex_.UnlockX();
 
     return new_ver;
