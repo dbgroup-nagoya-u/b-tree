@@ -40,6 +40,7 @@ class RecordIterator
   using Key = typename Index::K;
   using Payload = typename Index::V;
   using Node = typename Index::Node_t;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -58,7 +59,7 @@ class RecordIterator
       Node *node,
       size_t begin_pos,
       size_t end_pos,
-      std::optional<std::pair<const Key &, bool>> end_key,
+      ScanKey end_key,
       bool is_end)
       : node_{node},
         pos_{begin_pos},
@@ -87,6 +88,12 @@ class RecordIterator
   /*####################################################################################
    * Public operators for iterators
    *##################################################################################*/
+
+  /**
+   * @retval true if this iterator indicates a live record.
+   * @retval false otherwise.
+   */
+  explicit operator bool() { return HasRecord(); }
 
   /**
    * @retval 1st: a key indicated by the iterator.
@@ -120,7 +127,7 @@ class RecordIterator
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  HasNext()  //
+  HasRecord()  //
       -> bool
   {
     while (node_ != nullptr) {
@@ -181,7 +188,7 @@ class RecordIterator
   size_t end_pos_{0};
 
   /// the end key given from a user.
-  std::optional<std::pair<const Key &, bool>> end_key_{};
+  ScanKey end_key_{};
 
   /// a flag for indicating a current node is rightmost in scan-range.
   bool is_end_{false};

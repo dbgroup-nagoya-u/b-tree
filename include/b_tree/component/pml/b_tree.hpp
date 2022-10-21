@@ -54,6 +54,7 @@ class BTree
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -110,7 +111,9 @@ class BTree
    * @retval std::nullopt otherwise.
    */
   auto
-  Read(const Key &key)  //
+  Read(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
     auto *node = SearchLeafNodeForRead(key, kClosed);
@@ -131,15 +134,15 @@ class BTree
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
     Node_t *node{};
     size_t begin_pos = 0;
 
     if (begin_key) {
-      const auto &[key, is_closed] = begin_key.value();
+      const auto &[key, key_len, is_closed] = begin_key.value();
       node = SearchLeafNodeForRead(key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;

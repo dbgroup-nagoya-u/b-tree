@@ -72,6 +72,7 @@ class BTree
                                                         BTreePML<Key, Payload, Comp, kIsVarLen>>>;
 
   using RecordIterator_t = component::RecordIterator<BTree_t>;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -116,10 +117,12 @@ class BTree
    * @retval std::nullopt otherwise.
    */
   auto
-  Read(const Key &key)  //
+  Read(  //
+      const Key &key,
+      const size_t key_len)  //
       -> std::optional<Payload>
   {
-    return b_tree_.Read(key);
+    return b_tree_.Read(key, key_len);
   }
 
   /**
@@ -131,8 +134,8 @@ class BTree
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
     return b_tree_.Scan(begin_key, end_key);
