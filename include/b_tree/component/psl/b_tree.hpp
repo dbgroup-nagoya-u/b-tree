@@ -147,7 +147,7 @@ class BTree
       const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    const auto &guard = gc_.CreateEpochGuard();
 
     Node_t *node{};
     size_t begin_pos = 0;
