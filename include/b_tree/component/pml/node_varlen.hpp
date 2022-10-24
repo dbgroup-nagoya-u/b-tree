@@ -51,6 +51,7 @@ class NodeVarLen
    *##################################################################################*/
 
   using Node = NodeVarLen;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -489,13 +490,13 @@ class NodeVarLen
    * @retval 2nd: the end position for scanning.
    */
   [[nodiscard]] auto
-  SearchEndPositionFor(const std::optional<std::pair<const Key &, bool>> &end_key)  //
+  SearchEndPositionFor(const ScanKey &end_key)  //
       -> std::pair<bool, size_t>
   {
     const auto is_end = IsRightmostOf(end_key);
     size_t end_pos{};
     if (is_end && end_key) {
-      const auto &[e_key, e_closed] = *end_key;
+      const auto &[e_key, e_key_len, e_closed] = *end_key;
       const auto [rc, pos] = SearchRecord(e_key);
       end_pos = (rc == kKeyAlreadyInserted && e_closed) ? pos + 1 : pos;
     } else {
@@ -979,13 +980,13 @@ class NodeVarLen
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  IsRightmostOf(const std::optional<std::pair<const Key &, bool>> &end_key) const  //
+  IsRightmostOf(const ScanKey &end_key) const  //
       -> bool
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
     const auto &high_key = GetKey(high_meta_);
-    return !Comp{}(high_key, end_key->first);
+    return !Comp{}(high_key, std::get<0>(*end_key));
   }
 
   /**

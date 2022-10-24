@@ -57,6 +57,7 @@ class BTree
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
 
   // aliases for bulkloading
@@ -117,7 +118,9 @@ class BTree
    * @retval std::nullopt otherwise.
    */
   auto
-  Read(const Key &key)  //
+  Read(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -138,8 +141,8 @@ class BTree
    */
   auto
   Scan(  //
-      const std::optional<std::pair<const Key &, bool>> &begin_key = std::nullopt,
-      const std::optional<std::pair<const Key &, bool>> &end_key = std::nullopt)  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
@@ -148,7 +151,7 @@ class BTree
     size_t begin_pos = 0;
 
     if (begin_key) {
-      const auto &[key, is_closed] = begin_key.value();
+      const auto &[key, key_len, is_closed] = begin_key.value();
       node = SearchLeafNodeForRead(key, is_closed);
       Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
       const auto [rc, pos] = node->SearchRecord(key);
