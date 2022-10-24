@@ -320,6 +320,8 @@ class NodeFixture : public testing::Test
       Write(i, i);
     }
 
+    r_node->DowngradeToSIX();
+
     // merge the two nodes
     node_->LockSIX();
     node_->Merge(r_node);

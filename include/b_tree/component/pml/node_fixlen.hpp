@@ -327,7 +327,6 @@ class NodeFixLen
     }
 
     UpgradeToX();
-    r_node->UpgradeToX();
     return r_node;
   }
 
@@ -409,6 +408,16 @@ class NodeFixLen
   UpgradeToX()
   {
     mutex_.UpgradeToX();
+  }
+
+  /**
+   * @brief Downgrade the X lock to an SIX lock for this node.
+   *
+   */
+  void
+  DowngradeToSIX()
+  {
+    mutex_.DowngradeToSIX();
   }
 
   /*####################################################################################
@@ -787,9 +796,10 @@ class NodeFixLen
    * @param r_node a right node to be merged.
    */
   void
-  Merge(const Node *r_node)
+  Merge(Node *r_node)
   {
     mutex_.UpgradeToX();
+    r_node->UpgradeToX();
 
     // copy right records to this nodes
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);

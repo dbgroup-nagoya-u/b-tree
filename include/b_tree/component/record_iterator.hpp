@@ -20,6 +20,9 @@
 #include <optional>
 #include <utility>
 
+// organization libraries
+#include "memory/epoch_based_gc.hpp"
+
 // local sources
 #include "common.hpp"
 
@@ -41,6 +44,7 @@ class RecordIterator
   using Payload = typename Index::V;
   using Node = typename Index::Node_t;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using EpochGuard = ::dbgroup::memory::component::EpochGuard;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -60,12 +64,14 @@ class RecordIterator
       size_t begin_pos,
       size_t end_pos,
       ScanKey end_key,
-      bool is_end)
+      bool is_end,
+      std::optional<EpochGuard> guard = std::nullopt)
       : node_{node},
         pos_{begin_pos},
         end_pos_{end_pos},
         end_key_{std::move(end_key)},
-        is_end_{is_end}
+        is_end_{is_end},
+        guard_{std::move(guard)}
   {
   }
 
@@ -192,6 +198,8 @@ class RecordIterator
 
   /// a flag for indicating a current node is rightmost in scan-range.
   bool is_end_{false};
+
+  std::optional<EpochGuard> guard_{std::nullopt};
 };
 
 }  // namespace dbgroup::index::b_tree::component

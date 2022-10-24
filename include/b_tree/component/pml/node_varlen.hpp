@@ -322,7 +322,6 @@ class NodeVarLen
     }
 
     UpgradeToX();
-    r_node->UpgradeToX();
     return r_node;
   }
 
@@ -405,6 +404,16 @@ class NodeVarLen
   UpgradeToX()
   {
     mutex_.UpgradeToX();
+  }
+
+  /**
+   * @brief Downgrade the X lock to an SIX lock for this node.
+   *
+   */
+  void
+  DowngradeToSIX()
+  {
+    mutex_.DowngradeToSIX();
   }
 
   /*####################################################################################
@@ -804,9 +813,10 @@ class NodeVarLen
    * @param r_node a right node to be merged.
    */
   void
-  Merge(const Node *r_node)
+  Merge(Node *r_node)
   {
     mutex_.UpgradeToX();
+    r_node->UpgradeToX();
 
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
