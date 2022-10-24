@@ -65,7 +65,7 @@ class RecordIterator
       size_t end_pos,
       ScanKey end_key,
       bool is_end,
-      EpochGuard *guard = nullptr)
+      std::optional<EpochGuard> guard = std::nullopt)
       : node_{node},
         pos_{begin_pos},
         end_pos_{end_pos},
@@ -199,7 +199,7 @@ class RecordIterator
   /// a flag for indicating a current node is rightmost in scan-range.
   bool is_end_{false};
 
-  EpochGuard *guard_{nullptr};
+  std::optional<EpochGuard> guard_{std::nullopt};
 };
 
 }  // namespace dbgroup::index::b_tree::component
