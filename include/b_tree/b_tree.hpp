@@ -119,7 +119,7 @@ class BTree
   auto
   Read(  //
       const Key &key,
-      const size_t key_len)  //
+      const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
     return b_tree_.Read(key, key_len);
