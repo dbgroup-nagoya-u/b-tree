@@ -465,9 +465,7 @@ class NodeVarLen
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchChild(const Key &key)  //
       -> size_t
   {
     int64_t begin_pos = 1;
@@ -721,18 +719,15 @@ class NodeVarLen
   /**
    * @brief Delete a child node from this node.
    *
-   * @param l_node a left child node.
-   * @param pos the position of the right child node.
+   * @param pos the position of the left child node.
    */
   void
-  DeleteChild(  //
-      const Node *l_node,
-      const size_t pos)  //
+  DeleteChild(const size_t pos)  //
   {
-    const auto del_rec_len = meta_array_[pos].rec_len;  // keep a record length to be deleted
+    const auto del_rec_len = meta_array_[pos + 1].rec_len;  // keep a record length to be deleted
 
     // delete a right child by shifting metadata
-    memmove(&(meta_array_[pos]), &(meta_array_[pos + 1]), kMetaLen * (record_count_ - 1 - pos));
+    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos + 2]), kMetaLen * (record_count_ - 2 - pos));
 
     // update this header
     --record_count_;
@@ -971,7 +966,6 @@ class NodeVarLen
       // go down to the lower level
       node = node->template GetPayload<Node *>(0);
     }
-    return;
   }
 
  private:

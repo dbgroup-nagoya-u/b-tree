@@ -116,7 +116,7 @@ class BTree
       [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
-    auto *node = SearchLeafNodeForRead(key, kClosed);
+    auto *node = SearchLeafNodeForRead(key);
 
     Payload payload{};
     const auto rc = node->Read(key, payload);
@@ -143,7 +143,7 @@ class BTree
 
     if (begin_key) {
       const auto &[key, key_len, is_closed] = begin_key.value();
-      node = SearchLeafNodeForRead(key, is_closed);
+      node = SearchLeafNodeForRead(key);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -318,6 +318,7 @@ class BTree
       ConstructUpperLayer(nodes);
     }
     root_ = nodes.front();
+    Node_t::RemoveLeftmostKeys(root_);
 
     return kSuccess;
   }
@@ -416,14 +417,12 @@ class BTree
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
-  SearchLeafNodeForRead(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchLeafNodeForRead(const Key &key)  //
       -> Node_t *
   {
     auto *node = GetRootForRead();
     while (!node->IsLeaf()) {
-      const auto pos = node->SearchChild(key, is_closed);
+      const auto pos = node->SearchChild(key);
       node = node->GetChildForRead(pos);
     }
 
@@ -467,7 +466,7 @@ class BTree
     auto *node = GetRootForWrite(key);
     while (!node->IsLeaf()) {
       // search a child node
-      const auto pos = node->SearchChild(key, kClosed);
+      const auto pos = node->SearchChild(key);
       auto *child = node->GetChildForWrite(pos);
 
       // perform internal SMOs eagerly
@@ -574,7 +573,7 @@ class BTree
 
     // perform merging
     l_node->Merge(r_node);
-    parent->DeleteChild(l_node, l_pos);
+    parent->DeleteChild(l_pos);
     delete r_node;
   }
 
