@@ -585,8 +585,7 @@ class NodeVarLen
   [[nodiscard]] static auto
   CheckKeyRange(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)  //
+      const Key &key)  //
       -> uint64_t
   {
     uint64_t ver{};
@@ -630,11 +629,10 @@ class NodeVarLen
   static void
   CheckKeyRangeAndLockForRead(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)
+      const Key &key)
   {
     while (true) {
-      auto ver = CheckKeyRange(node, key, is_closed);
+      auto ver = CheckKeyRange(node, key);
       if (node->mutex_.TryLockS(ver)) return;
     }
   }
@@ -658,7 +656,7 @@ class NodeVarLen
       -> NodeRC
   {
     while (true) {
-      auto ver = CheckKeyRange(node, key, kClosed);
+      auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(new_rec_len, ver);
       if (rc == kNeedRetry) continue;
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -691,7 +689,7 @@ class NodeVarLen
       -> NodeRC
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
@@ -771,7 +769,7 @@ class NodeVarLen
     const auto rec_len = key_len + pay_len;
 
     while (true) {
-      auto ver = CheckKeyRange(node, key, kClosed);
+      auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(rec_len, ver);
       if (rc == kNeedRetry) continue;           // retry on the leaf level
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -820,7 +818,7 @@ class NodeVarLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -856,7 +854,7 @@ class NodeVarLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -886,7 +884,6 @@ class NodeVarLen
    */
   void
   InsertChild(  //
-      const Node *l_node,
       const Node *r_node,
       const Key &sep_key,
       const size_t sep_key_len,

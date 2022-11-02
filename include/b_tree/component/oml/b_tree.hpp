@@ -153,7 +153,7 @@ class BTree
     if (begin_key) {
       const auto &[key, key_len, is_closed] = begin_key.value();
       node = SearchLeafNodeForRead(key, is_closed);
-      Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      Node_t::CheckKeyRangeAndLockForRead(node, key);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -582,7 +582,7 @@ class BTree
     auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
     l_node->Split(r_node);
     auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key, r_node);
-    parent->InsertChild(l_node, r_node, sep_key, sep_key_len, pos);
+    parent->InsertChild(r_node, sep_key, sep_key_len, pos);
     if constexpr (IsVarLenData<Key>()) {
       ::operator delete(sep_key);
     }

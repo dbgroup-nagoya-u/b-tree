@@ -797,6 +797,7 @@ class NodeFixLen
 
     // copy right records to this nodes
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
+    keys_[record_count_] = r_node->keys_[r_node->record_count_];
 
     // update a header
     block_size_ = kPageSize - offset;
@@ -850,7 +851,7 @@ class NodeFixLen
     }
 
     // set a highest key if this node is not rightmost
-    if (!has_last_record || !is_rightmost) {
+    if (iter < iter_end || !is_rightmost) {
       has_high_key_ = 1;
       const auto &[key, payload] = *iter;
       keys_[record_count_] = key;
@@ -880,8 +881,6 @@ class NodeFixLen
     // check the number of child nodes to be loaded
     const size_t n = std::distance(iter, iter_end);
     const auto rec_count = (n < kNodeCap) ? n : kNodeCap;
-    const auto *last_child = *std::next(iter, rec_count - 1);
-    has_high_key_ = last_child->has_high_key_;
 
     // extract and insert entries for the leaf node
     auto offset = kPageSize;
@@ -892,7 +891,8 @@ class NodeFixLen
       offset = SetPayload(offset, &child);
     }
 
-    if (has_high_key_ && iter < iter_end) {
+    if (iter < iter_end) {
+      has_high_key_ = 1;
       keys_[record_count_] = (*iter)->keys_[0];
     }
 

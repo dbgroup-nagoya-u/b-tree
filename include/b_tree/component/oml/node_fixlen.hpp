@@ -81,7 +81,7 @@ class NodeFixLen
       const NodeFixLen *r_node)  //
       : is_leaf_{0}, is_removed_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
   {
-    keys_[0] = l_node->GetHighKey();
+    keys_[1] = l_node->GetHighKey();
     SetPayload(kPageSize, &l_node);
     SetPayload(kPageSize - kPtrLen, &r_node);
   }
@@ -157,7 +157,7 @@ class NodeFixLen
     Node *node{};
     uint64_t ver{};
     const auto sep_key = GetHighKey();
-    if (Comp{}(sep_key, key)) {
+    if (!Comp{}(key, sep_key)) {
       node = r_node;
       ver = r_node->mutex_.UnlockX();
       mutex_.UnlockX();
@@ -419,8 +419,8 @@ class NodeFixLen
   {
     const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1 - inner_diff;
+    int64_t begin_pos = inner_diff;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -434,7 +434,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos};
+    return {kKeyNotInserted, begin_pos - inner_diff};
   }
 
   /**
@@ -466,7 +466,7 @@ class NodeFixLen
 
       // check the current node has a target key
       const auto &high_key = GetHighKey();
-      if (has_high_key_ && (Comp{}(high_key, key) || (!is_closed && !Comp{}(key, high_key)))) {
+      if (has_high_key_ && (!Comp{}(key, high_key))) {
         if (!mutex_.HasSameVersion(ver)) continue;
         child = nullptr;  // retry from a root node
         break;
@@ -509,7 +509,7 @@ class NodeFixLen
       while (mutex_.HasSameVersion(ver)) {
         // check the current node has a target key
         const auto &high_key = GetHighKey();
-        if (has_high_key_ && Comp{}(high_key, key)) {
+        if (has_high_key_ && !Comp{}(key, high_key)) {
           if (!mutex_.HasSameVersion(ver)) break;
           return {0, nullptr};  // retry from a root node
         }
@@ -566,8 +566,7 @@ class NodeFixLen
   [[nodiscard]] static auto
   CheckKeyRange(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)  //
+      const Key &key)  //
       -> uint64_t
   {
     uint64_t ver{};
@@ -582,7 +581,7 @@ class NodeFixLen
           continue;
         }
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+        if (Comp{}(key, high_key)) {
           if (node->mutex_.HasSameVersion(ver)) break;
           continue;
         }
@@ -611,11 +610,10 @@ class NodeFixLen
   static void
   CheckKeyRangeAndLockForRead(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)
+      const Key &key)
   {
     while (true) {
-      auto ver = CheckKeyRange(node, key, is_closed);
+      auto ver = CheckKeyRange(node, key);
       if (node->mutex_.TryLockS(ver)) return;
     }
   }
@@ -639,7 +637,7 @@ class NodeFixLen
       -> NodeRC
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(new_rec_len, ver);
       if (rc == kNeedRetry) continue;
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -672,7 +670,7 @@ class NodeFixLen
       -> NodeRC
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
@@ -750,7 +748,7 @@ class NodeFixLen
     const auto rec_len = kKeyLen + node->pay_len_;
 
     while (true) {
-      auto ver = CheckKeyRange(node, key, kClosed);
+      auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(rec_len, ver);
       if (rc == kNeedRetry) continue;           // retry on the leaf level
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -794,7 +792,7 @@ class NodeFixLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -830,7 +828,7 @@ class NodeFixLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -870,7 +868,6 @@ class NodeFixLen
    */
   void
   InsertChild(  //
-      [[maybe_unused]] const Node *l_node,
       const Node *r_node,
       const Key &sep_key,
       [[maybe_unused]] const size_t sep_key_len,
@@ -886,8 +883,8 @@ class NodeFixLen
     SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
-    keys_[pos] = sep_key;
+    memmove(&(keys_[pos + 2]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    keys_[pos + 1] = sep_key;
 
     // update header information
     ++record_count_;
@@ -903,15 +900,13 @@ class NodeFixLen
    * @param pos the position of the left child node.
    */
   void
-  DeleteChild(  //
-      [[maybe_unused]] const Node *l_node,
-      const size_t pos)  //
+  DeleteChild(const size_t pos)  //
   {
     mutex_.UpgradeToX();
 
     // delete a separator key
     const auto move_num = record_count_ - 2 - pos;
-    memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    memmove(&(keys_[pos + 1]), &(keys_[pos + 2]), kKeyLen * (move_num + has_high_key_));
 
     // delete a right child
     auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
@@ -938,13 +933,12 @@ class NodeFixLen
   {
     const auto l_count = record_count_ / 2;
     const auto r_count = record_count_ - l_count;
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     // copy right half records to a right node
     r_node->mutex_.LockX();
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - is_inner] = keys_[record_count_ - is_inner];
+    r_node->keys_[r_count - 1 + has_high_key_] = keys_[record_count_ - 1 + has_high_key_];
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
@@ -962,7 +956,7 @@ class NodeFixLen
       next_ = r_node;
     }
     has_high_key_ = 1;
-    keys_[l_count - is_inner] = keys_[l_count - 1];
+    keys_[l_count] = r_node->keys_[0];
   }
 
   /**
@@ -974,13 +968,11 @@ class NodeFixLen
   Merge(Node *r_node)  //
       -> uint64_t
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-
     mutex_.UpgradeToX();
 
     // copy right records to this nodes
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
-    keys_[record_count_ - is_inner] = r_node->keys_[r_node->record_count_ - is_inner];
+    keys_[record_count_] = r_node->keys_[r_node->record_count_];
 
     // update a header
     block_size_ = kPageSize - offset;
@@ -1044,9 +1036,10 @@ class NodeFixLen
     }
 
     // set a highest key if this node is not rightmost
-    if (!has_last_record || !is_rightmost) {
+    if (iter < iter_end || !is_rightmost) {
       has_high_key_ = 1;
-      keys_[rec_count] = keys_[rec_count - 1];
+      const auto &[key, payload] = *iter;
+      keys_[record_count_] = key;
     }
 
     // update header information
@@ -1073,16 +1066,19 @@ class NodeFixLen
     // check the number of child nodes to be loaded
     const size_t n = std::distance(iter, iter_end);
     const auto rec_count = (n < kNodeCap) ? n : kNodeCap;
-    const auto *last_child = *std::next(iter, rec_count - 1);
-    has_high_key_ = last_child->has_high_key_;
 
     // extract and insert entries for the leaf node
     auto offset = kPageSize;
     for (size_t i = 0; i < rec_count; ++i, ++iter) {
       // insert an entry to the inner node
       const auto *child = *iter;
-      keys_[record_count_++] = child->GetHighKey();
+      keys_[record_count_++] = child->keys_[0];
       offset = SetPayload(offset, &child);
+    }
+
+    if (iter < iter_end) {
+      has_high_key_ = 1;
+      keys_[record_count_] = (*iter)->keys_[0];
     }
 
     // update header information
@@ -1109,6 +1105,22 @@ class NodeFixLen
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
       r_node = r_node->template GetPayload<Node *>(0);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   */
+  static void
+  RemoveLeftmostKeys(Node *node)
+  {
+    while (!node->IsLeaf()) {
+      // remove the leftmost key in a record region of an inner node
+      node->keys_[0] = Key{};
+
+      // go down to the lower level
+      node = node->template GetPayload<Node *>(0);
     }
   }
 
@@ -1166,7 +1178,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return !Comp{}(GetHighKey(), std::get<0>(*end_key));
+    return Comp{}(std::get<0>(*end_key), GetHighKey());
   }
 
   /**
@@ -1176,7 +1188,7 @@ class NodeFixLen
   GetUsedSize() const  //
       -> size_t
   {
-    return kKeyLen * (record_count_ + (is_leaf_ & has_high_key_)) + block_size_;
+    return kKeyLen * (record_count_ + has_high_key_) + block_size_;
   }
 
   /**
@@ -1187,8 +1199,7 @@ class NodeFixLen
   GetHighKey() const  //
       -> const Key &
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-    return keys_[record_count_ - is_inner];
+    return keys_[record_count_];
   }
 
   /**
