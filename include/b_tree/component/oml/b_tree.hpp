@@ -344,6 +344,7 @@ class BTree
       ConstructUpperLayer(nodes);
     }
     root_ = nodes.front();
+    Node_t::RemoveLeftmostKeys(root_);
 
     return kSuccess;
   }
@@ -658,7 +659,7 @@ class BTree
 
     // perform merging
     c_ver = l_node->Merge(r_node);
-    parent->DeleteChild(l_node, l_pos);
+    parent->DeleteChild(l_pos);
     gc_.AddGarbage(r_node);
 
     return true;
