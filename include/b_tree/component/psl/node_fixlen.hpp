@@ -84,7 +84,7 @@ class NodeFixLen
         has_low_key_{0},
         has_high_key_{0}
   {
-    keys_[0] = l_key;
+    keys_[1] = l_key;
     SetPayload(kPageSize, &l_node);
     SetPayload(kPageSize - kPtrLen, &r_node);
   }
@@ -158,7 +158,7 @@ class NodeFixLen
     auto sep_key = GetHighKey();
 
     auto *node = this;
-    if (Comp{}(sep_key, key)) {
+    if (!Comp{}(key, sep_key)) {
       node = next_;
       node->mutex_.LockSIX();
       mutex_.UnlockSIX();
@@ -209,8 +209,7 @@ class NodeFixLen
 
     std::optional<Key> low_key = std::nullopt;
     if (has_low_key_) {
-      const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-      low_key = keys_[record_count_ - is_inner + has_high_key_];
+      low_key = keys_[record_count_ + has_high_key_];
     }
 
     mutex_.UnlockS();
@@ -381,8 +380,8 @@ class NodeFixLen
   {
     const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1 - inner_diff;
+    int64_t begin_pos = inner_diff;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -396,7 +395,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos};
+    return {kKeyNotInserted, begin_pos - inner_diff};
   }
 
   /**
@@ -415,8 +414,8 @@ class NodeFixLen
       const bool is_closed)  //
       -> Node *
   {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
+    int64_t begin_pos = 1;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
@@ -427,13 +426,12 @@ class NodeFixLen
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
+        end_pos = pos;
         break;
       }
     }
 
-    auto *child = GetPayload<Node *>(begin_pos);
+    auto *child = GetPayload<Node *>(end_pos);
     mutex_.UnlockS();
     return child;
   }
@@ -487,7 +485,7 @@ class NodeFixLen
         // check the node includes a target key
         if (node->has_high_key_ == 0) return node;
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) return node;
+        if (Comp{}(key, high_key)) return node;
       }
 
       // go to the next node
@@ -519,7 +517,7 @@ class NodeFixLen
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->has_high_key_ == 0 || !Comp{}(node->GetHighKey(), key)) return node;
+        if (node->has_high_key_ == 0 || Comp{}(key, node->GetHighKey())) return node;
       }
 
       // go to the next node
@@ -752,8 +750,9 @@ class NodeFixLen
     SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
-    keys_[pos] = sep_key;
+    memmove(&(keys_[pos + 2]), &(keys_[pos + 1]),
+            kKeyLen * (move_num + has_low_key_ + has_high_key_));
+    keys_[pos + 1] = sep_key;
 
     // update header information
     ++record_count_;
@@ -780,13 +779,13 @@ class NodeFixLen
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
-    if (has_high_key_ && !Comp{}(del_key, GetHighKey())) {
+    if (record_count_ <= 1 || Comp{}(del_key, GetKey(1))) {
       mutex_.UnlockSIX();
       return kAbortMerge;
     }
 
     // check a position to be deleted and concurrent SMOs
-    const auto [existence, l_pos] = SearchRecord(del_key);
+    const auto [existence, r_pos] = SearchRecord(del_key);
     if (existence == kKeyNotInserted) {
       // previous splitting has not been applied, so unlock and retry
       mutex_.UnlockSIX();
@@ -800,8 +799,8 @@ class NodeFixLen
     mutex_.UpgradeToX();
 
     // delete a separator key
-    const auto move_num = record_count_ - 2 - l_pos;
-    memmove(&(keys_[l_pos]), &(keys_[l_pos + 1]),
+    const auto move_num = record_count_ - 1 - r_pos;
+    memmove(&(keys_[r_pos]), &(keys_[r_pos + 1]),
             kKeyLen * (move_num + has_low_key_ + has_high_key_));
 
     // delete a right child
@@ -835,15 +834,15 @@ class NodeFixLen
   {
     const auto l_count = record_count_ / 2;
     const auto r_count = record_count_ - l_count;
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     r_node->mutex_.LockX();
 
     // copy right half records to a right node
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - is_inner] = keys_[record_count_ - is_inner];     // a highest key
-    r_node->keys_[r_count - is_inner + has_high_key_] = keys_[l_count - 1];  // a lowest key
+    r_node->keys_[r_count - 1 + has_high_key_] =
+        keys_[record_count_ - 1 + has_high_key_];               // a highest key
+    r_node->keys_[r_count + has_high_key_] = r_node->keys_[0];  // a lowest key
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
@@ -855,8 +854,8 @@ class NodeFixLen
     mutex_.UpgradeToX();
 
     // update lowest/highest keys
-    keys_[l_count - is_inner] = keys_[l_count - 1];
-    keys_[l_count - is_inner + 1] = keys_[record_count_ - is_inner + has_high_key_];
+    keys_[l_count + has_low_key_] = keys_[0];  // a lowest key
+    keys_[l_count] = r_node->keys_[0];         // a highest key
 
     // update a header
     record_count_ = l_count;
@@ -875,15 +874,17 @@ class NodeFixLen
   void
   Merge(Node *r_node)
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-
     mutex_.UpgradeToX();
 
     // copy right records to this nodes
-    const auto lowest_key = keys_[record_count_ - is_inner + 1];
+    const auto lowest_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
-    keys_[record_count_ - is_inner] = r_node->keys_[r_node->record_count_ - is_inner];
-    keys_[record_count_ - is_inner + r_node->has_high_key_] = std::move(lowest_key);
+    if (r_node->has_high_key_) {
+      keys_[record_count_ + has_low_key_] = std::move(lowest_key);
+      keys_[record_count_] = r_node->keys_[r_node->record_count_];
+    } else {
+      keys_[record_count_] = std::move(lowest_key);
+    }
 
     // update a header
     block_size_ = kPageSize - offset;
@@ -923,19 +924,12 @@ class NodeFixLen
     r_node->mutex_.UnlockX();
 
     // check the top position of a record block
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
     const auto rec_count = record_count_;
-    if (is_leaf_) {
-      // set a highest key for leaf nodes
-      auto [existence, pos] = SearchRecord(l_key);
-      record_count_ = (existence == kKeyAlreadyInserted) ? pos + 1 : (((pos > 0)) ? pos : 0);
-    } else {
-      // remove a key of a rightmost record in internal nodes
-      const auto pos = SearchRecord(l_key).second;
-      record_count_ = pos + 1;
-    }
-    keys_[record_count_ - is_inner] = l_key;
-    keys_[record_count_ - is_inner + 1] = keys_[rec_count - is_inner + has_high_key_];
+    // set a highest key for leaf nodes
+    auto [existence, pos] = SearchRecord(l_key);
+    record_count_ = pos;
+    keys_[record_count_ + has_low_key_] = keys_[rec_count + has_low_key_];
+    keys_[record_count_] = l_key;
 
     // update header information
     block_size_ = record_count_ * pay_len_;
@@ -1011,7 +1005,8 @@ class NodeFixLen
     // set a highest key if this node is not rightmost
     if (iter < iter_end || !is_rightmost) {
       has_high_key_ = 1;
-      keys_[record_count_] = keys_[record_count_ - 1];
+      const auto &[key, payload] = *iter;
+      keys_[record_count_] = key;
     }
 
     // update header information
@@ -1047,13 +1042,14 @@ class NodeFixLen
       if (node_size > kPageSize - kMinFreeSpaceSize - kKeyLen) break;
 
       // insert an entry to the inner node
-      keys_[record_count_++] = child->keys_[child->record_count_ - is_inner];
+      keys_[record_count_++] = child->keys_[0];
       offset = SetPayload(offset, &child);
     }
 
-    // move a highest key to header
-    const auto *last_child = *std::prev(iter);
-    has_high_key_ = last_child->has_high_key_;
+    if (iter < iter_end) {
+      has_high_key_ = 1;
+      keys_[record_count_] = (*iter)->keys_[0];
+    }
 
     // update header information
     block_size_ = kPageSize - offset;
@@ -1074,6 +1070,11 @@ class NodeFixLen
       Node *r_node)
   {
     while (true) {
+      if (!l_node->is_leaf_) {
+        l_node->has_high_key_ = 1;
+        l_node->keys_[l_node->record_count_] = r_node->keys_[0];
+      }
+
       l_node->LinkNext(r_node);
 
       if (l_node->is_leaf_) return;  // all the border nodes are linked
@@ -1081,6 +1082,22 @@ class NodeFixLen
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
       r_node = r_node->template GetPayload<Node *>(0);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   */
+  static void
+  RemoveLeftmostKeys(Node *node)
+  {
+    while (!node->IsLeaf()) {
+      // remove the leftmost key in a record region of an inner node
+      node->keys_[0] = Key{};
+
+      // go down to the lower level
+      node = node->template GetPayload<Node *>(0);
     }
   }
 
@@ -1126,7 +1143,7 @@ class NodeFixLen
   GetUsedSize() const  //
       -> size_t
   {
-    return kKeyLen * (record_count_ + has_low_key_ + (is_leaf_ & has_high_key_)) + block_size_;
+    return kKeyLen * (record_count_ + has_low_key_ + has_high_key_) + block_size_;
   }
 
   /**
@@ -1136,8 +1153,7 @@ class NodeFixLen
   GetHighKey() const  //
       -> const Key &
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-    return keys_[record_count_ - is_inner];
+    return keys_[record_count_];
   }
 
   /*####################################################################################
@@ -1277,10 +1293,8 @@ class NodeFixLen
     next_ = r_node;
 
     // copy a highest key in a left node as a lowest key in a right node
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
     r_node->has_low_key_ = 1;
-    r_node->keys_[r_node->record_count_ - is_inner + r_node->has_high_key_] =
-        keys_[record_count_ - is_inner];
+    r_node->keys_[r_node->record_count_ + r_node->has_high_key_] = keys_[record_count_];
   }
 
   /*####################################################################################
