@@ -386,6 +386,7 @@ class BTree
       ConstructUpperLayer(nodes);
     }
     root_ = nodes.front();
+    Node_t::RemoveLeftmostKeys(root_);
 
     return kSuccess;
   }

@@ -82,12 +82,12 @@ class NodeVarLen
   {
     // insert l_node
     auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
-    offset = SetKey(offset, l_key, l_key_len);
-    meta_array_[0] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
+    meta_array_[0] = Metadata{offset, 0, kPtrLen};
 
     // insert r_node
     offset = SetPayload(offset, &r_node, kPtrLen);
-    meta_array_[1] = Metadata{offset, 0, kPtrLen};
+    offset = SetKey(offset, l_key, l_key_len);
+    meta_array_[1] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // update header information
     block_size_ = kPageSize - offset;
@@ -162,7 +162,7 @@ class NodeVarLen
     const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
 
     auto *node = this;
-    if (Comp{}(sep_key, key)) {
+    if (!Comp{}(key, sep_key)) {
       node = next_;
       node->mutex_.LockSIX();
       mutex_.UnlockSIX();
@@ -384,8 +384,8 @@ class NodeVarLen
   {
     const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1 - inner_diff;
+    int64_t begin_pos = inner_diff;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = GetKey(meta_array_[pos]);
@@ -400,8 +400,7 @@ class NodeVarLen
         return {kKeyAlreadyInserted, pos};
       }
     }
-
-    return {kKeyNotInserted, begin_pos};
+    return {kKeyNotInserted, begin_pos - inner_diff};
   }
 
   /**
@@ -420,8 +419,8 @@ class NodeVarLen
       const bool is_closed)  //
       -> Node *
   {
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 2;
+    int64_t begin_pos = 1;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
 
@@ -432,13 +431,12 @@ class NodeVarLen
       } else if (Comp{}(index_key, key)) {  // a target key is in a right side
         begin_pos = pos + 1;
       } else {  // find an equivalent key
-        if (!is_closed) ++pos;
-        begin_pos = pos;
+        end_pos = pos;
         break;
       }
     }
 
-    auto *child = GetPayload<Node *>(begin_pos);
+    auto *child = GetPayload<Node *>(end_pos);
     mutex_.UnlockS();
     return child;
   }
@@ -492,7 +490,7 @@ class NodeVarLen
         // check the node includes a target key
         if (node->h_key_len_ == 0) return node;
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) return node;
+        if (Comp{}(key, high_key)) return node;
       }
 
       // go to the next node
@@ -524,7 +522,7 @@ class NodeVarLen
       // check the node is not removed
       if (node->is_removed_ == 0) {
         // check the node includes a target key
-        if (node->h_key_len_ == 0 || !Comp{}(node->GetHighKey(), key)) return node;
+        if (node->h_key_len_ == 0 || Comp{}(key, node->GetHighKey())) return node;
       }
 
       // go to the next node
@@ -765,12 +763,10 @@ class NodeVarLen
     mutex_.UpgradeToX();
 
     // insert a split-right child node
-    const auto *l_node = GetPayload<Node *>(pos);
-    memcpy(GetPayloadAddr(meta_array_[pos]), &r_node, kPtrLen);           // update as a right child
-    auto offset = SetPayload(kPageSize - block_size_, &l_node, kPtrLen);  // insert a left node
+    auto offset = SetPayload(kPageSize - block_size_, &r_node, kPtrLen);  // insert a right node
     offset = SetKey(offset, sep_key, sep_key_len);
-    memmove(&(meta_array_[pos + 1]), &(meta_array_[pos]), kMetaLen * (record_count_ - pos));
-    meta_array_[pos] = Metadata{offset, sep_key_len, rec_len};
+    memmove(&(meta_array_[pos + 2]), &(meta_array_[pos + 1]), kMetaLen * (record_count_ - pos - 1));
+    meta_array_[pos + 1] = Metadata{offset, sep_key_len, rec_len};
 
     // update header information
     ++record_count_;
@@ -797,13 +793,13 @@ class NodeVarLen
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
-    if (h_key_len_ > 0 && !Comp{}(del_key, GetHighKey())) {
+    if (record_count_ <= 1 || Comp{}(del_key, GetKey(1))) {
       mutex_.UnlockSIX();
       return kAbortMerge;
     }
 
     // check a position to be deleted and concurrent SMOs
-    const auto [existence, l_pos] = SearchRecord(del_key);
+    const auto [existence, r_pos] = SearchRecord(del_key);
     if (existence == kKeyNotInserted) {
       // previous splitting has not been applied, so unlock and retry
       mutex_.UnlockSIX();
@@ -816,15 +812,10 @@ class NodeVarLen
 
     mutex_.UpgradeToX();
 
-    // get a current left child node
-    const auto l_meta = meta_array_[l_pos];
-    const auto *l_child = GetPayload<Node *>(l_meta);
-
     // delete metadata of a deleted key
-    const auto del_rec_len = meta_array_[l_pos].rec_len;  // keep a record length to be deleted
-    const auto r_pos = l_pos + 1;
-    memmove(&(meta_array_[l_pos]), &(meta_array_[r_pos]), kMetaLen * (record_count_ - r_pos));
-    memcpy(GetPayloadAddr(meta_array_[l_pos]), &l_child, kPtrLen);
+    const auto del_rec_len = meta_array_[r_pos].rec_len;  // keep a record length to be deleted
+    memmove(&(meta_array_[r_pos]), &(meta_array_[r_pos + 1]),
+            kMetaLen * (record_count_ - 1 - r_pos));
 
     // update this header
     --record_count_;
@@ -869,15 +860,10 @@ class NodeVarLen
         used_size += meta.rec_len + kMetaLen;
       }
     }
-    const auto sep_key_len = meta_array_[pos - 1].key_len;
+    const auto sep_key_len = meta_array_[pos].key_len;
+    offset = temp_node_->CopyKeyFrom(this, meta_array_[pos], offset);
     temp_node_->h_key_offset_ = offset;
     temp_node_->h_key_len_ = sep_key_len;
-    if (is_leaf_) {
-      offset -= sep_key_len;  // reserve space for a highest key
-    } else {
-      const auto rightmost_pos = temp_node_->record_count_ - 1;
-      temp_node_->meta_array_[rightmost_pos] = Metadata{offset + sep_key_len, 0, kPtrLen};
-    }
 
     /*------------------------------
      * right-split
@@ -942,10 +928,6 @@ class NodeVarLen
     // copy consolidated records to the original node
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
     const auto rec_count = temp_node_->record_count_;
-    if (!is_leaf_) {
-      offset = temp_node_->CopyHighKeyFrom(this, offset);
-      temp_node_->meta_array_[rec_count - 1] = Metadata{offset, h_key_len_, h_key_len_ + kPtrLen};
-    }
 
     mutex_.UpgradeToX();
 
@@ -999,20 +981,11 @@ class NodeVarLen
     r_node->mutex_.UnlockX();
 
     // check the top position of a record block
-    size_t offset{};
-    if (is_leaf_) {
-      // set a highest key for leaf nodes
-      auto [existence, pos] = SearchRecord(l_key);
-      record_count_ = (existence == kKeyAlreadyInserted) ? pos + 1 : (((pos > 0)) ? pos : 0);
-      offset = (record_count_ > 0) ? meta_array_[record_count_ - 1].offset : kPageSize;
-      offset = SetKey(offset, l_key, l_key_len);
-    } else {
-      // remove a key of a rightmost record in internal nodes
-      const auto pos = SearchRecord(l_key).second;
-      offset = meta_array_[pos].offset;
-      meta_array_[pos] = Metadata{offset + l_key_len, 0, kPtrLen};
-      record_count_ = pos + 1;
-    }
+    // set a highest key for leaf nodes
+    auto [existence, pos] = SearchRecord(l_key);
+    record_count_ = pos;
+    auto offset = (record_count_ > 0) ? meta_array_[record_count_ - 1].offset : kPageSize;
+    offset = SetKey(offset, l_key, l_key_len);
 
     // update header information
     block_size_ = kPageSize - offset;
@@ -1088,9 +1061,10 @@ class NodeVarLen
 
     // set a highest key if this node is not rightmost
     if (iter < iter_end || !is_rightmost) {
+      const auto &[high_key, payload, high_key_len] = ParseEntry<Payload>(*iter);
+      offset = SetKey(offset, high_key, high_key_len);
       h_key_offset_ = offset;
-      h_key_len_ = meta_array_[record_count_ - 1].key_len;
-      offset -= h_key_len_;  // reserve space for a highest key
+      h_key_len_ = high_key_len;
     }
 
     // update header information
@@ -1113,25 +1087,29 @@ class NodeVarLen
     auto offset = (l_node != nullptr) ? l_node->LinkNext(this) : kPageSize - kMaxKeyLen;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
-      const auto *child = *iter;
-      const auto high_key_len = child->h_key_len_;
+      auto *child = *iter;
+      const auto high_key_len = child->meta_array_[0].key_len;
+      const auto high_key = child->GetKey(0);
       const auto rec_len = high_key_len + kPtrLen;
 
       // check whether the node has sufficient space
       node_size += rec_len + kMetaLen;
-      if (node_size > kPageSize - kMinFreeSpaceSize) break;
+      if (node_size + kMaxKeyLen > kPageSize - kMinFreeSpaceSize) break;
 
       // insert an entry to the inner node
       offset = SetPayload(offset, &child, kPtrLen);
-      offset = CopyHighKeyFrom(child, offset);
+      offset = SetKey(offset, high_key, high_key_len);
       meta_array_[record_count_++] = Metadata{offset, high_key_len, rec_len};
     }
 
     // move a highest key to header
-    const auto rightmost_pos = record_count_ - 1;
-    h_key_offset_ = offset;
-    h_key_len_ = meta_array_[rightmost_pos].key_len;
-    meta_array_[rightmost_pos] = Metadata{offset + h_key_len_, 0, kPtrLen};
+    if (iter < iter_end) {
+      const auto high_key_len = (*iter)->meta_array_[0].key_len;
+      const auto high_key = (*iter)->GetKey(0);
+      offset = SetKey(offset, high_key, high_key_len);
+      h_key_offset_ = offset;
+      h_key_len_ = high_key_len;
+    }
 
     // update header information
     block_size_ = kPageSize - offset;
@@ -1149,6 +1127,15 @@ class NodeVarLen
       Node *r_node)
   {
     while (true) {
+      // rightmost node of the tree created by each thread does not have a high key set
+      if (!l_node->is_leaf_) {
+        auto l_offset = kPageSize - l_node->block_size_;
+        const auto l_h_key_len = r_node->meta_array_[0].key_len;
+        const auto high_key = r_node->GetKey(0);
+        l_offset = l_node->SetKey(l_offset, high_key, l_h_key_len);
+        l_node->h_key_offset_ = l_offset;
+        l_node->h_key_len_ = l_h_key_len;
+      }
       l_node->LinkNext(r_node);
 
       if (l_node->is_leaf_) return;  // all the border nodes are linked
@@ -1156,6 +1143,26 @@ class NodeVarLen
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
       r_node = r_node->template GetPayload<Node *>(0);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   */
+  static void
+  RemoveLeftmostKeys(Node *node)
+  {
+    while (!node->IsLeaf()) {
+      // remove the leftmost key in a record region of an inner node
+      const auto meta = node->meta_array_[0];
+      const auto offset = meta.offset;
+      const auto key_len = meta.key_len;
+      const size_t rec_len = meta.rec_len - key_len;
+      node->meta_array_[0] = Metadata{offset + key_len, 0, rec_len};
+
+      // go down to the lower level
+      node = node->template GetPayload<Node *>(0);
     }
   }
 
@@ -1194,7 +1201,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return !Comp{}(GetHighKey(), std::get<0>(*end_key));
+    return Comp{}(std::get<0>(*end_key), GetHighKey());
   }
 
   /**
