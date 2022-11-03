@@ -414,9 +414,8 @@ class NodeVarLen
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchChild(         //
+      const Key &key)  //
       -> Node *
   {
     int64_t begin_pos = 1;
@@ -478,8 +477,7 @@ class NodeVarLen
   [[nodiscard]] static auto
   CheckKeyRangeAndLockForRead(  //
       Node *node,
-      const Key &key,
-      const bool is_closed)  //
+      const Key &key)  //
       -> Node *
   {
     while (true) {

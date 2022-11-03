@@ -409,9 +409,8 @@ class NodeFixLen
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchChild(         //
+      const Key &key)  //
       -> Node *
   {
     int64_t begin_pos = 1;
@@ -473,8 +472,7 @@ class NodeFixLen
   [[nodiscard]] static auto
   CheckKeyRangeAndLockForRead(  //
       Node *node,
-      const Key &key,
-      const bool is_closed)  //
+      const Key &key)  //
       -> Node *
   {
     while (true) {
@@ -1030,7 +1028,6 @@ class NodeFixLen
       Node *l_node)
   {
     constexpr auto kRecLen = kKeyLen + kPtrLen;
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>((*iter)->is_leaf_));
 
     auto offset = kPageSize;
     auto node_size = kHeaderLen;
