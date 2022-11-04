@@ -125,7 +125,7 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNode(key, kClosed);
+    auto *node = SearchLeafNode(key);
     Payload payload{};
     const auto rc = Node_t::Read(node, key, payload);
 
@@ -153,8 +153,8 @@ class BTree
 
     if (begin_key) {
       const auto &[key, key_len, is_closed] = begin_key.value();
-      node = SearchLeafNode(key, is_closed);
-      Node_t::CheckKeyRangeAndLockForRead(node, key, is_closed);
+      node = SearchLeafNode(key);
+      Node_t::CheckKeyRangeAndLockForRead(node, key);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
     } else {
@@ -266,7 +266,7 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNode(key, kClosed);
+    auto *node = SearchLeafNode(key);
     return Node_t::Update(node, key, &payload, kPayLen);
   }
 
@@ -388,6 +388,7 @@ class BTree
       ConstructUpperLayer(nodes);
     }
     root_ = nodes.front();
+    Node_t::RemoveLeftmostKeys(root_);
 
     return kSuccess;
   }
@@ -458,14 +459,12 @@ class BTree
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
-  SearchLeafNode(  //
-      const Key &key,
-      const bool is_closed) const  //
+  SearchLeafNode(const Key &key) const  //
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      auto *child = Node_t::SearchChild(node, key, is_closed);
+      auto *child = Node_t::SearchChild(node, key);
       if (node == nullptr) {
         // a root node was removed
         node = root_.load(std::memory_order_acquire);
@@ -515,7 +514,7 @@ class BTree
 
     auto *node = root_.load(std::memory_order_acquire);
     while (!node->IsLeaf()) {
-      auto *child = Node_t::SearchChild(node, key, kClosed);
+      auto *child = Node_t::SearchChild(node, key);
       if (node == nullptr) {
         // a root node was removed
         stack.clear();
@@ -548,7 +547,7 @@ class BTree
     if (key) {
       // search a target node with its lowest key
       while (true) {
-        auto *child = Node_t::SearchChild(node, *key, !kClosed);
+        auto *child = Node_t::SearchChild(node, *key);
         if (node == target_node) return;
         if (node == nullptr) {
           // a root node is removed
