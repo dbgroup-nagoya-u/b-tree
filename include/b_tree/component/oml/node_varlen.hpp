@@ -52,6 +52,10 @@ class NodeVarLen
 
   using Node = NodeVarLen;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  // aliases for bulkloading
+  template <class Entry>
+  using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, Node *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -1038,95 +1042,53 @@ class NodeVarLen
   /*####################################################################################
    * Public bulkload APIs
    *##################################################################################*/
-
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a node with the maximum number of records for bulkloading.
    *
-   * @tparam Entry a pair/tuple of keys and payloads.
-   * @tparam Payload a target payload class.
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @param is_rightmost a flag for indicating this node can be rightmost.
-   * @param l_node the left sibling node of this node.
+   * @param prev_node a left sibling node.
+   * @param nodes the container of construcred nodes.
    */
-  template <class Entry, class Payload>
+  template <class Entry>
   void
   Bulkload(  //
-      typename std::vector<Entry>::const_iterator &iter,
-      const typename std::vector<Entry>::const_iterator &iter_end,
-      const bool is_rightmost,
-      Node *l_node)
+      BulkIter<Entry> &iter,
+      const BulkIter<Entry> &iter_end,
+      Node *prev_node,
+      std::vector<NodeEntry> &nodes)
   {
-    // extract and insert entries for the leaf node
-    size_t node_size = kHeaderLen;
-    auto offset = kPageSize;
+    using Payload = std::tuple_element_t<1, Entry>;
+
+    constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
+    const auto kPayLen = sizeof(Payload);
+
+    // extract and insert entries into this node
+    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
+    auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry<Payload>(*iter);
-      const auto rec_len = key_len + sizeof(Payload);
+      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto rec_len = key_len + kPayLen;
 
-      // check whether the node has sufficient space
-      node_size += rec_len + kMetaLen;
-      if (node_size + key_len > kPageSize - kMinFreeSpaceSize) break;
+      // check whether the node has sufficent space
+      node_size += rec_len + sizeof(Metadata);
+      if (node_size + kMaxKeyLen > kPageSize) break;
 
-      // insert an entry to the leaf node
-      offset = SetPayload(offset, &payload, sizeof(Payload));
+      // insert an entry into this node
+      offset = SetPayload(offset, &payload, kPayLen);
       offset = SetKey(offset, key, key_len);
       meta_array_[record_count_++] = Metadata{offset, key_len, rec_len};
     }
 
-    // set a highest key if this node is not rightmost
-    if (iter < iter_end || !is_rightmost) {
-      const auto &[high_key, payload, high_key_len] = ParseEntry<Payload>(*iter);
-      offset = SetKey(offset, high_key, high_key_len);
-      high_meta_ = Metadata{offset, high_key_len, high_key_len};
-    }
-
-    // update header information
     block_size_ = kPageSize - offset;
-    if (l_node != nullptr) {
-      l_node->next_ = this;
-    }
-  }
 
-  /**
-   * @brief Create a inner node with the maximum number of records for bulkloading.
-   *
-   * @param iter the begin position of target records.
-   * @param iter_end the end position of target records.
-   */
-  void
-  Bulkload(  //
-      typename std::vector<Node *>::const_iterator &iter,
-      const typename std::vector<Node *>::const_iterator &iter_end)
-  {
-    size_t node_size = kHeaderLen;
-    auto offset = kPageSize;
-    for (; iter < iter_end; ++iter) {
-      const auto *child = *iter;
-      const auto meta = child->meta_array_[0];
-      const auto low_key_len = meta.key_len;
-      const auto rec_len = low_key_len + kPtrLen;
-
-      // check whether the node has sufficient space
-      node_size += rec_len + kMetaLen;
-      if (node_size > kPageSize - kMinFreeSpaceSize) break;
-
-      // insert an entry to the inner node
-      offset = SetPayload(offset, &child, kPtrLen);
-      offset = CopyKeyFrom(child, meta, offset);
-      meta_array_[record_count_++] = Metadata{offset, low_key_len, rec_len};
+    // link the sibling nodes if exist
+    if (prev_node != nullptr) {
+      prev_node->LinkNext(this);
     }
 
-    // move a highest key to header
-    if (iter < iter_end) {
-      const auto high_key_len = (*iter)->meta_array_[0].key_len;
-      const auto high_key = (*iter)->GetKey(0);
-      offset = SetKey(offset, high_key, high_key_len);
-      high_meta_ = Metadata{offset, high_key_len, high_key_len};
-    }
-
-    // update header information
-    block_size_ = kPageSize - offset;
+    nodes.emplace_back(GetKey(0), this, meta_array_[0].key_len);
   }
 
   /**
@@ -1141,8 +1103,8 @@ class NodeVarLen
       Node *r_node)
   {
     while (true) {
+      l_node->LinkNext(r_node);
       if (!l_node->is_inner_) {
-        l_node->next_ = r_node;
         return;
       }
 
@@ -1159,7 +1121,7 @@ class NodeVarLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (node->IsInner()) {
+    while (!node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       const auto meta = node->meta_array_[0];
       const auto offset = meta.offset;
@@ -1625,17 +1587,45 @@ class NodeVarLen
    * @retval 2nd: a target payload.
    * @retval 3rd: the length of a target key.
    */
-  template <class Payload, class Entry>
+  template <class Entry>
   constexpr auto
   ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, Payload, size_t>
+      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
   {
-    if constexpr (IsVarLenData<Key>()) {
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 3);
+
+    if constexpr (kTupleSize == 3) {
       return entry;
     } else {
       const auto &[key, payload] = entry;
       return {key, payload, sizeof(Key)};
     }
+  }
+
+  /**
+   * @brief Link this node to a right sibling node.
+   *
+   * @param r_node a right sibling node.
+   * @return an offset to a lowest key in a right sibling node.
+   */
+  auto
+  LinkNext(Node *r_node)  //
+      -> size_t
+  {
+    // set a highest key in a left node
+    const auto high_key_len = r_node->meta_array_[0].key_len;
+    auto offset = kPageSize - block_size_;
+    offset = SetKey(offset, r_node->GetKey(0), high_key_len);
+    block_size_ += high_key_len;
+    high_meta_ = Metadata{offset, high_key_len, high_key_len};
+
+    // set a sibling link in a left node
+    if (IsInner()) return offset;
+
+    next_ = r_node;
+
+    return offset;
   }
 
   /*####################################################################################
