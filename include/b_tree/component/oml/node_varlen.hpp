@@ -60,10 +60,10 @@ class NodeVarLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a inner node is constructed.
    */
-  constexpr explicit NodeVarLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}
+  constexpr explicit NodeVarLen(const uint32_t is_inner)
+      : is_inner_{is_inner}, is_removed_{0}, block_size_{0}
   {
   }
 
@@ -76,7 +76,7 @@ class NodeVarLen
   NodeVarLen(  //
       const NodeVarLen *l_node,
       const NodeVarLen *r_node)  //
-      : is_leaf_{0}, is_removed_{0}, record_count_{2}
+      : is_inner_{1}, is_removed_{0}, record_count_{2}
   {
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
@@ -114,14 +114,14 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -434,7 +434,7 @@ class NodeVarLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    const auto inner_diff = static_cast<size_t>(static_cast<bool>(is_inner_));
 
     int64_t begin_pos = inner_diff;
     int64_t end_pos = record_count_ - 1;
@@ -966,7 +966,7 @@ class NodeVarLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = next_;
     }
 
@@ -975,7 +975,7 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node;
     }
 
@@ -1014,7 +1014,7 @@ class NodeVarLen
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node->next_;
     }
 
@@ -1023,7 +1023,7 @@ class NodeVarLen
 
     // update a header of a right node
     r_node->is_removed_ = 1;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = this;
     }
 
@@ -1141,7 +1141,7 @@ class NodeVarLen
       Node *r_node)
   {
     while (true) {
-      if (l_node->is_leaf_) {
+      if (!l_node->is_inner_) {
         l_node->next_ = r_node;
         return;
       }
@@ -1159,7 +1159,7 @@ class NodeVarLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       const auto meta = node->meta_array_[0];
       const auto offset = meta.offset;
@@ -1643,7 +1643,7 @@ class NodeVarLen
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// a flag for indicating this node is removed from a tree.
   uint32_t is_removed_ : 1;

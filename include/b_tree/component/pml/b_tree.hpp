@@ -421,7 +421,7 @@ class BTree
       -> Node_t *
   {
     auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       const auto pos = node->SearchChild(key);
       node = node->GetChildForRead(pos);
     }
@@ -442,7 +442,7 @@ class BTree
       -> Node_t *
   {
     auto *node = GetRootForRead();
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       node = node->GetChildForRead(0);
     }
 
@@ -464,7 +464,7 @@ class BTree
       -> Node_t *
   {
     auto *node = GetRootForWrite(key);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       // search a child node
       const auto pos = node->SearchChild(key);
       auto *child = node->GetChildForWrite(pos);
@@ -497,7 +497,7 @@ class BTree
   static void
   DeleteChildren(Node_t *node)
   {
-    if (!node->IsLeaf()) {
+    if (node->IsInner()) {
       // delete children nodes recursively
       for (size_t i = 0; i < node->GetRecordCount(); ++i) {
         auto *child_node = node->template GetPayload<Node_t *>(i);
@@ -527,7 +527,7 @@ class BTree
       -> Node_t *
   {
     parent->UpgradeToX();
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    auto *r_node = new Node_t{l_node->IsInner()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
     return r_node;
@@ -546,7 +546,7 @@ class BTree
     mutex_.UpgradeToX();
 
     auto *l_node = root_;
-    auto *r_node = new Node_t{l_node->IsLeaf()};
+    auto *r_node = new Node_t{l_node->IsInner()};
     l_node->Split(r_node);
     root_ = new Node_t{l_node, r_node};
 
@@ -584,7 +584,7 @@ class BTree
   void
   ShrinkTreeIfNeeded()
   {
-    while (root_->GetRecordCount() == 1 && !root_->IsLeaf()) {
+    while (root_->GetRecordCount() == 1 && root_->IsInner()) {
       mutex_.UpgradeToX();
 
       // if a root node has only one child, shrink a tree
@@ -629,7 +629,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new Node_t{true};
+      auto *node = new Node_t{kLeafFlag};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -666,7 +666,7 @@ class BTree
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      auto *node = new Node_t{false};
+      auto *node = new Node_t{kInnerFlag};
       node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
     }

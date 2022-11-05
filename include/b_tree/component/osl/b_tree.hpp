@@ -463,7 +463,7 @@ class BTree
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       auto *child = Node_t::SearchChild(node, key);
       if (node == nullptr) {
         // a root node was removed
@@ -488,7 +488,7 @@ class BTree
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       node = node->GetLeftmostChild();
       if (node == nullptr) {
         node = root_.load(std::memory_order_acquire);
@@ -513,7 +513,7 @@ class BTree
     stack.reserve(kExpectedTreeHeight);
 
     auto *node = root_.load(std::memory_order_acquire);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       auto *child = Node_t::SearchChild(node, key);
       if (node == nullptr) {
         // a root node was removed
@@ -585,7 +585,7 @@ class BTree
   static void
   DeleteChildren(Node_t *node)
   {
-    if (!node->IsLeaf()) {
+    if (node->IsInner()) {
       // delete children nodes recursively
       for (size_t i = 0; i < node->GetRecordCount(); ++i) {
         auto *child_node = node->template GetPayload<Node_t *>(i);
@@ -610,7 +610,7 @@ class BTree
   HalfSplit(Node_t *l_node)  //
       -> Node_t *
   {
-    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsInner()};
     l_node->Split(r_node);
 
     return r_node;
@@ -817,7 +817,7 @@ class BTree
       do {
         gc_.AddGarbage(node);
         node = node->RemoveRoot();
-      } while (node->GetRecordCount() == 1 && !node->IsLeaf());
+      } while (node->GetRecordCount() == 1 && node->IsInner());
       root_.store(node, std::memory_order_relaxed);
     }
 

@@ -59,10 +59,10 @@ class NodeFixLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a inner node is constructed.
    */
-  constexpr explicit NodeFixLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}, has_low_key_{0}, has_high_key_{0}
+  constexpr explicit NodeFixLen(const uint32_t is_inner)
+      : is_inner_{is_inner}, is_removed_{0}, block_size_{0}, has_low_key_{0}, has_high_key_{0}
   {
   }
 
@@ -77,7 +77,7 @@ class NodeFixLen
       [[maybe_unused]] const size_t l_key_len,
       const NodeFixLen *l_node,
       const NodeFixLen *r_node)  //
-      : is_leaf_{0},
+      : is_inner_{1},
         is_removed_{0},
         block_size_{2 * kPtrLen},
         record_count_{2},
@@ -110,14 +110,14 @@ class NodeFixLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -378,7 +378,7 @@ class NodeFixLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    const auto inner_diff = static_cast<size_t>(static_cast<bool>(is_inner_));
 
     int64_t begin_pos = inner_diff;
     int64_t end_pos = record_count_ - 1;
@@ -1067,14 +1067,14 @@ class NodeFixLen
       Node *r_node)
   {
     while (true) {
-      if (!l_node->is_leaf_) {
+      if (l_node->is_inner_) {
         l_node->has_high_key_ = 1;
         l_node->keys_[l_node->record_count_] = r_node->keys_[0];
       }
 
       l_node->LinkNext(r_node);
 
-      if (l_node->is_leaf_) return;  // all the border nodes are linked
+      if (!l_node->is_inner_) return;  // all the border nodes are linked
 
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
@@ -1089,7 +1089,7 @@ class NodeFixLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (!node->IsLeaf()) {
+    while (!node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       node->keys_[0] = Key{};
 
@@ -1299,7 +1299,7 @@ class NodeFixLen
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// a flag for indicating this node is removed from a tree.
   uint32_t is_removed_ : 1;

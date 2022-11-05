@@ -54,10 +54,10 @@ constexpr size_t kExpectedTreeHeight = 8;
 constexpr auto kRetryWait = std::chrono::microseconds{10};
 
 /// a flag for indicating leaf nodes.
-constexpr uint32_t kLeafFlag = 1;
+constexpr uint32_t kLeafFlag = 0;
 
 /// a flag for indicating internal nodes.
-constexpr uint32_t kInnerFlag = 0;
+constexpr uint32_t kInnerFlag = 1;
 
 /// a flag for indicating closed-interval.
 constexpr bool kClosed = true;

@@ -60,10 +60,10 @@ class NodeVarLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a inner node is constructed.
    */
-  constexpr explicit NodeVarLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}
+  constexpr explicit NodeVarLen(const uint32_t is_inner)
+      : is_inner_{is_inner}, is_removed_{0}, block_size_{0}
   {
   }
 
@@ -78,7 +78,7 @@ class NodeVarLen
       const size_t l_key_len,
       const NodeVarLen *l_node,
       const NodeVarLen *r_node)  //
-      : is_leaf_{0}, is_removed_{0}, record_count_{2}
+      : is_inner_{1}, is_removed_{0}, record_count_{2}
   {
     // insert l_node
     auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
@@ -114,14 +114,14 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -385,7 +385,7 @@ class NodeVarLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
+    const auto inner_diff = static_cast<size_t>(static_cast<bool>(is_inner_));
 
     int64_t begin_pos = inner_diff;
     int64_t end_pos = record_count_ - 1;
@@ -1258,7 +1258,7 @@ class NodeVarLen
   {
     while (true) {
       // rightmost node of the tree created by each thread does not have a high key set
-      if (!l_node->is_leaf_) {
+      if (l_node->is_inner_) {
         auto l_offset = kPageSize - l_node->block_size_;
         const auto l_h_key_len = r_node->meta_array_[0].key_len;
         const auto high_key = r_node->GetKey(0);
@@ -1269,7 +1269,7 @@ class NodeVarLen
 
       l_node->LinkNext(r_node);
 
-      if (l_node->is_leaf_) return;  // all the border nodes are linked
+      if (!l_node->is_inner_) return;  // all the border nodes are linked
 
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
@@ -1284,7 +1284,7 @@ class NodeVarLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (!node->IsLeaf()) {
+    while (!node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       const auto meta = node->meta_array_[0];
       const auto offset = meta.offset;
@@ -1755,7 +1755,7 @@ class NodeVarLen
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// a flag for indicating this node is removed from a tree.
   uint32_t is_removed_ : 1;

@@ -60,9 +60,9 @@ class NodeVarLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a leaf node is constructed.
    */
-  constexpr explicit NodeVarLen(const uint32_t is_leaf) : is_leaf_{is_leaf}, block_size_{0} {}
+  constexpr explicit NodeVarLen(const uint32_t is_inner) : is_inner_{is_inner}, block_size_{0} {}
 
   /**
    * @brief Construct a new root node.
@@ -73,7 +73,7 @@ class NodeVarLen
   NodeVarLen(  //
       const NodeVarLen *l_node,
       const NodeVarLen *r_node)  //
-      : is_leaf_{0}, record_count_{2}
+      : is_inner_{1}, record_count_{2}
   {
     // insert l_node
     const auto l_high_meta = l_node->high_meta_;
@@ -128,14 +128,14 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -771,7 +771,7 @@ class NodeVarLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = next_;
     }
 
@@ -781,7 +781,7 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node;
     }
 
@@ -822,7 +822,7 @@ class NodeVarLen
     // update a header
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node->next_;
     }
 
@@ -937,7 +937,7 @@ class NodeVarLen
       Node *r_node)
   {
     while (true) {
-      if (l_node->is_leaf_) {
+      if (!l_node->is_inner_) {
         l_node->next_ = r_node;
         return;
       }
@@ -955,7 +955,7 @@ class NodeVarLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (!node->IsLeaf()) {
+    while (!node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       const auto meta = node->meta_array_[0];
       const auto offset = meta.offset;
@@ -1332,7 +1332,7 @@ class NodeVarLen
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// the total byte length of records in a node.
   uint32_t block_size_ : 31;

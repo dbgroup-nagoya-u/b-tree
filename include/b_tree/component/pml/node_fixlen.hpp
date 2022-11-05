@@ -63,10 +63,10 @@ class NodeFixLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a inner node is constructed.
    */
-  constexpr explicit NodeFixLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, block_size_{0}, has_high_key_{0}
+  constexpr explicit NodeFixLen(const uint32_t is_inner)
+      : is_inner_{is_inner}, block_size_{0}, has_high_key_{0}
   {
   }
 
@@ -79,7 +79,7 @@ class NodeFixLen
   NodeFixLen(  //
       const NodeFixLen *l_node,
       const NodeFixLen *r_node)  //
-      : is_leaf_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
+      : is_inner_{1}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
   {
     keys_[1] = l_node->GetHighKey();
     SetPayload(kPageSize, &l_node);
@@ -124,14 +124,14 @@ class NodeFixLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -764,7 +764,7 @@ class NodeFixLen
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = next_;
     }
     r_node->has_high_key_ = has_high_key_;
@@ -774,7 +774,7 @@ class NodeFixLen
     // update a header
     block_size_ -= r_node->block_size_;
     record_count_ = l_count;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node;
     }
     has_high_key_ = 1;
@@ -801,7 +801,7 @@ class NodeFixLen
 
     // update a header
     block_size_ = kPageSize - offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node->next_;
     }
     has_high_key_ = r_node->has_high_key_;
@@ -912,7 +912,7 @@ class NodeFixLen
       Node *r_node)
   {
     while (true) {
-      if (l_node->is_leaf_) {
+      if (!l_node->is_inner_) {
         l_node->next_ = r_node;
         return;
       }
@@ -930,7 +930,7 @@ class NodeFixLen
   static void
   RemoveLeftmostKeys(Node *node)
   {
-    while (!node->IsLeaf()) {
+    while (!node->IsInner()) {
       // remove the leftmost key in a record region of an inner node
       node->keys_[0] = Key{};
 
@@ -1114,7 +1114,7 @@ class NodeFixLen
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// the total byte length of records in a node.
   uint32_t block_size_ : 31;

@@ -452,7 +452,7 @@ class BTree
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       auto *child = node->SearchChild(key, is_closed);
       if (child == nullptr) {
         node = root_.load(std::memory_order_acquire);
@@ -476,7 +476,7 @@ class BTree
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       node = node->GetLeftmostChild();
       if (node == nullptr) {
         node = root_.load(std::memory_order_acquire);
@@ -502,7 +502,7 @@ class BTree
       -> Node_t *
   {
     auto [node, ver] = GetRootForWrite(key);
-    while (!node->IsLeaf()) {
+    while (node->IsInner()) {
       auto [pos, child] = node->SearchChild(key, ver, kMaxRecLen);
       if (child == nullptr) {
         std::tie(node, ver) = GetRootForWrite(key);
@@ -538,7 +538,7 @@ class BTree
   static void
   DeleteChildren(Node_t *node)
   {
-    if (!node->IsLeaf()) {
+    if (node->IsInner()) {
       // delete children nodes recursively
       for (size_t i = 0; i < node->GetRecordCount(); ++i) {
         auto *child_node = node->template GetPayload<Node_t *>(i);
@@ -579,7 +579,7 @@ class BTree
 
     // perform splitting
     auto *l_node = child;
-    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsInner()};
     l_node->Split(r_node);
     auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key, r_node);
     parent->InsertChild(r_node, sep_key, sep_key_len, pos);
@@ -615,7 +615,7 @@ class BTree
 
     // perform splitting the root node
     auto *l_node = node;
-    auto *r_node = new (GetNodePage()) Node_t{l_node->IsLeaf()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsInner()};
     l_node->Split(r_node);
 
     // install a new root node
@@ -675,7 +675,7 @@ class BTree
       uint64_t ver)  //
       -> bool
   {
-    if (node->GetRecordCount() > 1 || node->IsLeaf()) return true;
+    if (node->GetRecordCount() > 1 || !node->IsInner()) return true;
 
     // if a internal-root node has only one child, try to shrink a tree
     if (!node->TryLockSIX(ver)) return false;
@@ -724,7 +724,7 @@ class BTree
     const auto &iter_end = iter + n;
     Node_t *l_node = nullptr;
     while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{true};
+      auto *node = new (GetNodePage()) Node_t{kLeafFlag};
       node->template Bulkload<Entry, Payload>(iter, iter_end, is_rightmost, l_node);
       nodes.emplace_back(node);
       l_node = node;
@@ -761,7 +761,7 @@ class BTree
     auto &&iter = child_nodes.cbegin();
     const auto &iter_end = child_nodes.cend();
     while (iter < iter_end) {
-      auto *node = new (GetNodePage()) Node_t{false};
+      auto *node = new (GetNodePage()) Node_t{kInnerFlag};
       node->Bulkload(iter, iter_end);
       nodes.emplace_back(node);
     }
