@@ -55,6 +55,7 @@ class NodeFixLen
   // aliases for bulkloading
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, Node *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -812,92 +813,48 @@ class NodeFixLen
   /*####################################################################################
    * Public bulkload APIs
    *##################################################################################*/
-
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a node with the maximum number of records for bulkloading.
    *
-   * @tparam Entry a pair/tuple of keys and payloads.
-   * @tparam Payload a target payload class.
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @param is_rightmost a flag for indicating this node can be rightmost.
-   * @param l_node the left sibling node of this node.
+   * @param prev_node a left sibling node.
+   * @param nodes the container of construcred nodes.
    */
-  template <class Entry, class Payload>
+  template <class Entry>
   void
   Bulkload(  //
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
-      const bool is_rightmost,
-      Node *l_node)
+      Node *prev_node,
+      std::vector<NodeEntry> &nodes)
   {
-    constexpr auto kPayLen = sizeof(Payload);
-    constexpr auto kRecLen = kKeyLen + kPayLen;
-    constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
-
-    // set header information for treating payloads
-    pay_len_ = kPayLen;
-
-    // extract and insert entries for the leaf node
-    const size_t n = std::distance(iter, iter_end);
-    const auto has_last_record = n < kNodeCap;
-    const auto rec_count = (has_last_record) ? n : kNodeCap;
-    auto offset = kPageSize;
-    for (size_t i = 0; i < rec_count; ++i, ++iter) {
-      // insert an entry to the leaf node
-      const auto &[key, payload] = *iter;
-      keys_[record_count_++] = key;
-      offset = SetPayload(offset, &payload);
-    }
-
-    // set a highest key if this node is not rightmost
-    if (iter < iter_end || !is_rightmost) {
-      has_high_key_ = 1;
-      const auto &[key, payload] = *iter;
-      keys_[record_count_] = key;
-    }
-
-    // update header information
-    block_size_ = kPageSize - offset;
-    if (l_node != nullptr) {
-      l_node->next_ = this;
-    }
-  }
-
-  /**
-   * @brief Create a inner node with the maximum number of records for bulkloading.
-   *
-   * @param iter the begin position of target records.
-   * @param iter_end the end position of target records.
-   */
-  void
-  Bulkload(  //
-      BulkIter<Node *> &iter,
-      const BulkIter<Node *> &iter_end)
-  {
+    constexpr auto kKeyLen = sizeof(Key);
     constexpr auto kRecLen = kKeyLen + kPtrLen;
-    constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
 
-    // check the number of child nodes to be loaded
-    const size_t n = std::distance(iter, iter_end);
-    const auto rec_count = (n < kNodeCap) ? n : kNodeCap;
-
-    // extract and insert entries for the leaf node
+    // extract and insert entries into this node
     auto offset = kPageSize;
-    for (size_t i = 0; i < rec_count; ++i, ++iter) {
-      // insert an entry to the inner node
-      const auto *child = *iter;
-      keys_[record_count_++] = child->keys_[0];
-      offset = SetPayload(offset, &child);
+    auto node_size = kHeaderLen;
+    for (; iter < iter_end; ++iter) {
+      // check whether the node has sufficent space
+      node_size += kRecLen;
+      if (node_size + kKeyLen > kPageSize) break;
+
+      // insert an entry into this node
+      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      offset = SetPayload(offset, &payload);
+      keys_[record_count_++] = key;
     }
 
-    if (iter < iter_end) {
-      has_high_key_ = 1;
-      keys_[record_count_] = (*iter)->keys_[0];
-    }
-
-    // update header information
     block_size_ = kPageSize - offset;
+
+    // link the sibling nodes if exist
+    if (prev_node != nullptr) {
+      prev_node->LinkNext(this);
+    }
+
+    nodes.emplace_back(keys_[0], this, kKeyLen);
   }
 
   /**
@@ -912,8 +869,8 @@ class NodeFixLen
       Node *r_node)
   {
     while (true) {
+      l_node->LinkNext(r_node);
       if (!l_node->is_inner_) {
-        l_node->next_ = r_node;
         return;
       }
 
@@ -1107,6 +1064,52 @@ class NodeFixLen
     }
 
     return offset;
+  }
+
+  /**
+   * @brief Parse an entry of bulkload according to key's type.
+   *
+   * @tparam Payload a payload type.
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: a target payload.
+   * @retval 3rd: the length of a target key.
+   */
+  template <class Entry>
+  constexpr auto
+  ParseEntry(const Entry &entry)  //
+      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
+  {
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 3);
+
+    if constexpr (kTupleSize == 3) {
+      return entry;
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, payload, sizeof(Key)};
+    }
+  }
+
+  /**
+   * @brief Link this node to a right sibling node.
+   *
+   * @param r_node a right sibling node.
+   */
+  void
+  LinkNext(Node *r_node)
+  {
+    // set a highest key in a left node
+    has_high_key_ = 1;
+    keys_[record_count_] = r_node->keys_[0];
+
+    // set a sibling link in a left node
+    if (IsInner()) return;
+
+    next_ = r_node;
+
+    return;
   }
 
   /*####################################################################################
