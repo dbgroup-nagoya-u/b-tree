@@ -1251,8 +1251,6 @@ class NodeFixLen
 
     // set a sibling link in a left node
     next_ = r_node;
-
-    return;
   }
 
   /*####################################################################################

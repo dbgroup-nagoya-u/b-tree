@@ -1052,7 +1052,7 @@ class NodeVarLen
     using Payload = std::tuple_element_t<1, Entry>;
 
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
-    const auto kPayLen = sizeof(Payload);
+    constexpr auto kPayLen = sizeof(Payload);
 
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
