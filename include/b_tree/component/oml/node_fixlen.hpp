@@ -55,6 +55,7 @@ class NodeFixLen
   // aliases for bulkloading
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, Node *, size_t>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -63,10 +64,10 @@ class NodeFixLen
   /**
    * @brief Construct an empty node object.
    *
-   * @param is_leaf a flag to indicate whether a leaf node is constructed.
+   * @param is_inner a flag to indicate whether a inner node is constructed.
    */
-  constexpr explicit NodeFixLen(const uint32_t is_leaf)
-      : is_leaf_{is_leaf}, is_removed_{0}, block_size_{0}, has_high_key_{0}
+  constexpr explicit NodeFixLen(const uint32_t is_inner)
+      : is_inner_{is_inner}, is_removed_{0}, block_size_{0}, has_high_key_{0}
   {
   }
 
@@ -79,9 +80,9 @@ class NodeFixLen
   NodeFixLen(  //
       const NodeFixLen *l_node,
       const NodeFixLen *r_node)  //
-      : is_leaf_{0}, is_removed_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
+      : is_inner_{1}, is_removed_{0}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
   {
-    keys_[0] = l_node->GetHighKey();
+    keys_[1] = l_node->GetHighKey();
     SetPayload(kPageSize, &l_node);
     SetPayload(kPageSize - kPtrLen, &r_node);
   }
@@ -107,14 +108,14 @@ class NodeFixLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a leaf node.
+   * @return true if this is a inner node.
    * @return false otherwise.
    */
   [[nodiscard]] constexpr auto
-  IsLeaf() const  //
+  IsInner() const  //
       -> bool
   {
-    return is_leaf_;
+    return is_inner_;
   }
 
   /**
@@ -157,7 +158,7 @@ class NodeFixLen
     Node *node{};
     uint64_t ver{};
     const auto sep_key = GetHighKey();
-    if (Comp{}(sep_key, key)) {
+    if (!Comp{}(key, sep_key)) {
       node = r_node;
       ver = r_node->mutex_.UnlockX();
       mutex_.UnlockX();
@@ -417,10 +418,8 @@ class NodeFixLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-
-    int64_t begin_pos = 0;
-    int64_t end_pos = record_count_ - 1 - inner_diff;
+    int64_t begin_pos = is_inner_;
+    int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
       const auto &index_key = keys_[pos];
@@ -434,7 +433,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos};
+    return {kKeyNotInserted, begin_pos - is_inner_};
   }
 
   /**
@@ -444,13 +443,10 @@ class NodeFixLen
    * is greater than the specified key.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchChild(const Key &key)  //
       -> Node *
   {
     Node *child{};
@@ -466,17 +462,14 @@ class NodeFixLen
 
       // check the current node has a target key
       const auto &high_key = GetHighKey();
-      if (has_high_key_ && (Comp{}(high_key, key) || (!is_closed && !Comp{}(key, high_key)))) {
+      if (has_high_key_ && (!Comp{}(key, high_key))) {
         if (!mutex_.HasSameVersion(ver)) continue;
         child = nullptr;  // retry from a root node
         break;
       }
 
       // search a child node
-      auto [rc, pos] = SearchRecord(key);
-      if (!is_closed && rc == kKeyAlreadyInserted) {
-        ++pos;
-      }
+      const auto pos = SearchRecord(key).second;
       child = GetPayload<Node *>(pos);
 
       if (mutex_.HasSameVersion(ver)) break;
@@ -509,7 +502,7 @@ class NodeFixLen
       while (mutex_.HasSameVersion(ver)) {
         // check the current node has a target key
         const auto &high_key = GetHighKey();
-        if (has_high_key_ && Comp{}(high_key, key)) {
+        if (has_high_key_ && !Comp{}(key, high_key)) {
           if (!mutex_.HasSameVersion(ver)) break;
           return {0, nullptr};  // retry from a root node
         }
@@ -560,14 +553,12 @@ class NodeFixLen
    *
    * @param node a current node to be checked.
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
   [[nodiscard]] static auto
   CheckKeyRange(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)  //
+      const Key &key)  //
       -> uint64_t
   {
     uint64_t ver{};
@@ -582,7 +573,7 @@ class NodeFixLen
           continue;
         }
         const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key) || (is_closed && !Comp{}(high_key, key))) {
+        if (Comp{}(key, high_key)) {
           if (node->mutex_.HasSameVersion(ver)) break;
           continue;
         }
@@ -606,16 +597,14 @@ class NodeFixLen
    *
    * @param node a current node to be locked.
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    */
   static void
   CheckKeyRangeAndLockForRead(  //
       Node *&node,
-      const Key &key,
-      const bool is_closed)
+      const Key &key)
   {
     while (true) {
-      auto ver = CheckKeyRange(node, key, is_closed);
+      auto ver = CheckKeyRange(node, key);
       if (node->mutex_.TryLockS(ver)) return;
     }
   }
@@ -639,7 +628,7 @@ class NodeFixLen
       -> NodeRC
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(new_rec_len, ver);
       if (rc == kNeedRetry) continue;
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -672,7 +661,7 @@ class NodeFixLen
       -> NodeRC
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
@@ -750,7 +739,7 @@ class NodeFixLen
     const auto rec_len = kKeyLen + node->pay_len_;
 
     while (true) {
-      auto ver = CheckKeyRange(node, key, kClosed);
+      auto ver = CheckKeyRange(node, key);
       const auto rc = node->CheckSMOs(rec_len, ver);
       if (rc == kNeedRetry) continue;           // retry on the leaf level
       if (rc == kNeedSplit) return kNeedRetry;  // ignore merging in the leaf traversal
@@ -794,7 +783,7 @@ class NodeFixLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -830,7 +819,7 @@ class NodeFixLen
       -> ReturnCode
   {
     while (true) {
-      const auto ver = CheckKeyRange(node, key, kClosed);
+      const auto ver = CheckKeyRange(node, key);
 
       // check this node has a target record
       const auto [existence, pos] = node->SearchRecord(key);
@@ -870,7 +859,6 @@ class NodeFixLen
    */
   void
   InsertChild(  //
-      [[maybe_unused]] const Node *l_node,
       const Node *r_node,
       const Key &sep_key,
       [[maybe_unused]] const size_t sep_key_len,
@@ -886,8 +874,8 @@ class NodeFixLen
     SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
-    keys_[pos] = sep_key;
+    memmove(&(keys_[pos + 2]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    keys_[pos + 1] = sep_key;
 
     // update header information
     ++record_count_;
@@ -903,15 +891,13 @@ class NodeFixLen
    * @param pos the position of the left child node.
    */
   void
-  DeleteChild(  //
-      [[maybe_unused]] const Node *l_node,
-      const size_t pos)  //
+  DeleteChild(const size_t pos)  //
   {
     mutex_.UpgradeToX();
 
     // delete a separator key
     const auto move_num = record_count_ - 2 - pos;
-    memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    memmove(&(keys_[pos + 1]), &(keys_[pos + 2]), kKeyLen * (move_num + has_high_key_));
 
     // delete a right child
     auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
@@ -938,17 +924,16 @@ class NodeFixLen
   {
     const auto l_count = record_count_ / 2;
     const auto r_count = record_count_ - l_count;
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
 
     // copy right half records to a right node
     r_node->mutex_.LockX();
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - is_inner] = keys_[record_count_ - is_inner];
+    r_node->keys_[r_count - 1 + has_high_key_] = keys_[record_count_ - 1 + has_high_key_];
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = next_;
     }
     r_node->has_high_key_ = has_high_key_;
@@ -958,11 +943,11 @@ class NodeFixLen
     // update a header
     block_size_ -= r_node->block_size_;
     record_count_ = l_count;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node;
     }
     has_high_key_ = 1;
-    keys_[l_count - is_inner] = keys_[l_count - 1];
+    keys_[l_count] = r_node->keys_[0];
   }
 
   /**
@@ -974,17 +959,15 @@ class NodeFixLen
   Merge(Node *r_node)  //
       -> uint64_t
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-
     mutex_.UpgradeToX();
 
     // copy right records to this nodes
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
-    keys_[record_count_ - is_inner] = r_node->keys_[r_node->record_count_ - is_inner];
+    keys_[record_count_] = r_node->keys_[r_node->record_count_];
 
     // update a header
     block_size_ = kPageSize - offset;
-    if (is_leaf_) {
+    if (!is_inner_) {
       next_ = r_node->next_;
     }
     has_high_key_ = r_node->has_high_key_;
@@ -994,7 +977,7 @@ class NodeFixLen
 
     // update a header of a right node
     r_node->is_removed_ = 1;
-    if (is_leaf_) {
+    if (!is_inner_) {
       r_node->next_ = this;
     }
     r_node->mutex_.UnlockX();
@@ -1007,86 +990,47 @@ class NodeFixLen
    *##################################################################################*/
 
   /**
-   * @brief Create a leaf node with the maximum number of records for bulkloading.
+   * @brief Create a node with the maximum number of records for bulkloading.
    *
-   * @tparam Entry a pair/tuple of keys and payloads.
-   * @tparam Payload a target payload class.
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
-   * @param is_rightmost a flag for indicating this node can be rightmost.
-   * @param l_node the left sibling node of this node.
+   * @param prev_node a left sibling node.
+   * @param nodes the container of construcred nodes.
    */
-  template <class Entry, class Payload>
+  template <class Entry>
   void
   Bulkload(  //
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
-      const bool is_rightmost,
-      Node *l_node)
+      Node *prev_node,
+      std::vector<NodeEntry> &nodes)
   {
-    constexpr auto kPayLen = sizeof(Payload);
-    constexpr auto kRecLen = kKeyLen + kPayLen;
-    constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
-
-    // set header information for treating payloads
-    pay_len_ = kPayLen;
-
-    // extract and insert entries for the leaf node
-    const size_t n = std::distance(iter, iter_end);
-    const auto has_last_record = n < kNodeCap;
-    const auto rec_count = (has_last_record) ? n : kNodeCap;
-    auto offset = kPageSize;
-    for (size_t i = 0; i < rec_count; ++i, ++iter) {
-      // insert an entry to the leaf node
-      const auto &[key, payload] = *iter;
-      keys_[record_count_++] = key;
-      offset = SetPayload(offset, &payload);
-    }
-
-    // set a highest key if this node is not rightmost
-    if (!has_last_record || !is_rightmost) {
-      has_high_key_ = 1;
-      keys_[rec_count] = keys_[rec_count - 1];
-    }
-
-    // update header information
-    block_size_ = kPageSize - offset;
-    if (l_node != nullptr) {
-      l_node->next_ = this;
-    }
-  }
-
-  /**
-   * @brief Create a inner node with the maximum number of records for bulkloading.
-   *
-   * @param iter the begin position of target records.
-   * @param iter_end the end position of target records.
-   */
-  void
-  Bulkload(  //
-      BulkIter<Node *> &iter,
-      const BulkIter<Node *> &iter_end)
-  {
+    constexpr auto kKeyLen = sizeof(Key);
     constexpr auto kRecLen = kKeyLen + kPtrLen;
-    constexpr auto kNodeCap = (kPageSize - kHeaderLen - kKeyLen - kMinFreeSpaceSize) / kRecLen;
 
-    // check the number of child nodes to be loaded
-    const size_t n = std::distance(iter, iter_end);
-    const auto rec_count = (n < kNodeCap) ? n : kNodeCap;
-    const auto *last_child = *std::next(iter, rec_count - 1);
-    has_high_key_ = last_child->has_high_key_;
-
-    // extract and insert entries for the leaf node
+    // extract and insert entries into this node
     auto offset = kPageSize;
-    for (size_t i = 0; i < rec_count; ++i, ++iter) {
-      // insert an entry to the inner node
-      const auto *child = *iter;
-      keys_[record_count_++] = child->GetHighKey();
-      offset = SetPayload(offset, &child);
+    auto node_size = kHeaderLen;
+    for (; iter < iter_end; ++iter) {
+      // check whether the node has sufficent space
+      node_size += kRecLen;
+      if (node_size + kKeyLen > kPageSize) break;
+
+      // insert an entry into this node
+      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      offset = SetPayload(offset, &payload);
+      keys_[record_count_++] = key;
     }
 
-    // update header information
     block_size_ = kPageSize - offset;
+
+    // link the sibling nodes if exist
+    if (prev_node != nullptr) {
+      prev_node->LinkNext(this);
+    }
+
+    nodes.emplace_back(keys_[0], this, kKeyLen);
   }
 
   /**
@@ -1101,14 +1045,30 @@ class NodeFixLen
       Node *r_node)
   {
     while (true) {
-      if (l_node->is_leaf_) {
-        l_node->next_ = r_node;
+      l_node->LinkNext(r_node);
+      if (!l_node->is_inner_) {
         return;
       }
 
       // go down to the lower level
       l_node = l_node->template GetPayload<Node *>(l_node->record_count_ - 1);
       r_node = r_node->template GetPayload<Node *>(0);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   */
+  static void
+  RemoveLeftmostKeys(Node *node)
+  {
+    while (!node->IsInner()) {
+      // remove the leftmost key in a record region of an inner node
+      node->keys_[0] = Key{};
+
+      // go down to the lower level
+      node = node->template GetPayload<Node *>(0);
     }
   }
 
@@ -1166,7 +1126,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return !Comp{}(GetHighKey(), std::get<0>(*end_key));
+    return Comp{}(std::get<0>(*end_key), GetHighKey());
   }
 
   /**
@@ -1176,7 +1136,7 @@ class NodeFixLen
   GetUsedSize() const  //
       -> size_t
   {
-    return kKeyLen * (record_count_ + (is_leaf_ & has_high_key_)) + block_size_;
+    return kKeyLen * (record_count_ + has_high_key_) + block_size_;
   }
 
   /**
@@ -1187,8 +1147,7 @@ class NodeFixLen
   GetHighKey() const  //
       -> const Key &
   {
-    const auto is_inner = static_cast<size_t>(!static_cast<bool>(is_leaf_));
-    return keys_[record_count_ - is_inner];
+    return keys_[record_count_];
   }
 
   /**
@@ -1361,12 +1320,56 @@ class NodeFixLen
     return offset;
   }
 
+  /**
+   * @brief Parse an entry of bulkload according to key's type.
+   *
+   * @tparam Payload a payload type.
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: a target payload.
+   * @retval 3rd: the length of a target key.
+   */
+  template <class Entry>
+  constexpr auto
+  ParseEntry(const Entry &entry)  //
+      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
+  {
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 3);
+
+    if constexpr (kTupleSize == 3) {
+      return entry;
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, payload, sizeof(Key)};
+    }
+  }
+
+  /**
+   * @brief Link this node to a right sibling node.
+   *
+   * @param r_node a right sibling node.
+   */
+  void
+  LinkNext(Node *r_node)
+  {
+    // set a highest key in a left node
+    has_high_key_ = 1;
+    keys_[record_count_] = r_node->keys_[0];
+
+    // set a sibling link in a left node
+    if (IsInner()) return;
+
+    next_ = r_node;
+  }
+
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
 
   /// a flag for indicating this node is a leaf or internal node.
-  uint32_t is_leaf_ : 1;
+  uint32_t is_inner_ : 1;
 
   /// a flag for indicating this node is removed from a tree.
   uint32_t is_removed_ : 1;

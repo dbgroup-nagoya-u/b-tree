@@ -26,7 +26,7 @@ namespace dbgroup::index::b_tree::component::psl::test
  * Global constants
  *####################################################################################*/
 
-constexpr uint32_t kLeafFlag = 1;
+constexpr uint32_t kLeafFlag = 0;
 constexpr bool kExpectSuccess = true;
 constexpr bool kExpectFailed = false;
 
