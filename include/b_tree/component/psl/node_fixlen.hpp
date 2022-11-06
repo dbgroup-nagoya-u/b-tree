@@ -381,9 +381,7 @@ class NodeFixLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(static_cast<bool>(is_inner_));
-
-    int64_t begin_pos = inner_diff;
+    int64_t begin_pos = is_inner_;
     int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -398,7 +396,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos - inner_diff};
+    return {kKeyNotInserted, begin_pos - is_inner_};
   }
 
   /**
@@ -408,32 +406,14 @@ class NodeFixLen
    * is greater than the specified key.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(         //
-      const Key &key)  //
+  SearchChild(const Key &key)  //
       -> Node *
   {
-    int64_t begin_pos = 1;
-    int64_t end_pos = record_count_ - 1;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-
-      const auto &index_key = keys_[pos];
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        end_pos = pos;
-        break;
-      }
-    }
-
-    auto *child = GetPayload<Node *>(end_pos);
+    const auto pos = SearchRecord(key).second;
+    auto *child = GetPayload<Node *>(pos);
     mutex_.UnlockS();
     return child;
   }
@@ -469,7 +449,6 @@ class NodeFixLen
    *
    * @param node a current node to be locked.
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
   [[nodiscard]] static auto

@@ -126,7 +126,7 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    auto *node = SearchLeafNodeForRead(key, kClosed);
+    auto *node = SearchLeafNodeForRead(key);
     Payload payload{};
     const auto rc = Node_t::Read(node, key, payload);
     if (rc == kCompleted) return payload;
@@ -153,7 +153,7 @@ class BTree
 
     if (begin_key) {
       const auto &[key, key_len, is_closed] = begin_key.value();
-      node = SearchLeafNodeForRead(key, is_closed);
+      node = SearchLeafNodeForRead(key);
       Node_t::CheckKeyRangeAndLockForRead(node, key);
       const auto [rc, pos] = node->SearchRecord(key);
       begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
@@ -442,18 +442,15 @@ class BTree
    * a shared lock.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed/open-interval.
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
-  SearchLeafNodeForRead(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchLeafNodeForRead(const Key &key)  //
       -> Node_t *
   {
     auto *node = root_.load(std::memory_order_acquire);
     while (node->IsInner()) {
-      auto *child = node->SearchChild(key, is_closed);
+      auto *child = node->SearchChild(key);
       if (child == nullptr) {
         node = root_.load(std::memory_order_acquire);
         continue;

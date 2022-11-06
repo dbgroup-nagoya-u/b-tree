@@ -418,9 +418,7 @@ class NodeFixLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    const auto inner_diff = static_cast<size_t>(static_cast<bool>(is_inner_));
-
-    int64_t begin_pos = inner_diff;
+    int64_t begin_pos = is_inner_;
     int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -435,7 +433,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos - inner_diff};
+    return {kKeyNotInserted, begin_pos - is_inner_};
   }
 
   /**
@@ -445,13 +443,10 @@ class NodeFixLen
    * is greater than the specified key.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return the child node that includes the given key.
    */
   [[nodiscard]] auto
-  SearchChild(  //
-      const Key &key,
-      const bool is_closed)  //
+  SearchChild(const Key &key)  //
       -> Node *
   {
     Node *child{};
@@ -474,10 +469,7 @@ class NodeFixLen
       }
 
       // search a child node
-      auto [rc, pos] = SearchRecord(key);
-      if (!is_closed && rc == kKeyAlreadyInserted) {
-        ++pos;
-      }
+      const auto pos = SearchRecord(key).second;
       child = GetPayload<Node *>(pos);
 
       if (mutex_.HasSameVersion(ver)) break;
@@ -561,7 +553,6 @@ class NodeFixLen
    *
    * @param node a current node to be checked.
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    * @return a node whose key range includes the search key.
    */
   [[nodiscard]] static auto
@@ -606,7 +597,6 @@ class NodeFixLen
    *
    * @param node a current node to be locked.
    * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
    */
   static void
   CheckKeyRangeAndLockForRead(  //

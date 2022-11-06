@@ -456,7 +456,6 @@ class BTree
    * a shared lock.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed/open-interval.
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto

@@ -413,7 +413,6 @@ class BTree
    * a shared lock.
    *
    * @param key a search key.
-   * @param is_closed a flag for indicating closed/open-interval.
    * @return a leaf node that may have a target key.
    */
   [[nodiscard]] auto
@@ -422,7 +421,7 @@ class BTree
   {
     auto *node = GetRootForRead();
     while (node->IsInner()) {
-      const auto pos = node->SearchChild(key);
+      const auto pos = node->SearchRecord(key).second;
       node = node->GetChildForRead(pos);
     }
 
@@ -466,7 +465,7 @@ class BTree
     auto *node = GetRootForWrite(key);
     while (node->IsInner()) {
       // search a child node
-      const auto pos = node->SearchChild(key);
+      const auto pos = node->SearchRecord(key).second;
       auto *child = node->GetChildForWrite(pos);
 
       // perform internal SMOs eagerly

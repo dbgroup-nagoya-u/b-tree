@@ -439,7 +439,7 @@ class NodeFixLen
   SearchRecord(const Key &key) const  //
       -> std::pair<NodeRC, size_t>
   {
-    int64_t begin_pos = 0;
+    int64_t begin_pos = is_inner_;
     int64_t end_pos = record_count_ - 1;
     while (begin_pos <= end_pos) {
       size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
@@ -454,40 +454,7 @@ class NodeFixLen
       }
     }
 
-    return {kKeyNotInserted, begin_pos};
-  }
-
-  /**
-   * @brief Get a child node of a specified key by using binary search.
-   *
-   * If there is no specified key in this node, this returns the minimum position that
-   * is greater than the specified key.
-   *
-   * @param key a search key.
-   * @param is_closed a flag for indicating closed-interval.
-   * @return the child node that includes the given key.
-   */
-  [[nodiscard]] auto
-  SearchChild(const Key &key)  //
-      -> size_t
-  {
-    int64_t begin_pos = 1;
-    int64_t end_pos = record_count_ - 1;
-    while (begin_pos <= end_pos) {
-      size_t pos = (begin_pos + end_pos) >> 1UL;  // NOLINT
-      const auto &index_key = keys_[pos];
-
-      if (Comp{}(key, index_key)) {  // a target key is in a left side
-        end_pos = pos - 1;
-      } else if (Comp{}(index_key, key)) {  // a target key is in a right side
-        begin_pos = pos + 1;
-      } else {  // find an equivalent key
-        end_pos = pos;
-        break;
-      }
-    }
-
-    return end_pos;
+    return {kKeyNotInserted, begin_pos - is_inner_};
   }
 
   /**
