@@ -291,15 +291,7 @@ class BTree
     if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
 
     if (rc == NodeRC::kNeedMerge) {
-      const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
-      auto *r_node = TryHalfMerge(node);
-      if (r_node != nullptr) {
-        CompleteMerge(stack, node, r_node, del_key, del_key_len);
-      }
-
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(del_key);
-      }
+      Merge(stack, node);
     }
 
     return kSuccess;
@@ -730,47 +722,19 @@ class BTree
     return true;
   }
 
-  /**
-   * @brief Merge a given node with its right-sibling node if possible.
-   *
-   * @param l_node a node to be merged.
-   * @retval a right-sibling node to be removed if merging succeeds.
-   * @retval nullptr otherwise.
-   */
-  [[nodiscard]] auto
-  TryHalfMerge(Node_t *l_node)  //
-      -> Node_t *
-  {
-    // check there is a mergeable sibling node
-    auto *r_node = l_node->GetMergeableSiblingNode();
-    if (r_node == nullptr) return nullptr;
-
-    // perform merging
-    l_node->Merge(r_node);
-
-    return r_node;
-  }
-
-  /**
-   * @brief Complete a merge operatin by deleting an index entry.
-   *
-   * @param stack nodes in the searched path.
-   * @param l_child a left child node.
-   * @param r_child a right child (i.e., removed) node.
-   * @param l_key a separator key.
-   * @param l_key_len the length of the separator key.
-   */
   void
-  CompleteMerge(  //
+  Merge(  //
       std::vector<Node_t *> &stack,
-      Node_t *l_child,
-      Node_t *r_child,
-      const Key &l_key,
-      const size_t l_key_len)
+      Node_t *l_child)
   {
     stack.pop_back();  // remove a child node from a stack
     Node_t *node = nullptr;
     while (true) {
+      // check there is a mergeable sibling node
+      auto *r_child = l_child->GetMergeableSiblingNode();
+      if (r_child == nullptr) return;
+
+      const auto &[del_key, del_key_len] = l_child->GetHighKeyForSMOs();
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
         SearchParentNode(stack, l_child);
@@ -780,10 +744,11 @@ class BTree
       if (node == nullptr) {
         // set a parent node if needed
         node = stack.back();
+        stack.pop_back();
       }
 
       // traverse horizontally to reach a valid parent node
-      node = Node_t::CheckKeyRangeAndLockForWrite(node, l_key);
+      node = Node_t::CheckKeyRangeAndLockForWrite(node, del_key);
       if (node == nullptr) {
         // a root node is removed
         SearchParentNode(stack, l_child);
@@ -791,13 +756,17 @@ class BTree
       }
 
       // delete an entry from a tree
-      switch (node->DeleteChild(r_child, l_key)) {
+      switch (node->DeleteChild(del_key)) {
         case NodeRC::kCompleted:
+          l_child->Merge(r_child);
           gc_.AddGarbage(r_child);
+          if constexpr (IsVarLenData<Key>()) {
+            ::operator delete(del_key);
+          }
           return;
 
         case NodeRC::kAbortMerge:
-          l_child->AbortMerge(r_child, l_key, l_key_len);
+          l_child->AbortMerge(r_child);
           return;
 
         case NodeRC::kNeedRetry:
@@ -807,21 +776,19 @@ class BTree
 
         case NodeRC::kNeedMerge:
         default:
+          l_child->Merge(r_child);
           gc_.AddGarbage(r_child);
-
-          // merging of parent nodes is required
-          const auto &[del_key, del_key_len] = node->GetHighKeyForSMOs();
-          auto *r_node = TryHalfMerge(node);
-          if (r_node != nullptr) {
-            CompleteMerge(stack, node, r_node, del_key, del_key_len);
-          } else if (stack.size() == 1) {
-            TryShrinkTree(node);
-          }
 
           if constexpr (IsVarLenData<Key>()) {
             ::operator delete(del_key);
           }
-          return;
+          if (stack.empty()) {
+            TryShrinkTree(node);
+            return;
+          }
+
+          l_child = node;
+          node = nullptr;
       }
     }
   }
@@ -834,8 +801,6 @@ class BTree
   void
   TryShrinkTree(Node_t *node)
   {
-    node->LockSIX();
-
     if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
         gc_.AddGarbage(node);

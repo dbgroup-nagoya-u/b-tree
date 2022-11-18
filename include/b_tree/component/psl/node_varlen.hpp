@@ -767,9 +767,7 @@ class NodeVarLen
    * @retval kAbortMerge if this merge operation should be aborted.
    */
   auto
-  DeleteChild(  //
-      Node *r_child,
-      const Key &del_key)  //
+  DeleteChild(const Key &del_key)  //
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
@@ -785,10 +783,6 @@ class NodeVarLen
       mutex_.UnlockSIX();
       return kNeedRetry;
     }
-
-    // merging have succeeded, so unlock child nodes
-    r_child->next_->mutex_.UnlockSIX();
-    r_child->mutex_.UnlockSIX();
 
     mutex_.UpgradeToX();
 
@@ -925,14 +919,14 @@ class NodeVarLen
     deleted_size_ = 0;
     next_ = r_node->next_;
 
-    mutex_.DowngradeToSIX();
+    mutex_.UnlockX();
     r_node->mutex_.UpgradeToX();
 
     // update a header of a right node
     r_node->is_removed_ = 1;
     r_node->next_ = this;
 
-    r_node->mutex_.DowngradeToSIX();
+    r_node->mutex_.UnlockX();
 
     // reset a temp node
     temp_node_->record_count_ = 0;
@@ -946,35 +940,10 @@ class NodeVarLen
    * @param l_key_len the length of the separator key.
    */
   void
-  AbortMerge(  //
-      Node *r_node,
-      const Key &l_key,
-      const size_t l_key_len)
+  AbortMerge(Node *r_node)
   {
-    // upgrade locks to abort merging
-    mutex_.UpgradeToX();
-    r_node->mutex_.UpgradeToX();
-
-    // revert header information of a right node
-    r_node->is_removed_ = 0;
-    r_node->next_ = next_;
-    r_node->mutex_.UnlockX();
-
-    // check the top position of a record block
-    // set a highest key for leaf nodes
-    auto [existence, pos] = SearchRecord(l_key);
-    record_count_ = pos;
-    auto offset = (record_count_ > 0) ? meta_array_[record_count_ - 1].offset : kPageSize;
-    offset = SetKey(offset, l_key, l_key_len);
-
-    // update header information
-    block_size_ = kPageSize - offset;
-    deleted_size_ = h_key_len_;
-    next_ = r_node;
-    h_key_offset_ = offset;
-    h_key_len_ = l_key_len;
-
-    mutex_.UnlockX();
+    mutex_.UnlockSIX();
+    r_node->mutex_.UnlockSIX();
   }
 
   /**
