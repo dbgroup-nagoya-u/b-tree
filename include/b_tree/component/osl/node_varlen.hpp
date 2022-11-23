@@ -1092,20 +1092,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Abort a merge operation.
-   *
-   * @param r_node a right-sibling node.
-   * @param l_key a separator key for this node.
-   * @param l_key_len the length of the separator key.
-   */
-  void
-  AbortMerge(Node *r_node)
-  {
-    mutex_.UnlockSIX();
-    r_node->mutex_.UnlockSIX();
-  }
-
-  /**
    * @brief Remove this node from a tree and return a new root node.
    *
    * @return a new root node.

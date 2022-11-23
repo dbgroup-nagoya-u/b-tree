@@ -768,7 +768,8 @@ class BTree
           return;
 
         case NodeRC::kAbortMerge:
-          l_child->AbortMerge(r_child);
+          l_child->UnlockSIX();
+          r_child->UnlockSIX();
           return;
 
         case NodeRC::kNeedRetry:
