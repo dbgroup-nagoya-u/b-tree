@@ -147,6 +147,16 @@ class NodeFixLen
   }
 
   /**
+   * @retval a highest key in this node.
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> const Key &
+  {
+    return keys_[record_count_];
+  }
+
+  /**
    * @brief Get a split node that includes a target key.
    *
    * The returned node is locked with an SIX lock and the other is unlocked.
@@ -1031,16 +1041,6 @@ class NodeFixLen
       -> size_t
   {
     return kKeyLen * (record_count_ + has_low_key_ + has_high_key_) + block_size_;
-  }
-
-  /**
-   * @retval a highest key in this node.
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> const Key &
-  {
-    return keys_[record_count_];
   }
 
   /*####################################################################################

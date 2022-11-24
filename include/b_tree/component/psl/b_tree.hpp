@@ -715,7 +715,7 @@ class BTree
       auto *r_child = l_child->GetMergeableSiblingNode();
       if (r_child == nullptr) return;
 
-      const auto &[del_key, del_key_len] = l_child->GetHighKeyForSMOs();
+      const auto &del_key = l_child->GetHighKey();
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
         SearchParentNode(stack, r_child);
@@ -741,9 +741,6 @@ class BTree
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
           gc_.AddGarbage(r_child);
-          if constexpr (IsVarLenData<Key>()) {
-            ::operator delete(del_key);
-          }
           return;
 
         case NodeRC::kAbortMerge:
@@ -761,9 +758,6 @@ class BTree
           l_child->Merge(r_child);
           gc_.AddGarbage(r_child);
 
-          if constexpr (IsVarLenData<Key>()) {
-            ::operator delete(del_key);
-          }
           if (stack.empty()) {
             TryShrinkTree(node);
             return;
