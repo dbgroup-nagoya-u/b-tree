@@ -538,56 +538,35 @@ class BTree
    * @brief Search a parent node of a given one to construct a valid node stack.
    *
    * @param stack the instance of a stack to be reused.
-   * @param target_key a key to be searched.
-   * @param target_next_node a next node of child node to be searched.
+   * @param target_node a child node to be searched.
    */
   void
   SearchParentNode(  //
       std::vector<Node_t *> &stack,
-      const std::optional<Key> target_key,
-      const Node_t *target_next_node)
+      Node_t *target_node)
   {
     auto *node = root_.load(std::memory_order_acquire);
-    if (target_key) {
-      // search a target node with its lowest key
-      while (true) {
-        node = Node_t::CheckKeyRangeAndLockForRead(node, *target_key);
-        if (node == nullptr) {
-          // a root node is removed
-          stack.clear();
-          node = root_.load(std::memory_order_acquire);
-          continue;
-        }
-
-        stack.emplace_back(node);
-        if (node->GetNextNode() == target_next_node) {
-          // reach a target node
-          node->UnlockS();
-          stack.pop_back();
-          return;
-        }
-
-        // go down to the next level
-        node = node->SearchChild(*target_key);
+    const auto key = target_node->GetLowKey();
+    // search a target node with its lowest key
+    while (true) {
+      node = Node_t::CheckKeyRangeAndLockForRead(node, *key);
+      if (node == nullptr) {
+        // a root node is removed
+        stack.clear();
+        node = root_.load(std::memory_order_acquire);
+        continue;
       }
-    } else {
-      // search leftmost nodes
-      while (true) {
-        stack.emplace_back(node);
-        if (node->GetNextNode() == target_next_node) {
-          // reach a target node
-          stack.pop_back();
-          return;
-        }
 
-        node = node->GetLeftmostChild();
-        if (node == nullptr) {
-          // a root node is removed
-          stack.clear();
-          node = root_.load(std::memory_order_acquire);
-          continue;
-        }
+      stack.emplace_back(node);
+      if (node == target_node) {
+        // reach a target node
+        node->UnlockS();
+        stack.pop_back();
+        return;
       }
+
+      // go down to the next level
+      node = node->SearchChild(*key);
     }
   }
 
@@ -645,7 +624,7 @@ class BTree
   CompleteSplit(  //
       std::vector<Node_t *> &stack,
       Node_t *l_child,
-      const Node_t *r_child,
+      Node_t *r_child,
       const Key &l_key,
       const size_t l_key_len)
   {
@@ -657,7 +636,7 @@ class BTree
         if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
 
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, l_child->GetLowKey(), r_child);
+        SearchParentNode(stack, r_child);
         continue;
       }
 
@@ -671,7 +650,7 @@ class BTree
       if (node == nullptr) {
         // a root node is removed
         if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
-        SearchParentNode(stack, l_child->GetLowKey(), r_child);
+        SearchParentNode(stack, r_child);
         continue;
       }
 
@@ -680,7 +659,7 @@ class BTree
       if (rc == NodeRC::kCompleted) return;
       if (rc == NodeRC::kNeedSplit) {
         // since a parent node is full, perform splitting
-        const auto *r_node = HalfSplit(node);
+        auto *r_node = HalfSplit(node);
         auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(l_key);
         target_node->InsertChild(r_child, l_key, l_key_len);
 
@@ -739,7 +718,7 @@ class BTree
       const auto &[del_key, del_key_len] = l_child->GetHighKeyForSMOs();
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, l_child->GetLowKey(), r_child);
+        SearchParentNode(stack, r_child);
         continue;
       }
 
@@ -753,7 +732,7 @@ class BTree
       node = Node_t::CheckKeyRangeAndLockForWrite(node, del_key);
       if (node == nullptr) {
         // a root node is removed
-        SearchParentNode(stack, l_child->GetLowKey(), r_child);
+        SearchParentNode(stack, r_child);
         continue;
       }
 

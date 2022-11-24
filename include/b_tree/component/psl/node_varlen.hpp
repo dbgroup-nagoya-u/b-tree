@@ -151,16 +151,6 @@ class NodeVarLen
   }
 
   /**
-   * @return the next node
-   */
-  [[nodiscard]] auto
-  GetNextNode()  //
-      -> Node *
-  {
-    return next_;
-  }
-
-  /**
    * @brief Get a split node that includes a target key.
    *
    * The returned node is locked with an SIX lock and the other is unlocked.
