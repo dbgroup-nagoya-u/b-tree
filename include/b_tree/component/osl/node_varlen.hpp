@@ -151,6 +151,22 @@ class NodeVarLen
   }
 
   /**
+   * @retval a highest key in this node.
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> Key
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetHighKeyAddr());
+    } else {
+      Key key{};
+      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
+      return key;
+    }
+  }
+
+  /**
    * @brief Get a split node that includes a target key.
    *
    * The returned node is locked with an SIX lock and the other is unlocked.
@@ -1316,22 +1332,6 @@ class NodeVarLen
       -> void *
   {
     return ShiftAddr(this, h_key_offset_);
-  }
-
-  /**
-   * @retval a highest key in this node.
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
-    } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
-    }
   }
 
   /*####################################################################################
