@@ -469,7 +469,7 @@ class NodeVarLen
    * @param key a search key.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  static auto
   CheckKeyRange(  //
       Node *&node,
       const Key &key)  //

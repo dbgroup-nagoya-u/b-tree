@@ -535,9 +535,14 @@ class BTree
   {
     auto *node = root_.load(std::memory_order_acquire);
     const auto &key = target_node->GetLowKey();
+    Node_t *child{};
     // search a target node with its lowest key
     while (true) {
-      auto *child = Node_t::SearchChild(node, *key);
+      if (node->IsInner()) {
+        child = Node_t::SearchChild(node, *key);
+      } else {
+        Node_t::CheckKeyRange(node, *key);
+      }
       if (node == target_node) return;
       if (node == nullptr) {
         // a root node is removed
