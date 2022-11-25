@@ -715,7 +715,6 @@ class BTree
       auto *r_child = l_child->GetMergeableSiblingNode();
       if (r_child == nullptr) return;
 
-      const auto &del_key = l_child->GetHighKey();
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
         SearchParentNode(stack, r_child);
@@ -728,8 +727,10 @@ class BTree
         stack.pop_back();
       }
 
+      const auto &del_key = r_child->GetLowKey();
+
       // traverse horizontally to reach a valid parent node
-      node = Node_t::CheckKeyRangeAndLockForWrite(node, del_key);
+      node = Node_t::CheckKeyRangeAndLockForWrite(node, *del_key);
       if (node == nullptr) {
         // a root node is removed
         SearchParentNode(stack, r_child);
@@ -737,7 +738,7 @@ class BTree
       }
 
       // delete an entry from a tree
-      switch (node->DeleteChild(del_key)) {
+      switch (node->DeleteChild(*del_key)) {
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
           gc_.AddGarbage(r_child);

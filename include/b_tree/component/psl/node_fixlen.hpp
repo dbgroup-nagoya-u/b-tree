@@ -147,16 +147,6 @@ class NodeFixLen
   }
 
   /**
-   * @retval a highest key in this node.
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> const Key &
-  {
-    return keys_[record_count_];
-  }
-
-  /**
    * @brief Get a split node that includes a target key.
    *
    * The returned node is locked with an SIX lock and the other is unlocked.
@@ -954,7 +944,7 @@ class NodeFixLen
 
     // set a lowest key
     has_low_key_ = 1;
-    keys_[record_count_ + has_high_key_ + has_low_key_] = keys_[0];
+    keys_[record_count_] = keys_[0];
 
     nodes.emplace_back(keys_[0], this, kKeyLen);
   }
@@ -1041,6 +1031,16 @@ class NodeFixLen
       -> size_t
   {
     return kKeyLen * (record_count_ + has_low_key_ + has_high_key_) + block_size_;
+  }
+
+  /**
+   * @retval a highest key in this node.
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> const Key &
+  {
+    return keys_[record_count_];
   }
 
   /*####################################################################################
@@ -1203,6 +1203,7 @@ class NodeFixLen
   {
     // set a highest key in a left node
     has_high_key_ = 1;
+    keys_[record_count_ + 1] = keys_[record_count_];
     keys_[record_count_] = r_node->keys_[0];
 
     // set a sibling link in a left node

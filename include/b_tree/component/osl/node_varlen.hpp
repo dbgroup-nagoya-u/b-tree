@@ -151,22 +151,6 @@ class NodeVarLen
   }
 
   /**
-   * @retval a highest key in this node.
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> Key
-  {
-    if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
-    } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
-    }
-  }
-
-  /**
    * @brief Get a split node that includes a target key.
    *
    * The returned node is locked with an SIX lock and the other is unlocked.
@@ -1147,7 +1131,7 @@ class NodeVarLen
     constexpr auto kPayLen = sizeof(Payload);
 
     // extract and insert entries into this node
-    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
+    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a lowest key
     auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
@@ -1167,7 +1151,7 @@ class NodeVarLen
 
     // set a lowest key
     l_key_len_ = meta_array_[0].key_len;
-    l_key_offset_ = meta_array_[0].offset;
+    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
@@ -1334,6 +1318,22 @@ class NodeVarLen
     return ShiftAddr(this, h_key_offset_);
   }
 
+  /**
+   * @retval a highest key in this node.
+   */
+  [[nodiscard]] auto
+  GetHighKey() const  //
+      -> Key
+  {
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetHighKeyAddr());
+    } else {
+      Key key{};
+      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
+      return key;
+    }
+  }
+
   /*####################################################################################
    * Internal getter/setters for records
    *##################################################################################*/
@@ -1474,7 +1474,8 @@ class NodeVarLen
   CleanUp()
   {
     // copy records to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(this, kPageSize);
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+    offset = temp_node_->CopyHighKeyFrom(this, offset);
     temp_node_->h_key_offset_ = offset;
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
 
