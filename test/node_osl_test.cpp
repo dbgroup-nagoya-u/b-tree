@@ -332,7 +332,6 @@ class NodeFixture : public testing::Test
     node_->LockSIX();
     r_node->LockSIX();
     node_->Merge(r_node);
-    node_->UnlockSIX();
     ::operator delete(r_node);
 
     // check the merged node has the written records

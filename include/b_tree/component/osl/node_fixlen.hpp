@@ -206,7 +206,7 @@ class NodeFixLen
    * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
-  GetLowKey()  //
+  GetLowKey() const  //
       -> std::optional<Key>
   {
     while (true) {
@@ -463,7 +463,7 @@ class NodeFixLen
    * @param key a search key.
    * @return a node whose key range includes the search key.
    */
-  [[nodiscard]] static auto
+  static auto
   CheckKeyRange(  //
       Node *&node,
       const Key &key)  //
@@ -899,9 +899,7 @@ class NodeFixLen
    * @retval kAbortMerge if this merge operation should be aborted.
    */
   auto
-  DeleteChild(  //
-      Node *r_child,
-      const Key &del_key)  //
+  DeleteChild(const Key &del_key)  //
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
@@ -917,10 +915,6 @@ class NodeFixLen
       mutex_.UnlockSIX();
       return kNeedRetry;
     }
-
-    // merging have succeeded, so unlock child nodes
-    r_child->next_->mutex_.UnlockSIX();
-    r_child->mutex_.UnlockSIX();
 
     mutex_.UpgradeToX();
 
@@ -1017,52 +1011,14 @@ class NodeFixLen
     next_ = r_node->next_;
     has_high_key_ = r_node->has_high_key_;
 
-    mutex_.DowngradeToSIX();
+    mutex_.UnlockX();
     r_node->mutex_.UpgradeToX();
 
     // update a header of a right node
     r_node->is_removed_ = 1;
     r_node->next_ = this;
 
-    r_node->mutex_.DowngradeToSIX();
-  }
-
-  /**
-   * @brief Abort a merge operation.
-   *
-   * @param r_node a right-sibling node.
-   * @param l_key a separator key for this node.
-   * @param l_key_len the length of the separator key.
-   */
-  void
-  AbortMerge(  //
-      Node *r_node,
-      const Key &l_key,
-      [[maybe_unused]] const size_t l_key_len)
-  {
-    // upgrade locks to abort merging
-    mutex_.UpgradeToX();
-    r_node->mutex_.UpgradeToX();
-
-    // revert header information of a right node
-    r_node->is_removed_ = 0;
-    r_node->next_ = next_;
     r_node->mutex_.UnlockX();
-
-    // check the top position of a record block
-    const auto rec_count = record_count_;
-    // set a highest key for leaf nodes
-    auto [existence, pos] = SearchRecord(l_key);
-    record_count_ = pos;
-    keys_[record_count_ + has_low_key_] = keys_[rec_count + has_low_key_];
-    keys_[record_count_] = l_key;
-
-    // update header information
-    block_size_ = record_count_ * pay_len_;
-    next_ = r_node;
-    has_high_key_ = 1;
-
-    mutex_.UnlockX();
   }
 
   /**
@@ -1134,7 +1090,7 @@ class NodeFixLen
 
     // set a lowest key
     has_low_key_ = 1;
-    keys_[record_count_ + has_high_key_ + has_low_key_] = keys_[0];
+    keys_[record_count_] = keys_[0];
 
     nodes.emplace_back(keys_[0], this, kKeyLen);
   }
@@ -1353,6 +1309,7 @@ class NodeFixLen
   {
     // set a highest key in a left node
     has_high_key_ = 1;
+    keys_[record_count_ + 1] = keys_[record_count_];
     keys_[record_count_] = r_node->keys_[0];
 
     // set a sibling link in a left node

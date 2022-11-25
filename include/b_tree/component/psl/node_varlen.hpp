@@ -767,9 +767,7 @@ class NodeVarLen
    * @retval kAbortMerge if this merge operation should be aborted.
    */
   auto
-  DeleteChild(  //
-      Node *r_child,
-      const Key &del_key)  //
+  DeleteChild(const Key &del_key)  //
       -> NodeRC
   {
     // check a child node to be deleted is not rightmost
@@ -785,10 +783,6 @@ class NodeVarLen
       mutex_.UnlockSIX();
       return kNeedRetry;
     }
-
-    // merging have succeeded, so unlock child nodes
-    r_child->next_->mutex_.UnlockSIX();
-    r_child->mutex_.UnlockSIX();
 
     mutex_.UpgradeToX();
 
@@ -925,56 +919,17 @@ class NodeVarLen
     deleted_size_ = 0;
     next_ = r_node->next_;
 
-    mutex_.DowngradeToSIX();
+    mutex_.UnlockX();
     r_node->mutex_.UpgradeToX();
 
     // update a header of a right node
     r_node->is_removed_ = 1;
     r_node->next_ = this;
 
-    r_node->mutex_.DowngradeToSIX();
+    r_node->mutex_.UnlockX();
 
     // reset a temp node
     temp_node_->record_count_ = 0;
-  }
-
-  /**
-   * @brief Abort a merge operation.
-   *
-   * @param r_node a right-sibling node.
-   * @param l_key a separator key for this node.
-   * @param l_key_len the length of the separator key.
-   */
-  void
-  AbortMerge(  //
-      Node *r_node,
-      const Key &l_key,
-      const size_t l_key_len)
-  {
-    // upgrade locks to abort merging
-    mutex_.UpgradeToX();
-    r_node->mutex_.UpgradeToX();
-
-    // revert header information of a right node
-    r_node->is_removed_ = 0;
-    r_node->next_ = next_;
-    r_node->mutex_.UnlockX();
-
-    // check the top position of a record block
-    // set a highest key for leaf nodes
-    auto [existence, pos] = SearchRecord(l_key);
-    record_count_ = pos;
-    auto offset = (record_count_ > 0) ? meta_array_[record_count_ - 1].offset : kPageSize;
-    offset = SetKey(offset, l_key, l_key_len);
-
-    // update header information
-    block_size_ = kPageSize - offset;
-    deleted_size_ = h_key_len_;
-    next_ = r_node;
-    h_key_offset_ = offset;
-    h_key_len_ = l_key_len;
-
-    mutex_.UnlockX();
   }
 
   /**
@@ -1027,7 +982,7 @@ class NodeVarLen
     constexpr auto kPayLen = sizeof(Payload);
 
     // extract and insert entries into this node
-    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
+    auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a lowest key
     auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len] = ParseEntry(*iter);
@@ -1047,7 +1002,7 @@ class NodeVarLen
 
     // set a lowest key
     l_key_len_ = meta_array_[0].key_len;
-    l_key_offset_ = meta_array_[0].offset;
+    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
@@ -1410,7 +1365,8 @@ class NodeVarLen
   CleanUp()
   {
     // copy records to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(this, kPageSize);
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+    offset = temp_node_->CopyHighKeyFrom(this, offset);
     temp_node_->h_key_offset_ = offset;
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
 
