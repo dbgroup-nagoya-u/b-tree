@@ -534,7 +534,7 @@ class BTree
       const Node_t *target_node) const
   {
     auto *node = root_.load(std::memory_order_acquire);
-    const auto key = target_node->GetLowKey();
+    const auto &key = target_node->GetLowKey();
     // search a target node with its lowest key
     while (true) {
       auto *child = Node_t::SearchChild(node, *key);
