@@ -83,14 +83,13 @@ class NodeVarLen
       : is_inner_{1}, is_removed_{0}, record_count_{2}
   {
     // insert l_node
-    const auto l_high_meta = l_node->high_meta_;
-    const auto l_key_len = l_high_meta.key_len;
+    const auto l_key_len = l_node->h_key_len_;
     auto offset = SetPayload(kPageSize, &l_node, kPtrLen);
     meta_array_[0] = Metadata{offset, 0, kPtrLen};
 
     // insert r_node
     offset = SetPayload(offset, &r_node, kPtrLen);
-    offset = CopyKeyFrom(l_node, l_high_meta, offset);
+    offset = SetKey(offset, *(l_node->GetHighKey()), l_key_len);
     meta_array_[1] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // update header information
@@ -224,14 +223,13 @@ class NodeVarLen
   GetHighKeyForSMOs() const  //
       -> std::pair<Key, size_t>
   {
-    const auto h_key_len = high_meta_.key_len;
     if constexpr (IsVarLenData<Key>()) {
       // allocate space dynamically to keep a copied key
-      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len));
-      memcpy(h_key, GetKeyAddr(high_meta_), h_key_len);
-      return {h_key, h_key_len};
+      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len_));
+      memcpy(h_key, GetHighKeyAddr(), h_key_len_);
+      return {h_key, h_key_len_};
     } else {
-      return {*GetHighKey(), h_key_len};
+      return {*GetHighKey(), h_key_len_};
     }
   }
 
@@ -951,11 +949,12 @@ class NodeVarLen
     }
     offset = temp_node_->CopyKeyFrom(this, meta_array_[pos], offset);
     const auto sep_key_len = meta_array_[pos].key_len;
-    temp_node_->high_meta_ = Metadata{offset, sep_key_len, sep_key_len};
 
     // copy right half records to a right node
     r_node->mutex_.LockX();
     auto r_offset = r_node->CopyHighKeyFrom(this);
+    r_node->h_key_offset_ = r_offset;
+    r_node->h_key_len_ = h_key_len_;
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
     // update a right header
@@ -966,6 +965,8 @@ class NodeVarLen
 
     // update a header
     mutex_.UpgradeToX();
+    h_key_offset_ = offset;
+    h_key_len_ = sep_key_len;
     block_size_ = kPageSize - offset;
     deleted_size_ = 0;
     record_count_ = temp_node_->record_count_;
@@ -974,7 +975,7 @@ class NodeVarLen
     }
 
     // copy temporal node to this node
-    memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
+    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
 
     // reset a temp node
@@ -992,14 +993,15 @@ class NodeVarLen
   {
     // copy a highest key of a merged node to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(r_node);
-
+    h_key_offset_ = offset;
+    h_key_len_ = r_node->h_key_len_;
     // copy consolidated records to the original node
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
 
     mutex_.UpgradeToX();
 
     record_count_ = temp_node_->record_count_;
-    memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
+    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), kPageSize - offset);
 
     // copy right records to this nodes
@@ -1178,8 +1180,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    const auto &high_key = GetKey(high_meta_);
-    return Comp{}(std::get<0>(*end_key), high_key);
+    return Comp{}(std::get<0>(*end_key), *GetHighKey());
   }
 
   /**
@@ -1193,6 +1194,16 @@ class NodeVarLen
   }
 
   /**
+   * @return an address of a highest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetHighKeyAddr() const  //
+      -> void *
+  {
+    return ShiftAddr(this, h_key_offset_);
+  }
+
+  /**
    * @retval a highest key in this node if exist.
    * @retval std::nullopt otherwise.
    */
@@ -1200,8 +1211,14 @@ class NodeVarLen
   GetHighKey() const  //
       -> std::optional<Key>
   {
-    if (high_meta_.key_len == 0) return std::nullopt;
-    return GetKey(high_meta_);
+    if (h_key_len_ == 0) return std::nullopt;
+    if constexpr (IsVarLenData<Key>()) {
+      return reinterpret_cast<Key>(GetHighKeyAddr());
+    } else {
+      Key key{};
+      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
+      return key;
+    }
   }
 
   /**
@@ -1218,7 +1235,7 @@ class NodeVarLen
       -> NodeRC
   {
     // check whether the node has space for a new record
-    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
+    const auto total_size = kMetaLen * record_count_ + block_size_ + new_rec_len;
     if (total_size <= kPageSize - kHeaderLen) {
       if (mutex_.HasSameVersion(ver)) return kCompleted;
       return kNeedRetry;
@@ -1457,6 +1474,7 @@ class NodeVarLen
   {
     // copy records to a temporal node
     auto offset = temp_node_->CopyHighKeyFrom(this);
+    h_key_offset_ = offset;
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
 
     // update a header
@@ -1465,7 +1483,7 @@ class NodeVarLen
     record_count_ = temp_node_->record_count_;
 
     // copy cleaned up records to the original node
-    memcpy(&high_meta_, &(temp_node_->high_meta_), kMetaLen * (record_count_ + 1));
+    memcpy(meta_array_, temp_node_->meta_array_, kMetaLen * record_count_);
     memcpy(ShiftAddr(this, offset), ShiftAddr(temp_node_.get(), offset), block_size_);
 
     // reset a temp node
@@ -1505,10 +1523,12 @@ class NodeVarLen
   CopyHighKeyFrom(const Node *node)  //
       -> size_t
   {
-    const auto meta = node->high_meta_;
-    const auto high_key_len = meta.key_len;
-    const auto offset = (high_key_len > 0) ? CopyKeyFrom(node, meta, kPageSize) : kPageSize;
-    high_meta_ = Metadata{offset, high_key_len, high_key_len};
+    const auto key_len = node->h_key_len_;
+    auto offset = kPageSize;
+    if (key_len > 0) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), node->GetHighKeyAddr(), key_len);
+    }
 
     return offset;
   }
@@ -1608,7 +1628,8 @@ class NodeVarLen
     auto offset = kPageSize - block_size_;
     offset = SetKey(offset, r_node->GetKey(0), high_key_len);
     block_size_ += high_key_len;
-    high_meta_ = Metadata{offset, high_key_len, high_key_len};
+    h_key_len_ = high_key_len;
+    h_key_offset_ = offset;
 
     // set a sibling link in a left node
     if (IsInner()) return offset;
@@ -1643,8 +1664,17 @@ class NodeVarLen
   /// the pointer to the next node.
   Node *next_{nullptr};
 
-  /// the metadata of a highest key.
-  Metadata high_meta_{kPageSize, 0, 0};
+  /// the offset to a lowest key.
+  uint16_t l_key_offset_{kPageSize};
+
+  /// the length of a lowest key.
+  uint16_t l_key_len_{0};
+
+  /// the offset to a highest key.
+  uint16_t h_key_offset_{kPageSize};
+
+  /// the length of a highest key.
+  uint16_t h_key_len_{0};
 
   /// an actual data block (it starts with record metadata).
   Metadata meta_array_[0];
