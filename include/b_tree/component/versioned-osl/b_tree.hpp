@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_OSL_B_TREE_HPP
-#define B_TREE_COMPONENT_OSL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP
+#define B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -30,7 +30,7 @@
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
 
-namespace dbgroup::index::b_tree::component::osl
+namespace dbgroup::index::b_tree::component::versioned_osl
 {
 /**
  * @brief A class for representing B+trees with pessimistic single-layer locking.
@@ -860,6 +860,6 @@ class BTree
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};
 };
-}  // namespace dbgroup::index::b_tree::component::osl
+}  // namespace dbgroup::index::b_tree::component::versioned_osl
 
-#endif  // B_TREE_COMPONENT_OSL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP

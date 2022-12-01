@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
-#define B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
+#ifndef B_TREE_COMPONENT_VERSIONED_OSL_NODE_FIXLEN_HPP
+#define B_TREE_COMPONENT_VERSIONED_OSL_NODE_FIXLEN_HPP
 
 #include <atomic>
 #include <optional>
@@ -29,7 +29,7 @@
 // local sources
 #include "b_tree/component/common.hpp"
 
-namespace dbgroup::index::b_tree::component::osl
+namespace dbgroup::index::b_tree::component::versioned_osl
 {
 
 /**
@@ -1354,6 +1354,6 @@ class NodeFixLen
   Key keys_[0];
 };
 
-}  // namespace dbgroup::index::b_tree::component::osl
+}  // namespace dbgroup::index::b_tree::component::versioned_osl
 
-#endif  // B_TREE_COMPONENT_OSL_NODE_FIXLEN_HPP
+#endif  // B_TREE_COMPONENT_VERSIONED_OSL_NODE_FIXLEN_HPP

@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP
-#define B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP
+#ifndef B_TREE_COMPONENT_VERSIONED_OSL_NODE_VARLEN_HPP
+#define B_TREE_COMPONENT_VERSIONED_OSL_NODE_VARLEN_HPP
 
 #include <atomic>
 #include <optional>
@@ -30,7 +30,7 @@
 #include "b_tree/component/common.hpp"
 #include "b_tree/component/metadata.hpp"
 
-namespace dbgroup::index::b_tree::component::osl
+namespace dbgroup::index::b_tree::component::versioned_osl
 {
 
 /**
@@ -1702,6 +1702,6 @@ class NodeVarLen
       temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
 };
 
-}  // namespace dbgroup::index::b_tree::component::osl
+}  // namespace dbgroup::index::b_tree::component::versioned_osl
 
-#endif  // B_TREE_COMPONENT_OSL_NODE_VARLEN_HPP
+#endif  // B_TREE_COMPONENT_VERSIONED_OSL_NODE_VARLEN_HPP
