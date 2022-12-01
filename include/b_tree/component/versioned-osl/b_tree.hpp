@@ -29,6 +29,7 @@
 #include "b_tree/component/record_iterator.hpp"
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
+#include "version_node.hpp"
 
 namespace dbgroup::index::b_tree::component::versioned_osl
 {
@@ -67,6 +68,9 @@ class BTree
   using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
+
+  // aliases for versioning
+  using Timestamp_t = size_t;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -386,6 +390,94 @@ class BTree
   }
 
  private:
+  /*####################################################################################
+   * Internal classes
+   *##################################################################################*/
+
+  /**
+   * @brief A class of version chain
+   *
+   */
+  class VersionChain
+  {
+   public:
+    /*##################################################################################
+     * Public constructor
+     *################################################################################*/
+
+    /**
+     * @brief Construct a new instance.
+     *
+     */
+    VersionChain() = default;
+
+    /*##################################################################################
+     * Public destructor
+     *################################################################################*/
+
+    /**
+     * @brief Destroy the instance.
+     *
+     */
+    ~VersionNode() = default;
+
+    /*##################################################################################
+     * Public utility function
+     *################################################################################*/
+
+    /**
+     * @return the payload of visible version at the given timestamp
+     *
+     * @param ts a timestamp at which CRUD operation was started
+     *
+     */
+    [[nodiscard]] auto
+    GetVisiblePayload(Timestamp_t ts) const  //
+        -> Payload
+    {
+      auto current_version_ptr = *head_ptr_;
+      auto next_version_ptr = current_version_ptr->GetNextPtr();
+      auto version_ts = current_version_ptr->GetTimestamp();
+      while (next_version_ptr != nullptr) {
+        if (version_ts >= ts) {
+          current_version_ptr = next_version_ptr;
+          version_ts = next_version_ptr->GetTimestamp();
+          next_version_ptr = next_version_ptr->GetNextPtr();
+        } else {
+          return current_version_ptr->GetPayload();
+        }
+      }
+      // the latest version is reached
+      return current_node->GetPayload();
+      // TODO: ここはエラーを投げてほしいかもしれない，要確認
+    }
+
+    /**
+     * @brief Append new version node to the chain's head
+     *
+     * @param payload the payload of the new version node
+     *
+     */
+    [[nodiscard]] auto
+    AppendNewVersion(Payload payload)  //
+        -> void
+    // TODO: PayloadじゃなくVersionNodeを受け取る？
+    {
+      Timestamp_t timestamp = 0;  // TODO: implement
+      VersionNode newNode{timestamp, payload, head_ptr_};
+      head_ptr_ = &newNode;
+      // TODO: ロックが取られている前提なのでCASを使わず素朴にやっている，要確認
+
+      return;
+    }
+
+    /*##################################################################################
+     * Internal member
+     *################################################################################*/
+   private:
+    VersionNode<Payload, Timestamp_t> *head_ptr_{nullptr};
+  };
+
   /*####################################################################################
    * Internal constants
    *##################################################################################*/
