@@ -589,6 +589,7 @@ class BTree
   /**
    * @return the payload of visible version at the given timestamp
    *
+   * @param head a version node which is head of the version chain
    * @param ts a timestamp at which CRUD operation was started
    *
    */
@@ -624,7 +625,7 @@ class BTree
   // TODO: PayloadじゃなくVersionNodeを受け取る？
   {
     Timestamp_t timestamp = 0;  // TODO: implement
-    VersionNode newNode{timestamp, payload, head_ptr_};
+    VersionNode<Payload, Timestamp_t> newNode{timestamp, payload, head_ptr_};
     head_ptr_ = &newNode;
 
     return;

@@ -63,6 +63,9 @@ class VersionNode
    * Public Getters
    *################################################################################*/
 
+  /**
+   * @return the timestamp(i.e., version) of this node
+   */
   [[nodiscard]] const auto
   GetTimestamp() const  //
       -> Timestamp_t
@@ -70,6 +73,9 @@ class VersionNode
     return timestamp_;
   }
 
+  /**
+   * @return the payload of this version
+   */
   [[nodiscard]] const auto
   GetPayload() const  //
       -> Payload
@@ -77,6 +83,10 @@ class VersionNode
     return payload_;
   }
 
+  /**
+   * @return a pointer to the next node on chain
+   * @return nullptr when this node is the latest version
+   */
   [[nodiscard]] const auto
   GetNextPtr() const  //
       -> VersionNode<Payload> *
@@ -88,6 +98,11 @@ class VersionNode
    * Public Setter
    *################################################################################*/
 
+  /**
+   * @brief Set a next node pointer directly
+   *
+   * @param node_ptr a pointer to the node which will be the next of this on the chain
+   */
   auto
   SetNextPtr(VersionNode *node_ptr)  //
       -> void
