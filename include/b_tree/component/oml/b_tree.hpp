@@ -40,9 +40,9 @@ namespace dbgroup::index::b_tree::component::oml
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
- * @tparam kIsVarLen a flag for indicating variable-length keys.
+ * @tparam kUseVarLenLayout a flag for indicating variable-length keys.
  */
-template <class Key, class Payload, class Comp, bool kIsVarLen>
+template <class Key, class Payload, class Comp, bool kUseVarLenLayout>
 class BTree
 {
  public:
@@ -54,8 +54,8 @@ class BTree
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
-  using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
-  using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
+  using Node_t = std::conditional_t<kUseVarLenLayout, NodeVarLen_t, NodeFixLen_t>;
+  using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -82,7 +82,7 @@ class BTree
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
     auto *root = new (GetNodePage()) Node_t{kLeafFlag};
-    if constexpr (!kIsVarLen) {
+    if constexpr (!kUseVarLenLayout) {
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
@@ -367,22 +367,25 @@ class BTree
   static constexpr size_t kHeaderLen = sizeof(Node_t);
 
   /// the maximum length of keys.
-  static constexpr size_t kMaxKeyLen = (kIsVarLen) ? kMaxVarLenDataSize : sizeof(Key);
+  static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
 
   /// the maximum length of payloads (including child pointers).
   static constexpr size_t kMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
 
   /// the maximum length of records.
-  static constexpr size_t kMaxRecLen = kMaxKeyLen + kMaxPayLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kMaxRecLen =
+      kMaxKeyLen + kMaxPayLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the minimum block size in a certain node.
   static constexpr size_t kMinBlockSize = kPageSize - kHeaderLen - kMaxKeyLen;
 
   /// the expected length of leaf records.
-  static constexpr size_t kExpLeafRecLen = sizeof(Key) + kPayLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kExpLeafRecLen =
+      sizeof(Key) + kPayLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the expected length of internal records.
-  static constexpr size_t kExpInnerRecLen = sizeof(Key) + kPtrLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kExpInnerRecLen =
+      sizeof(Key) + kPtrLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the expected capacity of leaf nodes for bulkloading.
   static constexpr size_t kLeafNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpLeafRecLen;
@@ -422,7 +425,7 @@ class BTree
       auto *node = root_.load(std::memory_order_acquire);
 
       // check this tree requires SMOs
-      auto [rc, ver] = node->CheckNodeStatus(kMaxRecLen);
+      auto [rc, ver] = node->CheckNodeStatus(kMaxKeyLen + kMaxPayLen);
       if (rc == kNeedRetry) continue;  // a root node is removed
       if (rc == kNeedSplit) {
         if (!TryRootSplit(key, node, ver)) continue;
@@ -500,14 +503,14 @@ class BTree
   {
     auto [node, ver] = GetRootForWrite(key);
     while (node->IsInner()) {
-      auto [pos, child] = node->SearchChild(key, ver, kMaxRecLen);
+      auto [pos, child] = node->SearchChild(key, ver, kMaxKeyLen + kMaxPayLen);
       if (child == nullptr) {
         std::tie(node, ver) = GetRootForWrite(key);
         continue;
       }
 
       // perform internal SMOs eagerly
-      auto [rc, child_ver] = child->CheckNodeStatus(kMaxRecLen);
+      auto [rc, child_ver] = child->CheckNodeStatus(kMaxKeyLen + kMaxPayLen);
       if (rc == kNeedRetry) continue;  // the child node was removed
       if (rc == kNeedSplit) {
         if (!TrySplit(key, child, child_ver, node, ver, pos)) continue;
