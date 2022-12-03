@@ -37,9 +37,9 @@ namespace dbgroup::index::b_tree::component::pml
  * @tparam Key a class of stored keys.
  * @tparam Payload a class of stored payloads (only fixed-length data for simplicity).
  * @tparam Comp a class for ordering keys.
- * @tparam kIsVarLen a flag for indicating variable-length keys.
+ * @tparam kUseVarLenLayout a flag for indicating variable-length keys.
  */
-template <class Key, class Payload, class Comp, bool kIsVarLen>
+template <class Key, class Payload, class Comp, bool kUseVarLenLayout>
 class BTree
 {
  public:
@@ -51,8 +51,8 @@ class BTree
   using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
-  using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
-  using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
+  using Node_t = std::conditional_t<kUseVarLenLayout, NodeVarLen_t, NodeFixLen_t>;
+  using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
@@ -76,7 +76,7 @@ class BTree
       [[maybe_unused]] const size_t gc_interval_micro,
       [[maybe_unused]] const size_t gc_thread_num)
   {
-    if constexpr (!kIsVarLen) {
+    if constexpr (!kUseVarLenLayout) {
       root_->SetPayloadLength(kPayLen);
     }
   }
@@ -341,22 +341,25 @@ class BTree
   static constexpr size_t kHeaderLen = sizeof(Node_t);
 
   /// the maximum length of keys.
-  static constexpr size_t kMaxKeyLen = (kIsVarLen) ? kMaxVarLenDataSize : sizeof(Key);
+  static constexpr size_t kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
 
   /// the maximum length of payloads (including child pointers).
   static constexpr size_t kMaxPayLen = (kPayLen < kPtrLen) ? kPtrLen : kPayLen;
 
   /// the maximum length of records.
-  static constexpr size_t kMaxRecLen = kMaxKeyLen + kMaxPayLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kMaxRecLen =
+      kMaxKeyLen + kMaxPayLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the minimum block size in a certain node.
   static constexpr size_t kMinBlockSize = kPageSize - kHeaderLen - kMaxKeyLen;
 
   /// the expected length of leaf records.
-  static constexpr size_t kExpLeafRecLen = sizeof(Key) + kPayLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kExpLeafRecLen =
+      sizeof(Key) + kPayLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the expected length of internal records.
-  static constexpr size_t kExpInnerRecLen = sizeof(Key) + kPtrLen + ((kIsVarLen) ? kMetaLen : 0);
+  static constexpr size_t kExpInnerRecLen =
+      sizeof(Key) + kPtrLen + ((kUseVarLenLayout) ? kMetaLen : 0);
 
   /// the expected capacity of leaf nodes for bulkloading.
   static constexpr size_t kLeafNodeCap = (kMinBlockSize - kMinFreeSpaceSize) / kExpLeafRecLen;

@@ -36,14 +36,14 @@ namespace dbgroup::index::b_tree
  * @tparam Comp a class for ordering keys.
  * @tparam kUseOptimisticLock a flag for using optimistic locking.
  * @tparam kUseSingleLayerLock a flag for using fine-grained SMOs.
- * @tparam kIsVarLen a flag for indicating variable-length keys.
+ * @tparam kUseVarLenLayout a flag for indicating variable-length keys.
  */
 template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           bool kUseOptimisticLock = true,
           bool kUseSingleLayerLock = true,
-          bool kIsVarLen = IsVarLenData<Key>()>
+          bool kUseVarLenLayout = IsVarLenData<Key>()>
 class BTree
 {
  public:
@@ -63,13 +63,14 @@ class BTree
   template <class K, class V, class C, bool VAR>
   using BTreeOSL = component::osl::BTree<K, V, C, VAR>;
 
-  using BTree_t = std::conditional_t<kUseOptimisticLock,
-                                     std::conditional_t<kUseSingleLayerLock,
-                                                        BTreeOSL<Key, Payload, Comp, kIsVarLen>,
-                                                        BTreeOML<Key, Payload, Comp, kIsVarLen>>,
-                                     std::conditional_t<kUseSingleLayerLock,
-                                                        BTreePSL<Key, Payload, Comp, kIsVarLen>,
-                                                        BTreePML<Key, Payload, Comp, kIsVarLen>>>;
+  using BTree_t =
+      std::conditional_t<kUseOptimisticLock,
+                         std::conditional_t<kUseSingleLayerLock,
+                                            BTreeOSL<Key, Payload, Comp, kUseVarLenLayout>,
+                                            BTreeOML<Key, Payload, Comp, kUseVarLenLayout>>,
+                         std::conditional_t<kUseSingleLayerLock,
+                                            BTreePSL<Key, Payload, Comp, kUseVarLenLayout>,
+                                            BTreePML<Key, Payload, Comp, kUseVarLenLayout>>>;
 
   using RecordIterator_t = component::RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
@@ -278,7 +279,7 @@ class BTree
   IsValidKeyType()  //
       -> bool
   {
-    if constexpr (kIsVarLen && IsVarLenData<Key>()) {
+    if constexpr (kUseVarLenLayout && IsVarLenData<Key>()) {
       // check a base type is trivially copyable
       return std::is_trivially_copyable_v<std::remove_pointer_t<Key>>;
     } else if constexpr (IsVarLenData<Key>()) {

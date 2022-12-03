@@ -1235,7 +1235,7 @@ class NodeVarLen
       -> NodeRC
   {
     // check whether the node has space for a new record
-    const auto total_size = kMetaLen * record_count_ + block_size_ + new_rec_len;
+    const auto total_size = kMetaLen * (record_count_ + 1) + block_size_ + new_rec_len;
     if (total_size <= kPageSize - kHeaderLen) {
       if (mutex_.HasSameVersion(ver)) return kCompleted;
       return kNeedRetry;
