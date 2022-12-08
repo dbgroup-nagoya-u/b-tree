@@ -51,12 +51,14 @@ class BTree
    * Type aliases
    *##################################################################################*/
 
+  using Timestamp_t = size_t;
+
   using K = Key;
-  using V = Payload;
+  using V = VersionNode<Payload, Timestamp_t>;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
-  using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
+  using BTree_t = BTree<Key, V, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -68,9 +70,6 @@ class BTree
   using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
-
-  // aliases for versioning
-  using Timestamp_t = size_t;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -395,7 +394,7 @@ class BTree
    *##################################################################################*/
 
   /// the length of payloads.
-  static constexpr size_t kPayLen = sizeof(Payload);
+  static constexpr size_t kPayLen = sizeof(V);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node_t *);
