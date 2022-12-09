@@ -18,7 +18,7 @@
 #ifndef B_TREE_COMPONENT_VERSIONED_OSL_VERSION_NODE
 #define B_TREE_COMPONENT_VERSIONED_OSL_VERSION_NODE
 
-namespace dbgroup::index::b_tree::component::versioned_osl
+namespace dbgroup::index::b_tree::component::osl
 {
 
 /**
@@ -120,4 +120,4 @@ class VersionRecord
   VersionRecord *next_;
 };
 
-}  // namespace dbgroup::index::b_tree::component::versioned_osl
+}  // namespace dbgroup::index::b_tree::component::osl

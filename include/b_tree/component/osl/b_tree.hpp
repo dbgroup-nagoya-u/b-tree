@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef B_TREE_COMPONENT_OSL_B_TREE_HPP
-#define B_TREE_COMPONENT_OSL_B_TREE_HPP
+#ifndef B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP
+#define B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP
 
 #include <future>
 #include <optional>
@@ -29,6 +29,7 @@
 #include "b_tree/component/record_iterator.hpp"
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
+#include "version_record.hpp"
 
 namespace dbgroup::index::b_tree::component::osl
 {
@@ -50,12 +51,14 @@ class BTree
    * Type aliases
    *##################################################################################*/
 
+  using Timestamp_t = size_t;
+
   using K = Key;
-  using V = Payload;
+  using V = VersionRecord<Payload, Timestamp_t>;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
-  using BTree_t = BTree<Key, Payload, Comp, kIsVarLen>;
+  using BTree_t = BTree<Key, V, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
@@ -391,7 +394,7 @@ class BTree
    *##################################################################################*/
 
   /// the length of payloads.
-  static constexpr size_t kPayLen = sizeof(Payload);
+  static constexpr size_t kPayLen = sizeof(V);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node_t *);
@@ -576,6 +579,52 @@ class BTree
     }
 
     ::operator delete(node);
+  }
+
+  /*####################################################################################
+   * Internal utility functions for versioned Read/Write
+   *##################################################################################*/
+
+  /**
+   * @brief create new version record with current timestamp
+   *
+   * @param payload a payload of the version
+   */
+  [[nodiscard]] auto
+  CreateNewVersionRecord(Payload &payload) ->  //
+      VersionRecord<Payload, Timestamp_t>
+  {
+    auto timestamp = (*gc_.GetCurrentEpoch()).front();
+    auto version_node = VersionRecord<Payload, Timestamp_t>{timestamp, payload};
+    return version_node;
+  }
+
+  /**
+   * @return the payload of visible version at the given timestamp
+   *
+   * @param head a version record which is head of the version chain
+   * @param ts a timestamp at which CRUD operation was started
+   *
+   */
+  [[nodiscard]] auto
+  GetVisiblePayload(VersionRecord<Payload, Timestamp_t> head, Timestamp_t ts) const  //
+      -> std::optional<Payload>
+  {
+    auto current_version_ptr = &head;
+    auto next_version_ptr = current_version_ptr->GetNextPtr();
+    auto version_ts = current_version_ptr->GetTimestamp();
+    while (next_version_ptr != nullptr) {
+      // if (version_ts >= ts) {
+      if (false) {  // Read latest payload (only for DEBUGGING)
+        current_version_ptr = next_version_ptr;
+        next_version_ptr = current_version_ptr->GetNextPtr();
+        version_ts = current_version_ptr->GetTimestamp();
+      } else {
+        return current_version_ptr->GetPayload();
+      }
+    }
+    // visible node not found
+    return std::nullopt;
   }
 
   /*####################################################################################
@@ -862,4 +911,4 @@ class BTree
 };
 }  // namespace dbgroup::index::b_tree::component::osl
 
-#endif  // B_TREE_COMPONENT_OSL_B_TREE_HPP
+#endif  // B_TREE_COMPONENT_VERSIONED_OSL_B_TREE_HPP
