@@ -29,7 +29,7 @@
 #include "b_tree/component/record_iterator.hpp"
 #include "node_fixlen.hpp"
 #include "node_varlen.hpp"
-#include "version_node.hpp"
+#include "version_record.hpp"
 
 namespace dbgroup::index::b_tree::component::versioned_osl
 {
@@ -54,7 +54,7 @@ class BTree
   using Timestamp_t = size_t;
 
   using K = Key;
-  using V = VersionNode<Payload, Timestamp_t>;
+  using V = VersionRecord<Payload, Timestamp_t>;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
@@ -586,28 +586,28 @@ class BTree
    *##################################################################################*/
 
   /**
-   * @brief create new version node with current timestamp
+   * @brief create new version record with current timestamp
    *
    * @param payload a payload of the version
    */
   [[nodiscard]] auto
-  CreateNewVersionNode(Payload &payload) ->  //
-      VersionNode<Payload, Timestamp_t>
+  CreateNewVersionRecord(Payload &payload) ->  //
+      VersionRecord<Payload, Timestamp_t>
   {
     auto timestamp = (*gc_.GetCurrentEpoch()).front();
-    auto version_node = VersionNode<Payload, Timestamp_t>{timestamp, payload};
+    auto version_node = VersionRecord<Payload, Timestamp_t>{timestamp, payload};
     return version_node;
   }
 
   /**
    * @return the payload of visible version at the given timestamp
    *
-   * @param head a version node which is head of the version chain
+   * @param head a version record which is head of the version chain
    * @param ts a timestamp at which CRUD operation was started
    *
    */
   [[nodiscard]] auto
-  GetVisiblePayload(VersionNode<Payload, Timestamp_t> head, Timestamp_t ts) const  //
+  GetVisiblePayload(VersionRecord<Payload, Timestamp_t> head, Timestamp_t ts) const  //
       -> std::optional<Payload>
   {
     auto current_version_ptr = &head;

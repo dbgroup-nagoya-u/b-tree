@@ -22,13 +22,13 @@ namespace dbgroup::index::b_tree::component::versioned_osl
 {
 
 /**
- * @brief A class for representing version nodes
+ * @brief A class for representing version records
  *
  * @tparam Payload a target Payload class
  * @tparam Timestamp_t a timestamp class
  */
 template <class Payload, class Timestamp_t>
-class VersionNode
+class VersionRecord
 {
  public:
   /*##################################################################################
@@ -42,10 +42,10 @@ class VersionNode
    * @param payload a payload of tuple
    * @param next a pointer to a next node.
    */
-  VersionNode(  //
+  VersionRecord(  //
       Timestamp_t timestamp,
       Payload payload,
-      VersionNode<Payload> *next = nullptr)
+      VersionRecord<Payload> *next = nullptr)
       : timestamp_{timestamp}, payload_{payload}, next_{next}
   {
   }
@@ -57,7 +57,7 @@ class VersionNode
    * @brief Destroy the instance.
    *
    */
-  ~VersionNode() = default;
+  ~VersionRecord() = default;
 
   /*##################################################################################
    * Public Getters
@@ -89,7 +89,7 @@ class VersionNode
    */
   [[nodiscard]] const auto
   GetNextPtr() const  //
-      -> VersionNode<Payload> *
+      -> VersionRecord<Payload> *
   {
     return next_;
   }
@@ -104,7 +104,7 @@ class VersionNode
    * @param node_ptr a pointer to the node which will be the next of this on the chain
    */
   auto
-  SetNextPtr(VersionNode *node_ptr)  //
+  SetNextPtr(VersionRecord *node_ptr)  //
       -> void
   {
     next_ = node_ptr;
@@ -117,7 +117,7 @@ class VersionNode
 
   const Timestamp_t timestamp_;
   const Payload payload_;
-  VersionNode *next_;
+  VersionRecord *next_;
 };
 
 }  // namespace dbgroup::index::b_tree::component::versioned_osl
