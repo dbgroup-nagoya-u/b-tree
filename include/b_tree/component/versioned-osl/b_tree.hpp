@@ -586,6 +586,20 @@ class BTree
    *##################################################################################*/
 
   /**
+   * @brief create new version node with current timestamp
+   *
+   * @param payload a payload of the version
+   */
+  [[nodiscard]] auto
+  CreateNewVersionNode(Payload &payload) ->  //
+      VersionNode<Payload, Timestamp_t>
+  {
+    auto timestamp = (*gc_.GetCurrentEpoch()).front();
+    auto version_node = VersionNode<Payload, Timestamp_t>{timestamp, payload};
+    return version_node;
+  }
+
+  /**
    * @return the payload of visible version at the given timestamp
    *
    * @param head a version node which is head of the version chain
@@ -600,7 +614,8 @@ class BTree
     auto next_version_ptr = current_version_ptr->GetNextPtr();
     auto version_ts = current_version_ptr->GetTimestamp();
     while (next_version_ptr != nullptr) {
-      if (version_ts >= ts) {
+      // if (version_ts >= ts) {
+      if (false) {  // Read latest payload (only for DEBUGGING)
         current_version_ptr = next_version_ptr;
         next_version_ptr = current_version_ptr->GetNextPtr();
         version_ts = current_version_ptr->GetTimestamp();
@@ -610,24 +625,6 @@ class BTree
     }
     // visible node not found
     return std::nullopt;
-  }
-
-  /**
-   * @brief Append new version node to the chain's head
-   *
-   * @param payload the payload of the new version node
-   *
-   */
-  [[nodiscard]] auto
-  AppendNewVersion(Payload payload)  //
-      -> void
-  // TODO: PayloadじゃなくVersionNodeを受け取る？
-  {
-    Timestamp_t timestamp = 0;  // TODO: implement
-    VersionNode<Payload, Timestamp_t> newNode{timestamp, payload, head_ptr_};
-    head_ptr_ = &newNode;
-
-    return;
   }
 
   /*####################################################################################
