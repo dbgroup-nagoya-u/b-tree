@@ -45,7 +45,7 @@ class VersionRecord
   VersionRecord(  //
       Timestamp_t timestamp,
       Payload payload,
-      VersionRecord<Payload> *next = nullptr)
+      VersionRecord<Payload, Timestamp_t> *next = nullptr)
       : timestamp_{timestamp}, payload_{payload}, next_{next}
   {
   }
@@ -89,7 +89,7 @@ class VersionRecord
    */
   [[nodiscard]] const auto
   GetNextPtr() const  //
-      -> VersionRecord<Payload> *
+      -> VersionRecord<Payload, Timestamp_t> *
   {
     return next_;
   }
@@ -121,3 +121,4 @@ class VersionRecord
 };
 
 }  // namespace dbgroup::index::b_tree::component::osl
+#endif  // B_TREE_COMPONENT_VERSIONED_OSL_VERSION_NODE

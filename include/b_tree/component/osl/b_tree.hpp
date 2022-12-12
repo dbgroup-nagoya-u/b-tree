@@ -24,6 +24,7 @@
 
 // organization libraries
 #include "memory/epoch_based_gc.hpp"
+#include "memory/epoch_manager.hpp"
 
 // local sources
 #include "b_tree/component/record_iterator.hpp"
@@ -54,7 +55,8 @@ class BTree
   using Timestamp_t = size_t;
 
   using K = Key;
-  using V = VersionRecord<Payload, Timestamp_t>;
+  // using V = VersionRecord<Payload, Timestamp_t>;
+  using V = Payload;
   using NodeVarLen_t = NodeVarLen<Key, Comp>;
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kIsVarLen, NodeVarLen_t, NodeFixLen_t>;
@@ -62,6 +64,7 @@ class BTree
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
+  using EpochManager_t = ::dbgroup::memory::EpochManager;
 
   // aliases for bulkloading
   template <class Entry>
@@ -89,6 +92,7 @@ class BTree
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
+    StartEpoch();
   }
 
   BTree(const BTree &) = delete;
@@ -108,6 +112,7 @@ class BTree
   ~BTree()  //
   {
     DeleteChildren(root_.load(std::memory_order_acquire));
+    StopEpoch();
   }
 
   /*####################################################################################
@@ -393,8 +398,11 @@ class BTree
    * Internal constants
    *##################################################################################*/
 
+  // the interval time of each epoch
+  static constexpr size_t epoch_interval_us = 1000;
+
   /// the length of payloads.
-  static constexpr size_t kPayLen = sizeof(V);
+  static constexpr size_t kPayLen = sizeof(Payload);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node_t *);
@@ -626,6 +634,35 @@ class BTree
     // visible node not found
     return std::nullopt;
   }
+
+  auto
+  StartEpoch()  //
+      -> void
+  {
+    auto forwarder = [this]() {
+      const std::chrono::microseconds epoch_interval{epoch_interval_us};
+      while (is_epoch_forwarding_.load(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(epoch_interval);
+        epoch_manager_.ForwardGlobalEpoch();
+      }
+    };
+
+    if (is_epoch_forwarding_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    is_epoch_forwarding_.store(true, std::memory_order_relaxed);
+    epoch_thread_ = std::thread{forwarder};
+  };
+  auto
+  StopEpoch()  //
+      -> void
+  {
+    if (!is_epoch_forwarding_.load(std::memory_order_relaxed)) {
+      return;
+    }
+    is_epoch_forwarding_.store(false, std::memory_order_relaxed);
+    epoch_thread_.join();
+  };
 
   /*####################################################################################
    * Internal structure modification operations
@@ -905,6 +942,15 @@ class BTree
 
   /// a garbage collector for node pages.
   GC_t gc_{};
+
+  // an epoch manager for versioning
+  EpochManager_t epoch_manager_{};
+
+  // an epoch forwarder for versioning
+  std::thread epoch_thread_{};
+
+  //
+  std::atomic<bool> is_epoch_forwarding_{false};
 
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};
