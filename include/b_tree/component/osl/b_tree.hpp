@@ -133,10 +133,15 @@ class BTree
       -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    // TODO: 単発のReadはタイムスタンプを気にせず最新の値を読んでもいいかもしれない
+    // [[maybe_unused]] const auto &version_guard = epoch_manager_.CreateEpochGuard();
+    const auto current_ts = epoch_manager_.GetCurrentEpoch();
 
     auto *node = SearchLeafNode(key);
-    Payload payload{};
-    const auto rc = Node_t::Read(node, key, payload);
+    VersionRecord<Payload, Timestamp_t> latest_version{};
+    const auto rc = Node_t::Read(node, key, latest_version);
+
+    auto payload = GetVisiblePayload(latest_version, current_ts);
 
     if (rc == NodeRC::kKeyAlreadyInserted) return payload;
     return std::nullopt;

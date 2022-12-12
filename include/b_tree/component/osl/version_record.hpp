@@ -49,6 +49,9 @@ class VersionRecord
       : timestamp_{timestamp}, payload_{payload}, next_{next}
   {
   }
+
+  VersionRecord() = default;
+
   /*##################################################################################
    * Public destructor
    *################################################################################*/
@@ -115,8 +118,8 @@ class VersionRecord
    * Internal member
    *################################################################################*/
 
-  const Timestamp_t timestamp_;
-  const Payload payload_;
+  Timestamp_t timestamp_;
+  Payload payload_;
   VersionRecord *next_;
 };
 
