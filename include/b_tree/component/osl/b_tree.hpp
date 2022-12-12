@@ -200,10 +200,21 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
+    const auto protected_epochs = *(epoch_manager_.GetProtectedEpochs());
+    const auto current_ts = protected_epochs.front();
+
+    auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
+    auto latest_version = GetLatestVersion(key);
+    if (latest_version) {  // when a version already exists
+      // the new head's next_ point it.
+      new_version_ptr->SetNextPtr(&(latest_version.value()));
+      // and GC obsolete versions.
+      CleanObsoleteVersions();
+    }
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    const auto rc = node->Write(key, key_len, &payload, kPayLen);
+    const auto rc = node->Write(key, key_len, new_version_ptr, kPayLen);
 
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
@@ -240,9 +251,12 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
+    auto current_ts = epoch_manager_.GetCurrentEpoch();
+    auto new_version = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
+
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
-    const auto rc = Node_t::Insert(node, key, key_len, &payload, kPayLen);
+    const auto rc = Node_t::Insert(node, key, key_len, &new_version, kPayLen);
     if (rc == NodeRC::kKeyAlreadyInserted) return kKeyExist;
 
     if (rc == NodeRC::kNeedSplit) {
@@ -279,9 +293,19 @@ class BTree
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    auto current_ts = epoch_manager_.GetCurrentEpoch();
+    auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
+    auto latest_version = GetLatestVersion(key);
+    if (latest_version) {  // when a version already exists
+      // the new head's next_ point it.
+      new_version_ptr->SetNextPtr(&(latest_version.value()));
+      // and GC obsolete versions.
+      CleanObsoleteVersions();
+    }
+    // TODO: latest_version == nulloptの場合，早期リターンが可能．するべきか？
 
     auto *node = SearchLeafNode(key);
-    return Node_t::Update(node, key, &payload, kPayLen);
+    return Node_t::Update(node, key, new_version_ptr, kPayLen);
   }
 
   /**
@@ -407,7 +431,7 @@ class BTree
   static constexpr size_t epoch_interval_us = 1000;
 
   /// the length of payloads.
-  static constexpr size_t kPayLen = sizeof(Payload);
+  static constexpr size_t kPayLen = sizeof(VersionRecord<Payload, Timestamp_t>);
 
   /// the length of child pointers.
   static constexpr size_t kPtrLen = sizeof(Node_t *);
@@ -599,17 +623,25 @@ class BTree
    *##################################################################################*/
 
   /**
-   * @brief create new version record with current timestamp
+   * @brief a function for reading a version record(current head).
    *
-   * @param payload a payload of the version
+   * @param key a target key.
+   * @retval the version record of a given key wrapped with std::optional if it is in this tree.
+   * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
-  CreateNewVersionRecord(Payload &payload) ->  //
-      VersionRecord<Payload, Timestamp_t>
+  GetLatestVersion(const Key &key)  //
+      -> std::optional<VersionRecord<Payload, Timestamp_t>>
   {
-    auto timestamp = (*gc_.GetCurrentEpoch()).front();
-    auto version_node = VersionRecord<Payload, Timestamp_t>{timestamp, payload};
-    return version_node;
+    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+
+    auto *node = SearchLeafNode(key);
+    VersionRecord<Payload, Timestamp_t> latest_version{};
+    const auto rc = Node_t::Read(node, key, latest_version);
+
+    if (rc == NodeRC::kKeyAlreadyInserted) return latest_version;
+    // TODO: 削除済みの場合も検討する
+    return std::nullopt;
   }
 
   /**
@@ -639,7 +671,7 @@ class BTree
     // visible node not found
     return std::nullopt;
   }
-
+  auto CleanObsoleteVersions(){};  // TODO: implement
   auto
   StartEpoch()  //
       -> void
