@@ -28,7 +28,7 @@
 
 // local sources
 #include "b_tree/component/common.hpp"
-
+#include "version_record.hpp"
 namespace dbgroup::index::b_tree::component::osl
 {
 
@@ -940,6 +940,37 @@ class NodeFixLen
     return kCompleted;
   }
 
+  /**
+   * @brief Get an address of the version record with specified key if it exists.
+   *
+   * @tparam Payload a class of payload.
+   * @param node a current node to be read.
+   * @param key a target key.
+   * @param out_version_record_addr a reference to be stored a target version record address.
+   * @retval kKeyAlreadyInserted if a target record is read.
+   * @retval kKeyAlreadyDeleted if a target record is deleted.
+   * @retval kKeyNotInserted otherwise.
+   */
+  template <class Payload, class Timestamp_t>
+  static auto
+  GetLatestVersionAddr(  //
+      Node *&node,
+      const Key &key,
+      VersionRecord<Payload, Timestamp_t> *&out_version_record_addr)  //
+      -> NodeRC
+  {
+    while (true) {
+      const auto ver = CheckKeyRange(node, key);
+
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence == kKeyAlreadyInserted) {
+        out_version_record_addr =
+            reinterpret_cast<VersionRecord<Payload, Timestamp_t> *>(node->GetPayloadAddr(pos));
+      }
+
+      if (node->mutex_.HasSameVersion(ver)) return existence;
+    }
+  }
   /*####################################################################################
    * Public structure modification operations
    *##################################################################################*/

@@ -204,10 +204,10 @@ class BTree
     const auto current_ts = protected_epochs.front();
 
     auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
-    auto latest_version = GetLatestVersion(key);
-    if (latest_version) {  // when a version already exists
+    auto latest_version_addr = GetLatestVersionAddr(key);
+    if (latest_version_addr) {  // when a version already exists
       // the new head's next_ point it.
-      new_version_ptr->SetNextPtr(&(latest_version.value()));
+      new_version_ptr->SetNextPtr(latest_version_addr.value());
       // and GC obsolete versions.
       CleanObsoleteVersions();
     }
@@ -295,10 +295,10 @@ class BTree
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
     auto current_ts = epoch_manager_.GetCurrentEpoch();
     auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
-    auto latest_version = GetLatestVersion(key);
-    if (latest_version) {  // when a version already exists
+    auto latest_version_addr = GetLatestVersionAddr(key);
+    if (latest_version_addr) {  // when a version already exists
       // the new head's next_ point it.
-      new_version_ptr->SetNextPtr(&(latest_version.value()));
+      new_version_ptr->SetNextPtr(latest_version_addr.value());
       // and GC obsolete versions.
       CleanObsoleteVersions();
     }
@@ -630,16 +630,16 @@ class BTree
    * @retval std::nullopt otherwise.
    */
   [[nodiscard]] auto
-  GetLatestVersion(const Key &key)  //
-      -> std::optional<VersionRecord<Payload, Timestamp_t>>
+  GetLatestVersionAddr(const Key &key)  //
+      -> std::optional<VersionRecord<Payload, Timestamp_t> *>
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
     auto *node = SearchLeafNode(key);
-    VersionRecord<Payload, Timestamp_t> latest_version{};
-    const auto rc = Node_t::Read(node, key, latest_version);
+    VersionRecord<Payload, Timestamp_t> *latest_version_addr;
+    const auto rc = Node_t::GetLatestVersionAddr(node, key, latest_version_addr);
 
-    if (rc == NodeRC::kKeyAlreadyInserted) return latest_version;
+    if (rc == NodeRC::kKeyAlreadyInserted) return latest_version_addr;
     // TODO: 削除済みの場合も検討する
     return std::nullopt;
   }
