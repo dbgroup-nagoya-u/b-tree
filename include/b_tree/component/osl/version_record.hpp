@@ -69,7 +69,7 @@ class VersionRecord
   /**
    * @return the timestamp(i.e., version) of this node
    */
-  [[nodiscard]] const auto
+  [[nodiscard]] auto
   GetTimestamp() const  //
       -> Timestamp_t
   {
@@ -79,7 +79,7 @@ class VersionRecord
   /**
    * @return the payload of this version
    */
-  [[nodiscard]] const auto
+  [[nodiscard]] auto
   GetPayload() const  //
       -> Payload
   {
@@ -90,7 +90,7 @@ class VersionRecord
    * @return a pointer to the next node on chain
    * @return nullptr when this node is the latest version
    */
-  [[nodiscard]] const auto
+  [[nodiscard]] auto
   GetNextPtr() const  //
       -> VersionRecord<Payload, Timestamp_t> *
   {

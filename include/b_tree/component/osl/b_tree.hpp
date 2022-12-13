@@ -986,7 +986,7 @@ class BTree
   // an epoch forwarder for versioning
   std::thread epoch_thread_{};
 
-  //
+  // a flag to check whether epoch is forwarding.
   std::atomic<bool> is_epoch_forwarding_{false};
 
   /// a root node of this tree.
