@@ -84,7 +84,8 @@ class BTree
    */
   BTree(  //
       const size_t gc_interval_micro,
-      const size_t gc_thread_num)
+      const size_t gc_thread_num,
+      const size_t epoch_interval_micro = 1000)
       : gc_{gc_interval_micro, gc_thread_num, true}
   {
     auto *root = new (GetNodePage()) Node_t{kLeafFlag};
@@ -92,7 +93,7 @@ class BTree
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
-    StartEpoch();
+    StartEpoch(epoch_interval_micro);
   }
 
   BTree(const BTree &) = delete;
@@ -427,9 +428,6 @@ class BTree
    * Internal constants
    *##################################################################################*/
 
-  // the interval time of each epoch
-  static constexpr size_t epoch_interval_us = 1000;
-
   /// the length of payloads.
   static constexpr size_t kPayLen = sizeof(VersionRecord<Payload, Timestamp_t>);
 
@@ -673,11 +671,11 @@ class BTree
   }
   auto CleanObsoleteVersions(){};  // TODO: implement
   auto
-  StartEpoch()  //
+  StartEpoch(size_t epoch_interval_micro)  //
       -> void
   {
-    auto forwarder = [this]() {
-      const std::chrono::microseconds epoch_interval{epoch_interval_us};
+    auto forwarder = [this, epoch_interval_micro]() {
+      const std::chrono::microseconds epoch_interval{epoch_interval_micro};
       while (is_epoch_forwarding_.load(std::memory_order_relaxed)) {
         std::this_thread::sleep_for(epoch_interval);
         epoch_manager_.ForwardGlobalEpoch();
