@@ -693,13 +693,16 @@ class NodeFixLen
    * @retval kKeyAlreadyInserted if there is a record with the same key.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
+  template <class Payload>
   static auto
   Insert(  //
       Node *&node,
       const Key &key,
       [[maybe_unused]] const size_t key_len,
-      const void *payload,
-      [[maybe_unused]] const size_t pay_len)  //
+      Payload &payload,
+      [[maybe_unused]] const size_t pay_len,
+      [[maybe_unused]] GC_t &gc,
+      EpochManager_t &epoch_manager)  //
       -> NodeRC
   {
     const auto rec_len = kKeyLen + node->pay_len_;
@@ -711,16 +714,26 @@ class NodeFixLen
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
         if (!node->mutex_.HasSameVersion(ver)) continue;
+        auto current_ver = VersionRecord<Payload>{};
+        memcpy(&current_ver, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+        if (current_ver.IsDeleted()) {
+          // if the key is already inserted and deleted, Insert() behaves as Update()
+          return Update(node, key, payload, pay_len, gc, epoch_manager);
+        } else {  //
         return kKeyAlreadyInserted;
       }
-
+      } else {
+        // if the key has never been inserted
       // inserting a new record is required
       if (!node->mutex_.TryLockSIX(ver)) continue;
       if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
-      // insert a new record
-      node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos);
+        // insert a new version record
+        auto current_epoch = epoch_manager.GetCurrentEpoch();
+        auto new_version = VersionRecord<Payload>{current_epoch, payload};
+        node->InsertVersionRecord(key, kKeyLen, payload, node->pay_len_, pos);
       return kCompleted;
+      }
     }
   }
 
