@@ -25,6 +25,8 @@
 
 // organization libraries
 #include "lock/optimistic_lock.hpp"
+#include "memory/epoch_based_gc.hpp"
+#include "memory/epoch_manager.hpp"
 
 // local sources
 #include "b_tree/component/common.hpp"
@@ -596,12 +598,18 @@ class NodeFixLen
       Payload &out_payload)  //
       -> NodeRC
   {
+    auto current_version = VersionRecord<Payload>{};
     while (true) {
       const auto ver = CheckKeyRange(node, key);
 
       const auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
-        memcpy(&out_payload, node->GetPayloadAddr(pos), sizeof(Payload));
+        memcpy(&current_version, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+        if (current_version.IsDeleted()) {
+          return kKeyAlreadyDeleted;
+        } else {
+          out_payload = current_version.GetPayload();
+        }
       }
 
       if (node->mutex_.HasSameVersion(ver)) return existence;
@@ -940,37 +948,6 @@ class NodeFixLen
     return kCompleted;
   }
 
-  /**
-   * @brief Get an address of the version record with specified key if it exists.
-   *
-   * @tparam Payload a class of payload.
-   * @param node a current node to be read.
-   * @param key a target key.
-   * @param out_version_record_addr a reference to be stored a target version record address.
-   * @retval kKeyAlreadyInserted if a target record is read.
-   * @retval kKeyAlreadyDeleted if a target record is deleted.
-   * @retval kKeyNotInserted otherwise.
-   */
-  template <class Payload, class Timestamp_t>
-  static auto
-  GetLatestVersionAddr(  //
-      Node *&node,
-      const Key &key,
-      VersionRecord<Payload, Timestamp_t> *&out_version_record_addr)  //
-      -> NodeRC
-  {
-    while (true) {
-      const auto ver = CheckKeyRange(node, key);
-
-      const auto [existence, pos] = node->SearchRecord(key);
-      if (existence == kKeyAlreadyInserted) {
-        out_version_record_addr =
-            reinterpret_cast<VersionRecord<Payload, Timestamp_t> *>(node->GetPayloadAddr(pos));
-      }
-
-      if (node->mutex_.HasSameVersion(ver)) return existence;
-    }
-  }
   /*####################################################################################
    * Public structure modification operations
    *##################################################################################*/

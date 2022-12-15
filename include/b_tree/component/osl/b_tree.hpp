@@ -134,15 +134,10 @@ class BTree
       -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
-    // TODO: 単発のReadはタイムスタンプを気にせず最新の値を読んでもいいかもしれない
-    // [[maybe_unused]] const auto &version_guard = epoch_manager_.CreateEpochGuard();
-    const auto current_ts = epoch_manager_.GetCurrentEpoch();
 
     auto *node = SearchLeafNode(key);
-    VersionRecord<Payload, Timestamp_t> latest_version{};
-    const auto rc = Node_t::Read(node, key, latest_version);
-
-    auto payload = GetVisiblePayload(latest_version, current_ts);
+    Payload payload{};
+    const auto rc = Node_t::Read(node, key, payload);
 
     if (rc == NodeRC::kKeyAlreadyInserted) return payload;
     return std::nullopt;
@@ -620,56 +615,6 @@ class BTree
    * Internal utility functions for versioned Read/Write
    *##################################################################################*/
 
-  /**
-   * @brief a function for reading a version record(current head).
-   *
-   * @param key a target key.
-   * @retval the version record of a given key wrapped with std::optional if it is in this tree.
-   * @retval std::nullopt otherwise.
-   */
-  [[nodiscard]] auto
-  GetLatestVersionAddr(const Key &key)  //
-      -> std::optional<VersionRecord<Payload, Timestamp_t> *>
-  {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
-
-    auto *node = SearchLeafNode(key);
-    VersionRecord<Payload, Timestamp_t> *latest_version_addr;
-    const auto rc = Node_t::GetLatestVersionAddr(node, key, latest_version_addr);
-
-    if (rc == NodeRC::kKeyAlreadyInserted) return latest_version_addr;
-    // TODO: 削除済みの場合も検討する
-    return std::nullopt;
-  }
-
-  /**
-   * @return the payload of visible version at the given timestamp
-   *
-   * @param head a version record which is head of the version chain
-   * @param ts a timestamp at which CRUD operation was started
-   *
-   */
-  [[nodiscard]] auto
-  GetVisiblePayload(VersionRecord<Payload, Timestamp_t> head, Timestamp_t ts) const  //
-      -> std::optional<Payload>
-  {
-    auto current_version_ptr = &head;
-    auto next_version_ptr = current_version_ptr->GetNextPtr();
-    auto version_ts = current_version_ptr->GetTimestamp();
-    while (next_version_ptr != nullptr) {
-      // if (version_ts >= ts) {
-      if (false) {  // Read latest payload (only for DEBUGGING)
-        current_version_ptr = next_version_ptr;
-        next_version_ptr = current_version_ptr->GetNextPtr();
-        version_ts = current_version_ptr->GetTimestamp();
-      } else {
-        return current_version_ptr->GetPayload();
-      }
-    }
-    // visible node not found
-    return std::nullopt;
-  }
-  auto CleanObsoleteVersions(){};  // TODO: implement
   auto
   StartEpoch(size_t epoch_interval_micro)  //
       -> void
