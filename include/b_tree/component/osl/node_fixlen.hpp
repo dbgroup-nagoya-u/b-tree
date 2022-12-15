@@ -645,7 +645,7 @@ class NodeFixLen
       [[maybe_unused]] const size_t key_len,
       Payload &payload,
       [[maybe_unused]] const size_t pay_len,
-      [[maybe_unused]] t GC_t &gc,
+      [[maybe_unused]] GC_t &gc,
       EpochManager_t &epoch_manager)  //
       -> NodeRC
   {
