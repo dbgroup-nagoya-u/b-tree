@@ -27,7 +27,7 @@ namespace dbgroup::index::b_tree::component::osl
  * @tparam Payload a target Payload class
  * @tparam Timestamp_t a timestamp class
  */
-template <class Payload, class Timestamp_t>
+template <class Payload, class Timestamp_t = size_t>
 class VersionRecord
 {
  public:
@@ -45,8 +45,12 @@ class VersionRecord
   VersionRecord(  //
       Timestamp_t timestamp,
       Payload payload,
+      bool is_deleted = false,
       VersionRecord<Payload, Timestamp_t> *next = nullptr)
-      : timestamp_{timestamp}, payload_{payload}, next_{next}
+      : timestamp_{reinterpret_cast<size_t>(timestamp)},
+        payload_{payload},
+        is_deleted_{reinterpret_cast<size_t>(is_deleted)},
+        next_{next}
   {
   }
 
@@ -73,7 +77,7 @@ class VersionRecord
   GetTimestamp() const  //
       -> Timestamp_t
   {
-    return timestamp_;
+    return reinterpret_cast<Timestamp_t>(timestamp_);
   }
 
   /**
@@ -97,6 +101,13 @@ class VersionRecord
     return next_;
   }
 
+  [[nodiscard]] auto
+  IsDeleted() const  //
+      -> bool
+  {
+    return is_deleted_ == 1;
+  }
+
   /*##################################################################################
    * Public Setter
    *################################################################################*/
@@ -114,13 +125,15 @@ class VersionRecord
     return;
   }
 
+ private:
   /*##################################################################################
    * Internal member
    *################################################################################*/
 
-  Timestamp_t timestamp_;
-  Payload payload_;
+  size_t is_deleted_ : 1;
+  size_t timestamp_ : 63;
   VersionRecord *next_;
+  Payload payload_;
 };
 
 }  // namespace dbgroup::index::b_tree::component::osl
