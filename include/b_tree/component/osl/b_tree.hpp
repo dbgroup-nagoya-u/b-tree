@@ -289,19 +289,8 @@ class BTree
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
-    auto current_ts = epoch_manager_.GetCurrentEpoch();
-    auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
-    auto latest_version_addr = GetLatestVersionAddr(key);
-    if (latest_version_addr) {  // when a version already exists
-      // the new head's next_ point it.
-      new_version_ptr->SetNextPtr(latest_version_addr.value());
-      // and GC obsolete versions.
-      CleanObsoleteVersions();
-    }
-    // TODO: latest_version == nulloptの場合，早期リターンが可能．するべきか？
-
     auto *node = SearchLeafNode(key);
-    return Node_t::Update(node, key, new_version_ptr, kPayLen);
+    return Node_t::Update(node, key, payload, kPayLen, gc_, epoch_manager_);
   }
 
   /**
@@ -319,17 +308,8 @@ class BTree
       -> ReturnCode
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
-
-    auto &&stack = SearchLeafNodeForWrite(key);
-    auto *node = stack.back();
-    const auto rc = Node_t::Delete(node, key);
-    if (rc == NodeRC::kKeyNotInserted) return kKeyNotExist;
-
-    if (rc == NodeRC::kNeedMerge) {
-      Merge(stack, node);
-    }
-
-    return kSuccess;
+    auto *node = SearchLeafNode(key);
+    return Node_t::Delete(node, key, kPayLen, gc_, epoch_manager_);
   }
 
   /*####################################################################################

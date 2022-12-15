@@ -56,6 +56,9 @@ class NodeFixLen
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, Node *, size_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Node>;
+  using EpochManager_t = ::dbgroup::memory::EpochManager;
+  using Timestamp_t = size_t;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -760,12 +763,68 @@ class NodeFixLen
    * @retval kSuccess if a key/payload pair is written.
    * @retval kKeyNotExist otherwise.
    */
+  template <class Payload>
   static auto
   Update(  //
       Node *&node,
       const Key &key,
-      const void *payload,
-      [[maybe_unused]] const size_t pay_len)  //
+      Payload &payload,
+      [[maybe_unused]] const size_t pay_len,
+      [[maybe_unused]] GC_t &gc,
+      EpochManager_t &epoch_manager)  //
+      -> ReturnCode
+  {
+    [[maybe_unused]] auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
+
+    while (true) {
+      const auto ver = CheckKeyRange(node, key);
+
+      // check this node has a target record
+      const auto [existence, pos] = node->SearchRecord(key);
+      if (existence != kKeyAlreadyInserted) {
+        if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
+        continue;
+      }
+
+      // a target record exists, so try to acquire an exclusive lock
+      if (!node->mutex_.TryLockX(ver)) continue;
+
+      // perform update operation
+      auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before
+                                                            // update, and will be filled by memcpy.
+      auto current_epoch = epoch_manager.GetCurrentEpoch();
+      auto new_version = VersionRecord<Payload>{current_epoch, payload};
+      new_version.SetNextPtr(old_version_ptr);  // New head's next version is old one.
+
+      node->mutex_.UpgradeToX();
+      memcpy(old_version_ptr, GetPayloadAddr(pos), node->pay_len_);  // Copy old one.
+      memcpy(node->GetPayloadAddr(pos), &new_version, node->pay_len_);
+
+      node->mutex_.UnlockX();
+      return kSuccess;
+    }
+  }
+
+  /**
+   * @brief Delete a target key from the index.
+   *
+   * If a specified key exist, this function overwrites it with deleted version record. If a
+   * specified key does not exist in a leaf node, this function does nothing and returns
+   * kKeyNotExist as a return code.
+   *
+   * @param node a current node to be updated.
+   * @param key a target key to be written.
+   * @retval kSuccess if a key/payload pair is written by deleted version record.
+   * @retval kKeyNotExist otherwise.
+   */
+  template <class Payload>
+  static auto
+  Delete(  //
+      Node *&node,
+      const Key &key,
+      [[maybe_unused]] const size_t pay_len,
+      [[maybe_unused]] GC_t gc,
+      EpochManager_t epoch_manager)  //
       -> ReturnCode
   {
     while (true) {
@@ -781,65 +840,19 @@ class NodeFixLen
       // a target record exists, so try to acquire an exclusive lock
       if (!node->mutex_.TryLockX(ver)) continue;
 
-      // perform update operation
-      memcpy(node->GetPayloadAddr(pos), payload, node->pay_len_);
+      // perform delete operation
+      auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before
+                                                            // update, and will be filled by memcpy.
+      auto current_epoch = epoch_manager.GetCurrentEpoch();
+      auto new_version = VersionRecord<Payload>{current_epoch, Payload{}, true};
+      new_version.SetNextPtr(old_version_ptr);  // New head's next version is old one.
+
+      node->mutex_.UpgradeToX();
+      memcpy(old_version_ptr, GetPayloadAddr(pos), node->pay_len_);  // Copy old one.
+      memcpy(node->GetPayloadAddr(pos), &new_version, node->pay_len_);
 
       node->mutex_.UnlockX();
       return kSuccess;
-    }
-  }
-
-  /**
-   * @brief Delete a target key from the index.
-   *
-   * If a specified key exist, this function deletes it. If a specified key does not
-   * exist in a leaf node, this function does nothing and returns kKeyNotExist as a
-   * return code.
-   *
-   * @param node a current node to be updated.
-   * @param key a target key to be written.
-   * @retval kCompleted if a record is deleted.
-   * @retval kKeyNotInserted if there is not record with the same key.
-   * @retval kNeedMerge if this node should be merged.
-   */
-  static auto
-  Delete(  //
-      Node *&node,
-      const Key &key)  //
-      -> NodeRC
-  {
-    while (true) {
-      const auto ver = CheckKeyRange(node, key);
-
-      // check this node has a target record
-      const auto [existence, pos] = node->SearchRecord(key);
-      if (existence != kKeyAlreadyInserted) {
-        if (node->mutex_.HasSameVersion(ver)) return kKeyNotInserted;
-        continue;
-      }
-
-      // a target record exists, so try to acquire an exclusive lock
-      if (!node->mutex_.TryLockX(ver)) continue;
-
-      // remove a key and a payload
-      const auto pay_len = node->pay_len_;
-      const auto move_num = node->record_count_ - 1 - pos;
-      memmove(&(node->keys_[pos]), &(node->keys_[pos + 1]),
-              kKeyLen * (move_num + node->has_low_key_ + node->has_high_key_));
-      auto *top_addr = ShiftAddr(node, kPageSize - node->block_size_);
-      memmove(ShiftAddr(top_addr, pay_len), top_addr, pay_len * move_num);
-
-      // update header information
-      --node->record_count_;
-      node->block_size_ -= pay_len;
-
-      if (node->GetUsedSize() < kMinUsedSpaceSize) {
-        node->mutex_.DowngradeToSIX();
-        return kNeedMerge;
-      }
-
-      node->mutex_.UnlockX();
-      return kCompleted;
     }
   }
 
