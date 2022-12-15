@@ -630,6 +630,7 @@ class NodeFixLen
    * operation. If a specified key has been already inserted, this function perfroms an
    * update operation.
    *
+   * @tparam Payload a class of payload.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
@@ -637,12 +638,15 @@ class NodeFixLen
    * @retval kCompleted if a record is written.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
+  template <class Payload>
   auto
   Write(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len,
-      const void *payload,
-      [[maybe_unused]] const size_t pay_len)  //
+      Payload &payload,
+      [[maybe_unused]] const size_t pay_len,
+      [[maybe_unused]] t GC_t &gc,
+      EpochManager_t &epoch_manager)  //
       -> NodeRC
   {
     const auto rec_len = kKeyLen + pay_len_;
@@ -652,14 +656,22 @@ class NodeFixLen
     if (existence == kKeyNotInserted) {
       if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
-      // insert a new record
-      InsertRecord(key, kKeyLen, payload, pay_len_, pos);
+      // insert a new version record
+      InsertVersionRecord(key, kKeyLen, payload, pay_len_, pos);
       return kCompleted;
     }
 
     // there is a record with the same key, so reuse it
+    [[maybe_unused]] auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
+    auto current_epoch = protected_epochs.front();
+    auto new_version = VersionRecord<Payload>{current_epoch, payload};
+    auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
+                                                          // and will be filled by memcpy.
+    new_version.SetNextPtr(old_version_ptr);              // New head's next version is old one.
+
     mutex_.UpgradeToX();
-    memcpy(GetPayloadAddr(pos), payload, pay_len_);
+    memcpy(old_version_ptr, GetPayloadAddr(pos), pay_len_);  // Copy old one.
+    memcpy(GetPayloadAddr(pos), &new_version, pay_len_);
     mutex_.UnlockX();
 
     return kCompleted;
@@ -721,13 +733,15 @@ class NodeFixLen
    * @param pay_len the length of a target payload.
    * @param pos an insertion position.
    */
+  template <class Payload>
   void
-  InsertRecord(  //
+  InsertVersionRecord(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len,
-      const void *payload,
+      const Payload &payload,
       [[maybe_unused]] const size_t pay_len,
-      const size_t pos)
+      const size_t pos,
+      EpochManager_t &epoch_manager)  //
   {
     mutex_.UpgradeToX();
 
@@ -736,11 +750,14 @@ class NodeFixLen
     memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
     keys_[pos] = key;
 
-    // insert a new payload
+    // insert a new version record
+    auto current_epoch = epoch_manager.GetCurrentEpoch();
+    auto new_version = VersionRecord<Payload>{current_epoch, payload};
+
     const auto top_offset = kPageSize - block_size_;
     const auto move_size = pay_len_ * move_num;
     memmove(ShiftAddr(this, top_offset - pay_len_), ShiftAddr(this, top_offset), move_size);
-    SetPayload(top_offset + move_size, payload);
+    SetPayload(top_offset + move_size, &new_version);
 
     // update header information
     ++record_count_;

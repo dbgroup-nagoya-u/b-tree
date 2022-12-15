@@ -196,28 +196,17 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
 
-    const auto protected_epochs = *(epoch_manager_.GetProtectedEpochs());
-    const auto current_ts = protected_epochs.front();
-
-    auto new_version_ptr = new VersionRecord<Payload, Timestamp_t>{current_ts, payload};
-    auto latest_version_addr = GetLatestVersionAddr(key);
-    if (latest_version_addr) {  // when a version already exists
-      // the new head's next_ point it.
-      new_version_ptr->SetNextPtr(latest_version_addr.value());
-      // and GC obsolete versions.
-      CleanObsoleteVersions();
-    }
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
     Node_t::CheckKeyRangeAndLockForWrite(node, key);
-    const auto rc = node->Write(key, key_len, new_version_ptr, kPayLen);
+    const auto rc = node->Write(key, key_len, payload, kPayLen, gc_, epoch_manager_);
 
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
       auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
       const auto pos = target_node->SearchRecord(key).second;
-      target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
+      target_node->InsertVersionRecord(key, key_len, payload, kPayLen, pos, epoch_manager_);
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
