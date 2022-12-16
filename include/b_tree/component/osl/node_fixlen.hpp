@@ -715,7 +715,7 @@ class NodeFixLen
       if (existence == kKeyAlreadyInserted) {
         if (!node->mutex_.HasSameVersion(ver)) continue;
         auto current_ver = VersionRecord<Payload>{};
-        memcpy(&current_ver, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+        memcpy(&current_ver, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
         if (current_ver.IsDeleted()) {
           // if the key is already inserted and deleted, Insert() behaves as Update()
           return Update(node, key, payload, pay_len, gc, epoch_manager);
