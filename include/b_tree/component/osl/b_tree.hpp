@@ -295,7 +295,7 @@ class BTree
   {
     [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
     auto *node = SearchLeafNode(key);
-    return Node_t::Delete(node, key, kPayLen, gc_, epoch_manager_);
+    return Node_t::template Delete<Payload>(node, key, kPayLen, gc_, epoch_manager_);
   }
 
   /*####################################################################################

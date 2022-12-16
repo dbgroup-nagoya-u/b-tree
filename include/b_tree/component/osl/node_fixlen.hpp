@@ -662,17 +662,7 @@ class NodeFixLen
     }
 
     // there is a record with the same key, so reuse it
-    [[maybe_unused]] auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
-    auto current_epoch = protected_epochs.front();
-    auto new_version = VersionRecord<Payload>{current_epoch, payload};
-    auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
-                                                          // and will be filled by memcpy.
-    new_version.SetNextPtr(old_version_ptr);              // New head's next version is old one.
-
-    mutex_.UpgradeToX();
-    memcpy(old_version_ptr, GetPayloadAddr(pos), pay_len_);  // Copy old one.
-    memcpy(GetPayloadAddr(pos), &new_version, pay_len_);
-    mutex_.UnlockX();
+    AppendNewVersionRecord(pos, payload, pay_len_, mutex_, epoch_manager);
 
     return kCompleted;
   }
@@ -718,7 +708,8 @@ class NodeFixLen
         memcpy(&current_ver, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
         if (current_ver.IsDeleted()) {
           // if the key is already inserted and deleted, Insert() behaves as Update()
-          return Update(node, key, payload, pay_len, gc, epoch_manager);
+          node->AppendNewVersionRecord(pos, payload, node->pay_len_, node->mutex_, epoch_manager);
+          return kCompleted;
         } else {  //
         return kKeyAlreadyInserted;
       }
@@ -804,8 +795,6 @@ class NodeFixLen
       EpochManager_t &epoch_manager)  //
       -> ReturnCode
   {
-    [[maybe_unused]] auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
-
     while (true) {
       const auto ver = CheckKeyRange(node, key);
 
@@ -820,17 +809,8 @@ class NodeFixLen
       if (!node->mutex_.TryLockX(ver)) continue;
 
       // perform update operation
-      auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before
-                                                            // update, and will be filled by memcpy.
-      auto current_epoch = epoch_manager.GetCurrentEpoch();
-      auto new_version = VersionRecord<Payload>{current_epoch, payload};
-      new_version.SetNextPtr(old_version_ptr);  // New head's next version is old one.
+      node->AppendNewVersionRecord(pos, payload, node->pay_len_, node->mutex_, epoch_manager);
 
-      node->mutex_.UpgradeToX();
-      memcpy(old_version_ptr, GetPayloadAddr(pos), node->pay_len_);  // Copy old one.
-      memcpy(node->GetPayloadAddr(pos), &new_version, node->pay_len_);
-
-      node->mutex_.UnlockX();
       return kSuccess;
     }
   }
@@ -871,17 +851,9 @@ class NodeFixLen
       if (!node->mutex_.TryLockX(ver)) continue;
 
       // perform delete operation
-      auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before
-                                                            // update, and will be filled by memcpy.
-      auto current_epoch = epoch_manager.GetCurrentEpoch();
-      auto new_version = VersionRecord<Payload>{current_epoch, Payload{}, true};
-      new_version.SetNextPtr(old_version_ptr);  // New head's next version is old one.
+      node->AppendNewVersionRecord(pos, Payload{}, node->pay_len_, node->mutex_, epoch_manager,
+                                   true);
 
-      node->mutex_.UpgradeToX();
-      memcpy(old_version_ptr, GetPayloadAddr(pos), node->pay_len_);  // Copy old one.
-      memcpy(node->GetPayloadAddr(pos), &new_version, node->pay_len_);
-
-      node->mutex_.UnlockX();
       return kSuccess;
     }
   }
@@ -1367,6 +1339,42 @@ class NodeFixLen
     next_ = r_node;
   }
 
+
+  /**
+   * @brief Update the record, and append the new version on the chain.
+   *
+   * @param pos the position of the record
+   * @param payload a payload of the version to write
+   * @param pay_len the length of payload of the node which will be written
+   * @param mutex an optimistic lock
+   * @param current_epoch the timestamp of the version to write
+   * @param is_delete a flag that indicates whether this function is called by Delete() or others
+   *
+   */
+  template <class Payload>
+  auto
+  AppendNewVersionRecord(  //
+      const size_t &pos,
+      Payload payload,
+      const size_t &pay_len,
+      ::dbgroup::lock::OptimisticLock &mutex,
+      EpochManager_t &epoch_manager,
+      bool is_delete = false)  //
+      -> void
+  {
+    auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
+    auto current_epoch = protected_epochs.front();
+    // TODO: GC
+    auto new_version = VersionRecord<Payload>{current_epoch, payload, is_delete};
+    auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
+                                                          // and will be filled by memcpy.
+    new_version.SetNextPtr(old_version_ptr);              // New head's next version is old one.
+
+    mutex.UpgradeToX();
+    memcpy(old_version_ptr, GetPayloadAddr(pos), pay_len);  // Copy old one.
+    memcpy(GetPayloadAddr(pos), &new_version, pay_len);
+    mutex.UnlockX();
+  }
   /*####################################################################################
    * Internal member variables
    *##################################################################################*/
