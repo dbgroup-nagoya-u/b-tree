@@ -77,7 +77,7 @@ class VersionRecord
   GetTimestamp() const  //
       -> Timestamp_t
   {
-    return reinterpret_cast<Timestamp_t>(timestamp_);
+    return static_cast<Timestamp_t>(timestamp_);
   }
 
   /**
