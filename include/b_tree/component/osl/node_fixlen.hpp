@@ -605,11 +605,11 @@ class NodeFixLen
     while (true) {
       const auto ver = CheckKeyRange(node, key);
 
-      const auto [existence, pos] = node->SearchRecord(key);
+      auto [existence, pos] = node->SearchRecord(key);
       if (existence == kKeyAlreadyInserted) {
         memcpy(&current_version, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
         if (current_version.IsDeleted()) {
-          return kKeyAlreadyDeleted;
+          existence = kKeyAlreadyDeleted;
         } else {
           out_payload = current_version.GetPayload();
         }
