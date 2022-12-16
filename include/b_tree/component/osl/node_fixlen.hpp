@@ -657,7 +657,7 @@ class NodeFixLen
       if (GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
       // insert a new version record
-      InsertVersionRecord(key, kKeyLen, payload, pay_len_, pos);
+      InsertRecord(key, kKeyLen, payload, pay_len_, pos);
       return kCompleted;
     }
 
@@ -731,7 +731,7 @@ class NodeFixLen
         // insert a new version record
         auto current_epoch = epoch_manager.GetCurrentEpoch();
         auto new_version = VersionRecord<Payload>{current_epoch, payload};
-        node->InsertVersionRecord(key, kKeyLen, payload, node->pay_len_, pos);
+        node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos);
       return kCompleted;
       }
     }
@@ -748,7 +748,7 @@ class NodeFixLen
    */
   template <class Payload>
   void
-  InsertVersionRecord(  //
+  InsertRecord(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len,
       const Payload &payload,

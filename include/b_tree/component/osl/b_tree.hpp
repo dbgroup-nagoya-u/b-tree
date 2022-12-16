@@ -206,7 +206,7 @@ class BTree
       auto *r_node = HalfSplit(node);
       auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
       const auto pos = target_node->SearchRecord(key).second;
-      target_node->InsertVersionRecord(key, key_len, payload, kPayLen, pos, epoch_manager_);
+      target_node->InsertRecord(key, key_len, payload, kPayLen, pos, epoch_manager_);
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
@@ -246,7 +246,7 @@ class BTree
       auto *r_node = HalfSplit(node);
       auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
       const auto pos = target_node->SearchRecord(key).second;
-      target_node->InsertVersionRecord(key, key_len, payload, kPayLen, pos);
+      target_node->InsertRecord(key, key_len, payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
