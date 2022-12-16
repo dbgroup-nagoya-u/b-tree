@@ -49,12 +49,14 @@ class VersionRecord
       VersionRecord<Payload, Timestamp_t> *next = nullptr)
       : timestamp_{reinterpret_cast<size_t>(timestamp)},
         payload_{payload},
-        is_deleted_{reinterpret_cast<size_t>(is_deleted)},
+        is_deleted_{is_deleted ? 1 : 0},
         next_{next}
   {
   }
 
-  VersionRecord() = default;
+  VersionRecord() : timestamp_{Timestamp_t{}}, payload_{Payload{}}, is_deleted_{0}, next_{nullptr}
+  {
+  }
 
   /*##################################################################################
    * Public destructor
@@ -130,10 +132,10 @@ class VersionRecord
    * Internal member
    *################################################################################*/
 
-  size_t is_deleted_ : 1;
-  size_t timestamp_ : 63;
+  const size_t is_deleted_ : 1;
+  const size_t timestamp_ : 63;
   VersionRecord *next_;
-  Payload payload_;
+  const Payload payload_;
 };
 
 }  // namespace dbgroup::index::b_tree::component::osl
