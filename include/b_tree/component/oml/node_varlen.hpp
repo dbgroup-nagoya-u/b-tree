@@ -936,12 +936,13 @@ class NodeVarLen
   {
     const auto half_size = (kMetaLen * record_count_ + block_size_ - deleted_size_) / 2;
 
+    // set a lowest key for a split-left node
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+
     // copy left half records to a temporal node
-    size_t offset = kPageSize;
     size_t pos = 0;
-    size_t used_size = 0;
-    while (used_size < half_size) {
-      const auto meta = meta_array_[pos++];
+    for (size_t used_size = 0; used_size < half_size; ++pos) {
+      const auto meta = meta_array_[pos];
       if (!meta.is_deleted) {
         offset = temp_node_->CopyRecordFrom(this, meta, offset);
         used_size += meta.rec_len + kMetaLen;
@@ -952,9 +953,14 @@ class NodeVarLen
 
     // copy right half records to a right node
     r_node->mutex_.LockX();
-    auto r_offset = r_node->CopyHighKeyFrom(this);
+    auto r_offset = r_node->CopyHighKeyFrom(temp_node_.get(), kPageSize);
+    r_node->l_key_offset_ = r_offset;
+    r_node->l_key_len_ = sep_key_len;
+    r_offset = r_node->CopyHighKeyFrom(this, r_offset);
     r_node->h_key_offset_ = r_offset;
     r_node->h_key_len_ = h_key_len_;
+
+    // copy right half records to a right node
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
     // update a right header
@@ -991,8 +997,9 @@ class NodeVarLen
   Merge(Node *r_node)  //
       -> uint64_t
   {
-    // copy a highest key of a merged node to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(r_node);
+    // copy a lowest/highest key of a merged node to a temporal node
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+    offset = temp_node_->CopyHighKeyFrom(r_node, offset);
     h_key_offset_ = offset;
     h_key_len_ = r_node->h_key_len_;
     // copy consolidated records to the original node
@@ -1074,6 +1081,10 @@ class NodeVarLen
     }
 
     block_size_ = kPageSize - offset;
+
+    // set a lowest key
+    l_key_len_ = meta_array_[0].key_len;
+    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
@@ -1191,6 +1202,16 @@ class NodeVarLen
       -> size_t
   {
     return kMetaLen * record_count_ + block_size_ - deleted_size_;
+  }
+
+  /**
+   * @return an address of a lowest key.
+   */
+  [[nodiscard]] constexpr auto
+  GetLowKeyAddr() const  //
+      -> void *
+  {
+    return ShiftAddr(this, l_key_offset_);
   }
 
   /**
@@ -1473,7 +1494,8 @@ class NodeVarLen
   CleanUp()
   {
     // copy records to a temporal node
-    auto offset = temp_node_->CopyHighKeyFrom(this);
+    auto offset = temp_node_->CopyLowKeyFrom(this);
+    offset = temp_node_->CopyHighKeyFrom(this, offset);
     h_key_offset_ = offset;
     offset = temp_node_->CopyRecordsFrom(this, 0, record_count_, offset);
 
@@ -1514,17 +1536,41 @@ class NodeVarLen
   }
 
   /**
-   * @brief Copy a high key from a given node.
+   * @brief Copy a lowest key from a given node.
    *
-   * @param node an original node that has a high key.
+   * @param node an original node that has a lowest key.
    * @return the updated offset value.
    */
   auto
-  CopyHighKeyFrom(const Node *node)  //
+  CopyLowKeyFrom(const Node *node)  //
+      -> size_t
+  {
+    const auto key_len = node->l_key_len_;
+    auto offset = kPageSize;
+    if (key_len > 0) {
+      offset -= key_len;
+      memcpy(ShiftAddr(this, offset), node->GetLowKeyAddr(), key_len);
+    }
+    l_key_offset_ = offset;
+    l_key_len_ = key_len;
+
+    return offset;
+  }
+
+  /**
+   * @brief Copy a high key from a given node.
+   *
+   * @param node an original node that has a high key.
+   * @param offset an offset to the top of the record block.
+   * @return the updated offset value.
+   */
+  auto
+  CopyHighKeyFrom(  //
+      const Node *node,
+      size_t offset)  //
       -> size_t
   {
     const auto key_len = node->h_key_len_;
-    auto offset = kPageSize;
     if (key_len > 0) {
       offset -= key_len;
       memcpy(ShiftAddr(this, offset), node->GetHighKeyAddr(), key_len);

@@ -1433,6 +1433,7 @@ class NodeVarLen
    * @brief Copy a highest key from a given node.
    *
    * @param node an original node that has a highest key.
+   * @param offset an offset to the top of the record block.
    * @return the updated offset value.
    */
   auto
