@@ -1365,8 +1365,8 @@ class NodeFixLen
     const auto &protected_epochs = epoch_manager.GetProtectedEpochs();
     auto current_epoch = protected_epochs->front();
     // TODO: GC
-    auto new_version = VersionRecord<Payload>{current_epoch, payload, is_delete};
-    auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
+    auto &&new_version = VersionRecord<Payload>{current_epoch, payload, is_delete};
+    auto *old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
                                                           // and will be filled by memcpy.
     new_version.SetNextPtr(old_version_ptr);              // New head's next version is old one.
 
