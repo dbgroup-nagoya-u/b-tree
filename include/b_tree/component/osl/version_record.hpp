@@ -43,14 +43,14 @@ class VersionRecord
    * @param next a pointer to a next node.
    */
   VersionRecord(  //
-      Timestamp_t timestamp,
-      Payload payload,
-      bool is_deleted = false,
-      VersionRecord<Payload, Timestamp_t> *next = nullptr)
-      : timestamp_{reinterpret_cast<size_t>(timestamp)},
-        payload_{payload},
-        is_deleted_{is_deleted ? 1 : 0},
-        next_{next}
+      const Timestamp_t timestamp,
+      const Payload &payload,
+      const bool is_deleted = false,
+      VersionRecord *next = nullptr)
+      : is_deleted_{static_cast<const size_t>(is_deleted)},
+        timestamp_{static_cast<const size_t>(timestamp)},
+        next_{next},
+        payload_{payload}
   {
   }
 
