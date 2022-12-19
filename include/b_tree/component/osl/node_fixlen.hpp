@@ -1355,7 +1355,7 @@ class NodeFixLen
   auto
   AppendNewVersionRecord(  //
       const size_t &pos,
-      Payload payload,
+      const Payload &payload,
       const size_t &pay_len,
       ::dbgroup::lock::OptimisticLock &mutex,
       EpochManager_t &epoch_manager,
