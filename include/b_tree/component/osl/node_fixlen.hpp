@@ -1362,8 +1362,8 @@ class NodeFixLen
       bool is_delete = false)  //
       -> void
   {
-    auto protected_epochs = *(epoch_manager.GetProtectedEpochs());
-    auto current_epoch = protected_epochs.front();
+    const auto &protected_epochs = epoch_manager.GetProtectedEpochs();
+    auto current_epoch = protected_epochs->front();
     // TODO: GC
     auto new_version = VersionRecord<Payload>{current_epoch, payload, is_delete};
     auto old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
