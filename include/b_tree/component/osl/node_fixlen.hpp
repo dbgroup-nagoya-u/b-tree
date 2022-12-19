@@ -662,7 +662,7 @@ class NodeFixLen
     }
 
     // there is a record with the same key, so reuse it
-    AppendNewVersionRecord(pos, payload, pay_len_, mutex_, epoch_manager);
+    AppendNewVersionRecord(pos, payload, epoch_manager, gc);
 
     return kCompleted;
   }
@@ -689,7 +689,7 @@ class NodeFixLen
       Node *&node,
       const Key &key,
       [[maybe_unused]] const size_t key_len,
-      Payload &payload,
+      const Payload &payload,
       [[maybe_unused]] const size_t pay_len,
       [[maybe_unused]] GC_t &gc,
       EpochManager_t &epoch_manager)  //
@@ -708,7 +708,8 @@ class NodeFixLen
         memcpy(&current_ver, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
         if (current_ver.IsDeleted()) {
           // if the key is already inserted and deleted, Insert() behaves as Update()
-          node->AppendNewVersionRecord(pos, payload, node->pay_len_, node->mutex_, epoch_manager);
+          if (!node->mutex_.TryLockSIX(ver)) continue;
+          node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
           return kCompleted;
         } else {  //
         return kKeyAlreadyInserted;
@@ -789,7 +790,7 @@ class NodeFixLen
   Update(  //
       Node *&node,
       const Key &key,
-      Payload &payload,
+      const Payload &payload,
       [[maybe_unused]] const size_t pay_len,
       [[maybe_unused]] GC_t &gc,
       EpochManager_t &epoch_manager)  //
@@ -809,7 +810,7 @@ class NodeFixLen
       if (!node->mutex_.TryLockX(ver)) continue;
 
       // perform update operation
-      node->AppendNewVersionRecord(pos, payload, node->pay_len_, node->mutex_, epoch_manager);
+      node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
 
       return kSuccess;
     }
@@ -851,8 +852,7 @@ class NodeFixLen
       if (!node->mutex_.TryLockX(ver)) continue;
 
       // perform delete operation
-      node->AppendNewVersionRecord(pos, Payload{}, node->pay_len_, node->mutex_, epoch_manager,
-                                   true);
+      node->AppendNewVersionRecord(pos, Payload{}, epoch_manager, gc, true);
 
       return kSuccess;
     }
@@ -1356,9 +1356,8 @@ class NodeFixLen
   AppendNewVersionRecord(  //
       const size_t pos,
       const Payload &payload,
-      const size_t &pay_len,
-      ::dbgroup::lock::OptimisticLock &mutex,
       EpochManager_t &epoch_manager,
+      [[mayve_unused]] GC_t &gc,
       bool is_delete = false)  //
       -> void
   {
@@ -1366,14 +1365,14 @@ class NodeFixLen
     auto current_epoch = protected_epochs->front();
     // TODO: GC
     auto &&new_version = VersionRecord<Payload>{current_epoch, payload, is_delete};
-    auto *old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before update,
-                                                          // and will be filled by memcpy.
-    new_version.SetNextPtr(old_version_ptr);              // New head's next version is old one.
+    auto *old_version_ptr = new VersionRecord<Payload>{};  // This is the chain's head before
+                                                           // update, and will be filled by memcpy.
+    new_version.SetNextPtr(old_version_ptr);               // New head's next version is old one.
 
-    mutex.UpgradeToX();
-    memcpy(old_version_ptr, GetPayloadAddr(pos), pay_len);  // Copy old one.
-    memcpy(GetPayloadAddr(pos), &new_version, pay_len);
-    mutex.UnlockX();
+    mutex_.UpgradeToX();
+    memcpy(old_version_ptr, GetPayloadAddr(pos), pay_len_);  // Copy old one.
+    memcpy(GetPayloadAddr(pos), &new_version, pay_len_);
+    mutex_.UnlockX();
   }
   /*####################################################################################
    * Internal member variables
