@@ -643,7 +643,7 @@ class NodeFixLen
   Write(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len,
-      Payload &payload,
+      const Payload &payload,
       [[maybe_unused]] const size_t pay_len,
       [[maybe_unused]] GC_t &gc,
       EpochManager_t &epoch_manager)  //
