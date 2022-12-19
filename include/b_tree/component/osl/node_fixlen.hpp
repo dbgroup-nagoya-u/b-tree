@@ -1354,7 +1354,7 @@ class NodeFixLen
   template <class Payload>
   auto
   AppendNewVersionRecord(  //
-      const size_t &pos,
+      const size_t pos,
       const Payload &payload,
       const size_t &pay_len,
       ::dbgroup::lock::OptimisticLock &mutex,
