@@ -807,7 +807,7 @@ class NodeFixLen
       }
 
       // a target record exists, so try to acquire an exclusive lock
-      if (!node->mutex_.TryLockX(ver)) continue;
+      if (!node->mutex_.TryLockSIX(ver)) continue;
 
       // perform update operation
       node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
@@ -849,7 +849,7 @@ class NodeFixLen
       }
 
       // a target record exists, so try to acquire an exclusive lock
-      if (!node->mutex_.TryLockX(ver)) continue;
+      if (!node->mutex_.TryLockSIX(ver)) continue;
 
       // perform delete operation
       node->AppendNewVersionRecord(pos, Payload{}, epoch_manager, gc, true);
