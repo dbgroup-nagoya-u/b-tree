@@ -67,7 +67,7 @@ class NodeFixLen
    * @param is_inner a flag to indicate whether a inner node is constructed.
    */
   constexpr explicit NodeFixLen(const uint32_t is_inner)
-      : is_inner_{is_inner}, block_size_{0}, has_high_key_{0}
+      : is_inner_{is_inner}, block_size_{0}, has_low_key_{0}, has_high_key_{0}
   {
   }
 
@@ -80,7 +80,7 @@ class NodeFixLen
   NodeFixLen(  //
       const NodeFixLen *l_node,
       const NodeFixLen *r_node)  //
-      : is_inner_{1}, block_size_{2 * kPtrLen}, record_count_{2}, has_high_key_{0}
+      : is_inner_{1}, block_size_{2 * kPtrLen}, record_count_{2}, has_low_key_{0}, has_high_key_{0}
   {
     keys_[1] = l_node->GetHighKey();
     SetPayload(kPageSize, &l_node);
@@ -640,7 +640,8 @@ class NodeFixLen
     if (existence == kKeyAlreadyInserted) {
       // remove a key and a payload
       const auto move_num = record_count_ - 1 - pos;
-      memmove(&(keys_[pos]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+      memmove(&(keys_[pos]), &(keys_[pos + 1]),
+              kKeyLen * (move_num + has_low_key_ + has_high_key_));
       auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
       memmove(ShiftAddr(top_addr, pay_len_), top_addr, pay_len_ * move_num);
 
@@ -676,7 +677,8 @@ class NodeFixLen
     SetPayload(top_offset + move_size, &r_node);
 
     // insert a separator key
-    memmove(&(keys_[pos + 2]), &(keys_[pos + 1]), kKeyLen * (move_num + has_high_key_));
+    memmove(&(keys_[pos + 2]), &(keys_[pos + 1]),
+            kKeyLen * (move_num + has_low_key_ + has_high_key_));
     keys_[pos + 1] = l_node->GetHighKey();
 
     // update header information
@@ -697,7 +699,8 @@ class NodeFixLen
   {
     // delete a separator key
     const auto move_num = record_count_ - 2 - pos;
-    memmove(&(keys_[pos + 1]), &(keys_[pos + 2]), kKeyLen * (move_num + has_high_key_));
+    memmove(&(keys_[pos + 1]), &(keys_[pos + 2]),
+            kKeyLen * (move_num + has_low_key_ + has_high_key_));
 
     // delete a right child
     auto *top_addr = ShiftAddr(this, kPageSize - block_size_);
@@ -728,13 +731,16 @@ class NodeFixLen
     // copy right half records to a right node
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - 1 + has_high_key_] = keys_[record_count_ - 1 + has_high_key_];
+    r_node->keys_[r_count - 1 + has_high_key_] =
+        keys_[record_count_ - 1 + has_high_key_];               // a highest key
+    r_node->keys_[r_count + has_high_key_] = r_node->keys_[0];  // a lowest key
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
     if (!is_inner_) {
       r_node->next_ = next_;
     }
+    r_node->has_low_key_ = 1;
     r_node->has_high_key_ = has_high_key_;
 
     mutex_.UpgradeToX();  // upgrade the lock to modify the left node
@@ -746,7 +752,9 @@ class NodeFixLen
       next_ = r_node;
     }
     has_high_key_ = 1;
-    keys_[l_count] = r_node->keys_[0];
+    // update lowest/highest keys
+    keys_[l_count + has_low_key_] = keys_[0];  // a lowest key
+    keys_[l_count] = r_node->keys_[0];         // a highest key
 
     mutex_.DowngradeToSIX();
     r_node->mutex_.LockSIX();
@@ -764,9 +772,14 @@ class NodeFixLen
     r_node->UpgradeToX();
 
     // copy right records to this nodes
+    const auto lowest_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
-    keys_[record_count_] = r_node->keys_[r_node->record_count_];
-
+    if (r_node->has_high_key_) {
+      keys_[record_count_ + has_low_key_] = std::move(lowest_key);
+      keys_[record_count_] = r_node->keys_[r_node->record_count_];
+    } else {
+      keys_[record_count_] = std::move(lowest_key);
+    }
     // update a header
     block_size_ = kPageSize - offset;
     if (!is_inner_) {
@@ -820,6 +833,10 @@ class NodeFixLen
     if (prev_node != nullptr) {
       prev_node->LinkNext(this);
     }
+
+    // set a lowest key
+    has_low_key_ = 1;
+    keys_[record_count_] = keys_[0];
 
     nodes.emplace_back(keys_[0], this, kKeyLen);
   }
@@ -905,7 +922,7 @@ class NodeFixLen
   GetUsedSize() const  //
       -> size_t
   {
-    return kKeyLen * (record_count_ + has_high_key_) + block_size_;
+    return kKeyLen * (record_count_ + has_low_key_ + has_high_key_) + block_size_;
   }
 
   /**
@@ -971,7 +988,7 @@ class NodeFixLen
     const auto move_num = record_count_ - pos;
 
     // insert a new key
-    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_high_key_));
+    memmove(&(keys_[pos + 1]), &(keys_[pos]), kKeyLen * (move_num + has_low_key_ + has_high_key_));
     keys_[pos] = key;
 
     // insert a new payload
@@ -1069,6 +1086,7 @@ class NodeFixLen
   {
     // set a highest key in a left node
     has_high_key_ = 1;
+    keys_[record_count_ + 1] = keys_[record_count_];  // move a lowest key
     keys_[record_count_] = r_node->keys_[0];
 
     // set a sibling link in a left node
@@ -1098,6 +1116,9 @@ class NodeFixLen
 
   /// the pointer to the next node.
   Node *next_{nullptr};
+
+  /// a flag for a lowest key.
+  uint64_t has_low_key_ : 1;
 
   /// a flag for a highest key.
   uint64_t has_high_key_ : 1;
