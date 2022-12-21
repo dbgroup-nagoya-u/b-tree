@@ -1025,7 +1025,7 @@ class NodeFixLen
       std::vector<NodeEntry> &nodes)
   {
     constexpr auto kKeyLen = sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + kPtrLen;
+    const auto kRecLen = kKeyLen + pay_len_;
 
     // extract and insert entries into this node
     auto offset = kPageSize;
@@ -1033,7 +1033,7 @@ class NodeFixLen
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
       node_size += kRecLen;
-      if (node_size + kKeyLen > kPageSize) break;
+      if (node_size + 2 * kKeyLen > kPageSize) break;
 
       // insert an entry into this node
       const auto &[key, payload, key_len] = ParseEntry(*iter);

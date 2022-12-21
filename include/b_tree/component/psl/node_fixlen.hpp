@@ -919,7 +919,7 @@ class NodeFixLen
       std::vector<NodeEntry> &nodes)
   {
     constexpr auto kKeyLen = sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + kPtrLen;
+    const auto kRecLen = kKeyLen + pay_len_;
 
     // extract and insert entries into this node
     auto offset = kPageSize;
