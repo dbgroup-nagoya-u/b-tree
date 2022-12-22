@@ -875,9 +875,14 @@ class NodeFixLen
       // remove the leftmost key in a record region of an inner node
       node->keys_[0] = Key{};
 
+      // remove lowest key in a record
+      node->has_low_key_ = 0;
+
       // go down to the lower level
       node = node->template GetPayload<Node *>(0);
     }
+    // remove lowest key in a record
+    node->has_low_key_ = 0;
   }
 
  private:
