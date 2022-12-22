@@ -659,6 +659,9 @@ class BTree
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
       auto *node = new Node_t{kIsInner};
+      if constexpr (!kUseVarLenLayout && !kIsInner) {
+        node->SetPayloadLength(kPayLen);
+      }
       node->template Bulkload<Entry>(iter, iter_end, prev_node, nodes);
       prev_node = node;
     }

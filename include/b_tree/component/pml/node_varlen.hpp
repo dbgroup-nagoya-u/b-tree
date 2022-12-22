@@ -905,9 +905,16 @@ class NodeVarLen
       const size_t rec_len = meta.rec_len - key_len;
       node->meta_array_[0] = Metadata{offset + key_len, 0, rec_len};
 
+      // remove lowest key in a record
+      node->l_key_len_ = 0;
+      node->l_key_offset_ = kPageSize;
+
       // go down to the lower level
       node = node->template GetPayload<Node *>(0);
     }
+    // remove lowest key in a record
+    node->l_key_len_ = 0;
+    node->l_key_offset_ = kPageSize;
   }
 
  private:
