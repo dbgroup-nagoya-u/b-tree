@@ -816,6 +816,9 @@ class NodeFixLen
         if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
         continue;
       }
+      auto current_version = VersionRecord<Payload>{};
+      memcpy(&current_version, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+      if (node->mutex_.HasSameVersion(ver) && current_version.IsDeleted()) return kKeyNotExist;
 
       // a target record exists, so try to acquire an exclusive lock
       if (!node->mutex_.TryLockSIX(ver)) continue;
@@ -858,6 +861,10 @@ class NodeFixLen
         if (node->mutex_.HasSameVersion(ver)) return kKeyNotExist;
         continue;
       }
+
+      auto current_version = VersionRecord<Payload>{};
+      memcpy(&current_version, node->GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+      if (node->mutex_.HasSameVersion(ver) && current_version.IsDeleted()) return kKeyNotExist;
 
       // a target record exists, so try to acquire an exclusive lock
       if (!node->mutex_.TryLockSIX(ver)) continue;
