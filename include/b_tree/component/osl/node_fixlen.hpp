@@ -278,6 +278,17 @@ class NodeFixLen
     return payload;
   }
 
+  template <class Payload>
+  [[nodiscard]] auto
+  GetPayload(const size_t pos,
+              Timestamp_t ts) const  //
+      -> Payload
+  {
+    VersionRecord<Payload> current_version{};
+    memcpy(&current_version, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+    return GetVisiblePayload(current_version, ts);
+  }
+
   /**
    * @brief Get a leftmost child node.
    *
@@ -320,10 +331,10 @@ class NodeFixLen
    */
   template <class Payload>
   [[nodiscard]] auto
-  GetRecord(const size_t pos) const  //
+  GetRecord(const size_t pos, const Timestamp_t ts) const  //
       -> std::pair<Key, Payload>
   {
-    return {keys_[pos], GetPayload<Payload>(pos)};
+    return {keys_[pos], GetPayload<Payload>(pos, ts)};
   }
 
   /*####################################################################################
@@ -1339,6 +1350,35 @@ class NodeFixLen
     next_ = r_node;
   }
 
+
+  /**
+   * @return the payload of visible version at the given timestamp
+   *
+   * @param head a version record which is head of the version chain
+   * @param ts a timestamp at which CRUD operation was started
+   *
+   */
+  template <class Payload>
+  [[nodiscard]] auto
+  GetVisiblePayload(VersionRecord<Payload> head, Timestamp_t ts) const  //
+      -> Payload
+  {
+    auto current_version_ptr = &head;
+    auto next_version_ptr = current_version_ptr->GetNextPtr();
+    auto version_ts = current_version_ptr->GetTimestamp();
+    while (next_version_ptr != nullptr) {
+      // if (version_ts >= ts) {
+      if (false) {  // Read latest payload (only for DEBUGGING)
+        current_version_ptr = next_version_ptr;
+        next_version_ptr = current_version_ptr->GetNextPtr();
+        version_ts = current_version_ptr->GetTimestamp();
+      } else {
+        return current_version_ptr->GetPayload();
+      }
+    }
+    // current version is tail node
+    return current_version_ptr->GetPayload();
+  }
 
   /**
    * @brief Update the record, and append the new version on the chain.

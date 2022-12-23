@@ -25,6 +25,7 @@
 
 // local sources
 #include "common.hpp"
+#include "osl/version_record.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
@@ -45,6 +46,9 @@ class RecordIterator
   using Node = typename Index::Node_t;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using EpochGuard = ::dbgroup::memory::component::EpochGuard;
+  using Timestamp_t = size_t;
+  template <class T>
+  using VersionRecord = ::dbgroup::index::b_tree::component::osl::VersionRecord<T>;
 
   /*####################################################################################
    * Public constructors and assignment operators
@@ -58,6 +62,9 @@ class RecordIterator
    * @param end_pos the end position for scanning in the node.
    * @param end_key a copied end key of this scan operation.
    * @param is_end a flag for indicating the node is rightmost in this scan operation.
+   * @param timestamp a timestamp for versioned read
+   * @param guard //TODO
+   * @param version_guard //TODO
    */
   RecordIterator(  //
       Node *node,
@@ -65,13 +72,17 @@ class RecordIterator
       size_t end_pos,
       ScanKey end_key,
       bool is_end,
-      std::optional<EpochGuard> guard = std::nullopt)
+      Timestamp_t timestamp,
+      std::optional<EpochGuard> guard = std::nullopt,
+      std::optional<EpochGuard> version_guard = std::nullopt)
       : node_{node},
         pos_{begin_pos},
         end_pos_{end_pos},
         end_key_{std::move(end_key)},
         is_end_{is_end},
-        guard_{std::move(guard)}
+        timestamp_{timestamp},
+        guard_{std::move(guard)},
+        version_guard_{std::move(version_guard)}
   {
   }
 
@@ -109,7 +120,7 @@ class RecordIterator
   operator*() const  //
       -> std::pair<Key, Payload>
   {
-    return node_->template GetRecord<Payload>(pos_);
+    return node_->template GetRecord<Payload>(pos_, timestamp_);
   }
 
   /**
@@ -176,7 +187,7 @@ class RecordIterator
   GetPayload() const  //
       -> Payload
   {
-    return node_->template GetPayload<Payload>(pos_);
+    return node_->template GetPayload<Payload>(pos_, timestamp_);
   }
 
  private:
@@ -199,7 +210,12 @@ class RecordIterator
   /// a flag for indicating a current node is rightmost in scan-range.
   bool is_end_{false};
 
+  // a timestamp for versioned read
+  Timestamp_t timestamp_{};
+
   std::optional<EpochGuard> guard_{std::nullopt};
+
+  std::optional<EpochGuard> version_guard_{std::nullopt};
 };
 
 }  // namespace dbgroup::index::b_tree::component

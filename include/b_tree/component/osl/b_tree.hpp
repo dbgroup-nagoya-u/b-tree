@@ -157,6 +157,8 @@ class BTree
       -> RecordIterator_t
   {
     auto &&guard = gc_.CreateEpochGuard();
+    auto &&version_guard = epoch_manager_.CreateEpochGuard();
+    auto current_epoch = epoch_manager_.GetCurrentEpoch();
 
     Node_t *node{};
     size_t begin_pos = 0;
@@ -172,7 +174,8 @@ class BTree
     }
 
     const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-    return RecordIterator_t{node, begin_pos, end_pos, end_key, is_end, std::move(guard)};
+    return RecordIterator_t{node,   begin_pos,     end_pos,          end_key,
+                            is_end, current_epoch, std::move(guard), std::move(version_guard)};
   }
 
   /*####################################################################################
