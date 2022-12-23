@@ -871,7 +871,8 @@ class BTree
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
       auto *node = new (GetNodePage()) Node_t{kIsInner};
-      node->template Bulkload<Entry>(iter, iter_end, prev_node, nodes);
+      node->SetPayloadLength(kPayLen);
+      node->template Bulkload<Entry>(iter, iter_end, prev_node, nodes, epoch_manager_);
       prev_node = node;
     }
 

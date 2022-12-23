@@ -281,7 +281,7 @@ class NodeFixLen
   template <class Payload>
   [[nodiscard]] auto
   GetPayload(const size_t pos,
-              Timestamp_t ts) const  //
+             Timestamp_t ts) const  //
       -> Payload
   {
     VersionRecord<Payload> current_version{};
@@ -723,19 +723,19 @@ class NodeFixLen
           node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
           return kCompleted;
         } else {
-        return kKeyAlreadyInserted;
-      }
+          return kKeyAlreadyInserted;
+        }
       } else {
         // if the key has never been inserted
-      // inserting a new record is required
-      if (!node->mutex_.TryLockSIX(ver)) continue;
-      if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
+        // inserting a new record is required
+        if (!node->mutex_.TryLockSIX(ver)) continue;
+        if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
 
         // insert a new version record
         auto current_epoch = epoch_manager.GetCurrentEpoch();
         auto new_version = VersionRecord<Payload>{current_epoch, payload};
         node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos, epoch_manager);
-      return kCompleted;
+        return kCompleted;
       }
     }
   }
@@ -894,7 +894,7 @@ class NodeFixLen
       -> NodeRC
   {
     // check free space in this node
-    const auto rec_len = sep_key_len + kPtrLen;
+    const auto rec_len = sep_key_len + pay_len_;
 
     // check an inserting position and concurrent SMOs
     const auto [existence, pos] = SearchRecord(sep_key);
@@ -1103,22 +1103,31 @@ class NodeFixLen
       BulkIter<Entry> &iter,
       const BulkIter<Entry> &iter_end,
       Node *prev_node,
-      std::vector<NodeEntry> &nodes)
+      std::vector<NodeEntry> &nodes,
+      [[maybe_unused]] EpochManager_t &epoch_manager)
   {
     constexpr auto kKeyLen = sizeof(Key);
-    constexpr auto kRecLen = kKeyLen + kPtrLen;
+    const auto rec_len = kKeyLen + pay_len_;
 
     // extract and insert entries into this node
     auto offset = kPageSize;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
-      node_size += kRecLen;
+      node_size += rec_len;
       if (node_size + 2 * kKeyLen > kPageSize) break;
 
       // insert an entry into this node
       const auto &[key, payload, key_len] = ParseEntry(*iter);
-      offset = SetPayload(offset, &payload);
+      if (is_inner_) {
+        offset = SetPayload(offset, &payload);
+      } else {
+        auto current_epoch = epoch_manager.GetCurrentEpoch();
+        [[maybe_unused]] auto new_version =
+            VersionRecord<std::tuple_element_t<1, Entry>>{current_epoch, payload};
+        // offset = SetPayload(offset, &new_version, sizeof(std::tuple_element_t<1, Entry>));
+        offset = SetPayload(offset, &new_version);
+      }
       keys_[record_count_++] = key;
     }
 
