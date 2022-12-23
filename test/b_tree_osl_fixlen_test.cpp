@@ -28,13 +28,13 @@ namespace dbgroup::index::test
 template <class K, class V, class C>
 using BTreeOSLFixLen = ::dbgroup::index::b_tree::BTreeOSLFixLen<K, V, C>;
 
-using TestTargets = ::testing::Types<              //
-    IndexInfo<BTreeOSLFixLen, UInt8, UInt8>,       // fixed-length keys
-    IndexInfo<BTreeOSLFixLen, UInt4, UInt8>,       // small keys
-    IndexInfo<BTreeOSLFixLen, UInt8, UInt4>,       // small payloads
-    IndexInfo<BTreeOSLFixLen, UInt4, UInt4>,       // small keys/payloads
-    IndexInfo<BTreeOSLFixLen, Ptr, Ptr>,           // pointer keys/payloads
-    IndexInfo<BTreeOSLFixLen, Original, Original>  // original class keys/payloads
+using TestTargets = ::testing::Types<        //
+    IndexInfo<BTreeOSLFixLen, UInt8, UInt8>  // fixed-length keys
+    // IndexInfo<BTreeOSLFixLen, UInt4, UInt8>,       // small keys
+    // IndexInfo<BTreeOSLFixLen, UInt8, UInt4>,       // small payloads
+    // IndexInfo<BTreeOSLFixLen, UInt4, UInt4>,       // small keys/payloads
+    // IndexInfo<BTreeOSLFixLen, Ptr, Ptr>,           // pointer keys/payloads
+    // IndexInfo<BTreeOSLFixLen, Original, Original>  // original class keys/payloads
     >;
 TYPED_TEST_SUITE(IndexFixture, TestTargets);
 
