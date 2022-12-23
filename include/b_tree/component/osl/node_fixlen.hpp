@@ -722,7 +722,7 @@ class NodeFixLen
           if (!node->mutex_.TryLockSIX(ver)) continue;
           node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
           return kCompleted;
-        } else {  //
+        } else {
         return kKeyAlreadyInserted;
       }
       } else {
@@ -1350,6 +1350,9 @@ class NodeFixLen
     next_ = r_node;
   }
 
+  /*####################################################################################
+   * Internal utility functions for versioned Read/Write
+   *##################################################################################*/
 
   /**
    * @return the payload of visible version at the given timestamp
@@ -1397,7 +1400,7 @@ class NodeFixLen
       const size_t pos,
       const Payload &payload,
       EpochManager_t &epoch_manager,
-      [[mayve_unused]] GC_t &gc,
+      [[maybe_unused]] GC_t &gc,
       bool is_delete = false)  //
       -> void
   {
