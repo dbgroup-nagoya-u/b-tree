@@ -734,14 +734,13 @@ class NodeVarLen
     const auto sep_key_len = meta_array_[pos].key_len;
 
     // copy right half records to a right node
-    auto r_offset = r_node->CopyHighKeyFrom(temp_node_.get(), kPageSize);
+    auto r_offset = r_node->CopyKeyFrom(this, meta_array_[pos], kPageSize);  // set lowest key
     r_node->l_key_offset_ = r_offset;
     r_node->l_key_len_ = sep_key_len;
     r_offset = r_node->CopyHighKeyFrom(this, r_offset);
     r_node->h_key_offset_ = r_offset;
     r_node->h_key_len_ = h_key_len_;
 
-    // copy right half records to a right node
     r_offset = r_node->CopyRecordsFrom(this, pos, record_count_, r_offset);
 
     // update a right header
