@@ -53,11 +53,13 @@ class VersionRecord
         payload_{payload}
   {
   }
+  VersionRecord() = default;
 
-  VersionRecord() : timestamp_{Timestamp_t{}}, payload_{Payload{}}, is_deleted_{0}, next_{nullptr}
-  {
-  }
+  VersionRecord(const VersionRecord &) = default;
+  VersionRecord(VersionRecord &&) noexcept = default;
 
+  auto operator=(const VersionRecord &) -> VersionRecord & = default;
+  auto operator=(VersionRecord &&) noexcept -> VersionRecord & = default;
   /*##################################################################################
    * Public destructor
    *################################################################################*/
@@ -124,7 +126,6 @@ class VersionRecord
       -> void
   {
     next_ = node_ptr;
-    return;
   }
 
  private:
@@ -132,10 +133,10 @@ class VersionRecord
    * Internal member
    *################################################################################*/
 
-  const size_t is_deleted_ : 1;
-  const size_t timestamp_ : 63;
-  VersionRecord *next_;
-  const Payload payload_;
+  const size_t is_deleted_ : 1 = 0;
+  const size_t timestamp_ : 63 = 0;
+  VersionRecord<Payload> *next_{nullptr};
+  const Payload payload_{};
 };
 
 }  // namespace dbgroup::index::b_tree::component::osl

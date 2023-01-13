@@ -725,21 +725,19 @@ class NodeFixLen
           if (!node->mutex_.TryLockSIX(ver)) continue;
           node->AppendNewVersionRecord(pos, payload, epoch_manager, gc);
           return kCompleted;
-        } else {
-          return kKeyAlreadyInserted;
         }
-      } else {
-        // if the key has never been inserted
-        // inserting a new record is required
-        if (!node->mutex_.TryLockSIX(ver)) continue;
-        if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
-
-        // insert a new version record
-        auto current_epoch = epoch_manager.GetCurrentEpoch();
-        auto new_version = VersionRecord<Payload>{current_epoch, payload};
-        node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos, epoch_manager);
-        return kCompleted;
+        return kKeyAlreadyInserted;
       }
+      // if the key has never been inserted
+      // inserting a new record is required
+      if (!node->mutex_.TryLockSIX(ver)) continue;
+      if (node->GetUsedSize() + rec_len > kPageSize - kHeaderLen) return kNeedSplit;
+
+      // insert a new version record
+      auto current_epoch = epoch_manager.GetCurrentEpoch();
+      auto new_version = VersionRecord<Payload>{current_epoch, payload};
+      node->InsertRecord(key, kKeyLen, payload, node->pay_len_, pos, epoch_manager);
+      return kCompleted;
     }
   }
 
@@ -1382,7 +1380,7 @@ class NodeFixLen
    */
   template <class Payload>
   [[nodiscard]] auto
-  GetVisiblePayload(VersionRecord<Payload> head, Timestamp_t ts) const  //
+  GetVisiblePayload(VersionRecord<Payload> &head, Timestamp_t ts) const  //
       -> Payload
   {
     auto current_version_ptr = &head;
