@@ -1389,8 +1389,7 @@ class NodeFixLen
     auto next_version_ptr = current_version_ptr->GetNextPtr();
     auto version_ts = current_version_ptr->GetTimestamp();
     while (next_version_ptr != nullptr) {
-      // if (version_ts >= ts) {
-      if (false) {  // Read latest payload (only for DEBUGGING)
+      if (version_ts >= ts) {
         current_version_ptr = next_version_ptr;
         next_version_ptr = current_version_ptr->GetNextPtr();
         version_ts = current_version_ptr->GetTimestamp();
