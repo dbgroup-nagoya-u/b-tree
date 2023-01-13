@@ -316,11 +316,14 @@ class NodeFixLen
    * @retval true if the record is deleted.
    * @retval false otherwise.
    */
+  template <class Payload>
   [[nodiscard]] constexpr auto
   RecordIsDeleted([[maybe_unused]] const size_t pos) const  //
       -> bool
   {
-    return false;
+    auto current_version = VersionRecord<Payload>{};
+    memcpy(&current_version, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
+    return current_version.IsDeleted();
   }
 
   /**

@@ -149,7 +149,7 @@ class RecordIterator
   {
     while (node_ != nullptr) {
       // check records remain in this node
-      while (pos_ < end_pos_ && node_->RecordIsDeleted(pos_)) {
+      while (pos_ < end_pos_ && node_->template RecordIsDeleted<Payload>(pos_)) {
         ++pos_;  // skip deleted records
       }
       if (pos_ < end_pos_) return true;
