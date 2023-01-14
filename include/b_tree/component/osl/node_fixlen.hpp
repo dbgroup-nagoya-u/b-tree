@@ -282,7 +282,7 @@ class NodeFixLen
   [[nodiscard]] auto
   GetPayload(const size_t pos,
              Timestamp_t ts) const  //
-      -> Payload
+      -> std::optional<Payload>
   {
     VersionRecord<Payload> current_version{};
     memcpy(&current_version, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
@@ -1379,7 +1379,7 @@ class NodeFixLen
   template <class Payload>
   [[nodiscard]] auto
   GetVisiblePayload(VersionRecord<Payload> &head, Timestamp_t ts) const  //
-      -> Payload
+      -> std::optional<Payload>
   {
     auto current_version_ptr = &head;
     auto next_version_ptr = current_version_ptr->GetNextPtr();
@@ -1390,10 +1390,12 @@ class NodeFixLen
         next_version_ptr = current_version_ptr->GetNextPtr();
         version_ts = current_version_ptr->GetTimestamp();
       } else {
+        if (current_version_ptr->IsDeleted()) return std::nullopt;
         return current_version_ptr->GetPayload();
       }
     }
     // current version is tail node
+    if (current_version_ptr->IsDeleted()) return std::nullopt;
     return current_version_ptr->GetPayload();
   }
 
