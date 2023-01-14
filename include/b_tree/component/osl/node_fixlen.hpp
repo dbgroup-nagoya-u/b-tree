@@ -321,9 +321,7 @@ class NodeFixLen
   RecordIsDeleted([[maybe_unused]] const size_t pos) const  //
       -> bool
   {
-    auto current_version = VersionRecord<Payload>{};
-    memcpy(&current_version, GetPayloadAddr(pos), sizeof(VersionRecord<Payload>));
-    return current_version.IsDeleted();
+    return false;
   }
 
   /**
