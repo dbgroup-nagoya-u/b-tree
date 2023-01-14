@@ -120,7 +120,7 @@ class RecordIterator
   operator*() const  //
       -> std::pair<Key, Payload>
   {
-    return node_->template GetRecord<Payload>(pos_, timestamp_);
+    return tmp_record_;
   }
 
   /**
@@ -149,10 +149,20 @@ class RecordIterator
   {
     while (node_ != nullptr) {
       // check records remain in this node
-      while (pos_ < end_pos_ && node_->template RecordIsDeleted<Payload>(pos_)) {
-        ++pos_;  // skip deleted records
+      std::optional<Payload> tmp_payload;
+      while (pos_ < end_pos_) {
+        // Get visible payload and check the existence
+        tmp_payload = node_->template GetPayload<Payload>(pos_, timestamp_);
+        if (!tmp_payload)
+          ++pos_;  // skip deleted records
+        else
+          break;
       }
-      if (pos_ < end_pos_) return true;
+      if (pos_ < end_pos_) {
+        auto tmp_key = node_->GetKey(pos_);
+        tmp_record_ = std::make_pair(tmp_key, tmp_payload.value());
+        return true;
+      }
 
       // check this node is rightmost for a given end key
       if (is_end_) {
@@ -216,6 +226,9 @@ class RecordIterator
   std::optional<EpochGuard> guard_{std::nullopt};
 
   std::optional<EpochGuard> version_guard_{std::nullopt};
+
+  // a temporal record for operator*
+  std::pair<Key, Payload> tmp_record_{};
 };
 
 }  // namespace dbgroup::index::b_tree::component
