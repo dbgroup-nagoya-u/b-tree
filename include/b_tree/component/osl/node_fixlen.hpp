@@ -324,20 +324,6 @@ class NodeFixLen
     return false;
   }
 
-  /**
-   * @tparam Payload a class of payload.
-   * @param pos the position of a target record.
-   * @retval 1st: a key in a target record.
-   * @retval 2nd: a payload in a target record.
-   */
-  template <class Payload>
-  [[nodiscard]] auto
-  GetRecord(const size_t pos, const Timestamp_t ts) const  //
-      -> std::pair<Key, Payload>
-  {
-    return {keys_[pos], GetPayload<Payload>(pos, ts)};
-  }
-
   /*####################################################################################
    * Public lock management APIs
    *##################################################################################*/
