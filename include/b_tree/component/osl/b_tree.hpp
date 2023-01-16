@@ -63,7 +63,7 @@ class BTree
   using BTree_t = BTree<Key, V, Comp, kIsVarLen>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<NodePage>;
   using EpochManager_t = ::dbgroup::memory::EpochManager;
 
   // aliases for bulkloading
@@ -86,14 +86,16 @@ class BTree
       const size_t gc_interval_micro,
       const size_t gc_thread_num,
       const size_t epoch_interval_micro = 1000)
-      : gc_{gc_interval_micro, gc_thread_num, true}
   {
+    gc_ = std::make_unique<GC_t>(gc_interval_micro, gc_thread_num);
+
     auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kIsVarLen) {
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
     StartEpoch(epoch_interval_micro);
+    gc_->StartGC();
   }
 
   BTree(const BTree &) = delete;
@@ -133,7 +135,7 @@ class BTree
       [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_->CreateEpochGuard();
 
     auto *node = SearchLeafNode(key);
     Payload payload{};
@@ -156,7 +158,7 @@ class BTree
       const ScanKey &end_key = std::nullopt)  //
       -> RecordIterator_t
   {
-    auto &&guard = gc_.CreateEpochGuard();
+    auto &&guard = gc_->CreateEpochGuard();
     auto &&version_guard = epoch_manager_.CreateEpochGuard();
     auto current_epoch = epoch_manager_.GetCurrentEpoch();
 
@@ -197,7 +199,7 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_->CreateEpochGuard();
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
@@ -237,7 +239,7 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_->CreateEpochGuard();
 
     auto &&stack = SearchLeafNodeForWrite(key);
     auto *node = stack.back();
@@ -277,7 +279,7 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_->CreateEpochGuard();
     auto *node = SearchLeafNode(key);
     return Node_t::Update(node, key, payload, kPayLen, gc_, epoch_manager_);
   }
@@ -296,7 +298,7 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &guard = gc_->CreateEpochGuard();
     auto *node = SearchLeafNode(key);
     return Node_t::template Delete<Payload>(node, key, kPayLen, gc_, epoch_manager_);
   }
@@ -441,7 +443,7 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    auto *page = gc_->template GetPageIfPossible<NodePage>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
@@ -763,7 +765,7 @@ class BTree
       switch (node->DeleteChild(*del_key)) {
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
-          gc_.AddGarbage(r_child);
+          gc_->AddGarbage<NodePage>(r_child);
           return;
 
         case NodeRC::kAbortMerge:
@@ -779,7 +781,7 @@ class BTree
         case NodeRC::kNeedMerge:
         default:
           l_child->Merge(r_child);
-          gc_.AddGarbage(r_child);
+          gc_->AddGarbage<NodePage>(r_child);
 
           if (stack.empty()) {
             TryShrinkTree(node);
@@ -802,7 +804,7 @@ class BTree
   {
     if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
-        gc_.AddGarbage(node);
+        gc_->AddGarbage<NodePage>(node);
         node = node->RemoveRoot();
       } while (node->GetRecordCount() == 1 && node->IsInner());
       root_.store(node, std::memory_order_relaxed);
@@ -891,7 +893,7 @@ class BTree
    *##################################################################################*/
 
   /// a garbage collector for node pages.
-  GC_t gc_{};
+  std::unique_ptr<GC_t> gc_{nullptr};
 
   // an epoch manager for versioning
   EpochManager_t epoch_manager_{};
