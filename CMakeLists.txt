@@ -58,7 +58,7 @@ if(NOT TARGET b_tree::b_tree)
   )
   target_link_libraries(b_tree INTERFACE
     cpp_utility::cpp_utility
-    memory_manager::memory_manager
+    dbgroup::memory_manager
   )
 endif()
 

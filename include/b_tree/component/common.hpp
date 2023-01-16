@@ -63,6 +63,27 @@ constexpr uint32_t kInnerFlag = 1;
 constexpr bool kClosed = true;
 
 /*######################################################################################
+ * Internal structs
+ *####################################################################################*/
+
+/**
+ * @brief A struct for representing GC target.
+ *
+ */
+struct NodePage {
+  // do not call destructor
+  using T = void;
+
+  // reuse garbage-collected pages
+  static constexpr bool kReusePages = true;
+
+  // use the standard delete function to release garbage
+  static const inline std::function<void(void *)> deleter = [](void *ptr) {
+    ::operator delete(ptr);
+  };
+};
+
+/*######################################################################################
  * Internal utility functions
  *####################################################################################*/
 

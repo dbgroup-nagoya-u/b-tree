@@ -56,7 +56,7 @@ class NodeFixLen
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, Node *, size_t>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<Node>;
+  using GC_t = std::unique_ptr<::dbgroup::memory::EpochBasedGC<NodePage>>;
   using EpochManager_t = ::dbgroup::memory::EpochManager;
   using Timestamp_t = size_t;
 
