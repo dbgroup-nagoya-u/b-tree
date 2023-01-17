@@ -135,9 +135,16 @@ class VersionRecord
    * Internal member
    *################################################################################*/
 
+  /// a flaf for indicating a deleted record.
   const size_t is_deleted_ : 1 = 0;
+
+  /// the version value of this record.
   const size_t timestamp_ : 63 = 0;
+
+  /// the next record.
   VersionRecord<Payload> *next_{nullptr};
+
+  /// an actual data.
   const Payload payload_{};
 };
 
