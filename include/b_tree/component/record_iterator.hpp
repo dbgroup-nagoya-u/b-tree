@@ -149,19 +149,14 @@ class RecordIterator
   {
     while (node_ != nullptr) {
       // check records remain in this node
-      std::optional<Payload> tmp_payload;
-      while (pos_ < end_pos_) {
+      
+      for (; pos_ < end_pos_; ++pos) {
         // Get visible payload and check the existence
-        tmp_payload = node_->template GetPayload<Payload>(pos_, timestamp_);
-        if (!tmp_payload)
-          ++pos_;  // skip deleted records
-        else
-          break;
-      }
-      if (pos_ < end_pos_) {
-        auto tmp_key = node_->GetKey(pos_);
-        tmp_record_ = std::make_pair(tmp_key, tmp_payload.value());
-        return true;
+        const auto &payload = node_->template GetPayload<Payload>(pos_, timestamp_);
+        if (payload) {
+          tmp_record_ = std::make_pair(node_->GetKey(pos_), *payload);
+          return;
+        }
       }
 
       // check this node is rightmost for a given end key
