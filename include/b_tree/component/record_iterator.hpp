@@ -182,7 +182,7 @@ class RecordIterator
   GetKey() const  //
       -> Key
   {
-    return node_->GetKey(pos_);
+    return record_.first;
   }
 
   /**
@@ -192,7 +192,7 @@ class RecordIterator
   GetPayload() const  //
       -> Payload
   {
-    return node_->template GetPayload<Payload>(pos_, timestamp_);
+    return record_.second;
   }
 
  private:
