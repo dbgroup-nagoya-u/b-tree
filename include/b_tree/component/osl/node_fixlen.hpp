@@ -1364,20 +1364,20 @@ class NodeFixLen
    */
   template <class Payload>
   [[nodiscard]] auto
-  GetVisiblePayload(VersionRecord<Payload> &head, Timestamp_t ts) const  //
+  GetVisiblePayload(VersionRecord<Payload> &head, Timestamp_t ver) const  //
       -> std::optional<Payload>
   {
-    auto current_version_ptr = &head;
-    auto next_version_ptr = current_version_ptr->GetNextPtr();
-    auto version_ts = current_version_ptr->GetTimestamp();
-    while (next_version_ptr != nullptr && version_ts >= ts) {
+    auto *rec = &head;
+    auto *next = rec->GetNextPtr();
+    auto rec_ver = rec->GetTimestamp();
+    while (next != nullptr && rec_ver >= ver) {
       // go to the next record
-      current_version_ptr = next_version_ptr;
-      next_version_ptr = current_version_ptr->GetNextPtr();
-      version_ts = current_version_ptr->GetTimestamp();
+      rec = next;
+      next = rec->GetNextPtr();
+      rec_ver = rec->GetTimestamp();
     }
     // found the visible version
-    return (current_version_ptr->IsDeleted()) ? std::nullopt : current_version_ptr->GetPayload();
+    return (rec->IsDeleted()) ? std::nullopt : rec->GetPayload();
   }
 
   /**
