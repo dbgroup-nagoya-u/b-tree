@@ -598,9 +598,7 @@ class BTree
       }
     };
 
-    if (is_epoch_forwarding_.load(std::memory_order_relaxed)) {
-      return;
-    }
+    if (is_epoch_forwarding_.load(std::memory_order_relaxed)) return;
     is_epoch_forwarding_.store(true, std::memory_order_relaxed);
     epoch_thread_ = std::thread{forwarder};
   };
