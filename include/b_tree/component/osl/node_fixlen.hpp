@@ -1377,7 +1377,8 @@ class NodeFixLen
       rec_ver = rec->GetTimestamp();
     }
     // found the visible version
-    return (rec->IsDeleted()) ? std::nullopt : rec->GetPayload();
+    if (rec->IsDeleted()) return std::nullopt;
+    return rec->GetPayload();
   }
 
   /**

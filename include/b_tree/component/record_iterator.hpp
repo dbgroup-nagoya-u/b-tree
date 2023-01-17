@@ -81,7 +81,7 @@ class RecordIterator
         end_key_{std::move(end_key)},
         is_end_{is_end},
         timestamp_{timestamp},
-        gc_guard_{std::move(guard)},
+        gc_guard_{std::move(gc_guard)},
         cc_guard_{std::move(cc_guard)}
   {
   }
@@ -150,12 +150,12 @@ class RecordIterator
     while (node_ != nullptr) {
       // check records remain in this node
 
-      for (; pos_ < end_pos_; ++pos) {
+      for (; pos_ < end_pos_; ++pos_) {
         // Get visible payload and check the existence
         const auto &payload = node_->template GetPayload<Payload>(pos_, timestamp_);
         if (payload) {
           record_ = std::make_pair(node_->GetKey(pos_), *payload);
-          return;
+          return true;
         }
       }
 
