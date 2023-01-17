@@ -35,14 +35,16 @@ class VersionRecord
    * Public constructors
    *################################################################################*/
 
-  /**
+  constexpr VersionRecord() = default;
+
+    /**
    * @brief Construct a new instance.
    *
    * @param timestamp a timestamp which represents when the version was written
    * @param payload a payload of tuple
    * @param next a pointer to a next node.
    */
-  VersionRecord(  //
+  constexpr VersionRecord(  //
       const Timestamp_t timestamp,
       const Payload &payload,
       const bool is_deleted = false,
@@ -53,13 +55,13 @@ class VersionRecord
         payload_{payload}
   {
   }
-  VersionRecord() = default;
 
-  VersionRecord(const VersionRecord &) = default;
-  VersionRecord(VersionRecord &&) noexcept = default;
+  constexpr VersionRecord(const VersionRecord &) = default;
+  constexpr VersionRecord(VersionRecord &&) noexcept = default;
 
-  auto operator=(const VersionRecord &) -> VersionRecord & = default;
-  auto operator=(VersionRecord &&) noexcept -> VersionRecord & = default;
+  constexpr auto operator=(const VersionRecord &) -> VersionRecord & = default;
+  constexpr auto operator=(VersionRecord &&) noexcept -> VersionRecord & = default;
+
   /*##################################################################################
    * Public destructor
    *################################################################################*/
