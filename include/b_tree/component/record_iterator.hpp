@@ -63,8 +63,8 @@ class RecordIterator
    * @param end_key a copied end key of this scan operation.
    * @param is_end a flag for indicating the node is rightmost in this scan operation.
    * @param timestamp a timestamp for versioned read
-   * @param guard //TODO
-   * @param version_guard //TODO
+   * @param gc_guard //TODO
+   * @param cc_guard //TODO
    */
   RecordIterator(  //
       Node *node,
@@ -73,16 +73,16 @@ class RecordIterator
       ScanKey end_key,
       bool is_end,
       Timestamp_t timestamp,
-      std::optional<EpochGuard> guard = std::nullopt,
-      std::optional<EpochGuard> version_guard = std::nullopt)
+      std::optional<EpochGuard> gc_guard = std::nullopt,
+      std::optional<EpochGuard> cc_guard = std::nullopt)
       : node_{node},
         pos_{begin_pos},
         end_pos_{end_pos},
         end_key_{std::move(end_key)},
         is_end_{is_end},
         timestamp_{timestamp},
-        guard_{std::move(guard)},
-        version_guard_{std::move(version_guard)}
+        gc_guard_{std::move(guard)},
+        cc_guard_{std::move(cc_guard)}
   {
   }
 
@@ -120,7 +120,7 @@ class RecordIterator
   operator*() const  //
       -> std::pair<Key, Payload>
   {
-    return tmp_record_;
+    return record_;
   }
 
   /**
@@ -149,12 +149,12 @@ class RecordIterator
   {
     while (node_ != nullptr) {
       // check records remain in this node
-      
+
       for (; pos_ < end_pos_; ++pos) {
         // Get visible payload and check the existence
         const auto &payload = node_->template GetPayload<Payload>(pos_, timestamp_);
         if (payload) {
-          tmp_record_ = std::make_pair(node_->GetKey(pos_), *payload);
+          record_ = std::make_pair(node_->GetKey(pos_), *payload);
           return;
         }
       }
@@ -218,12 +218,12 @@ class RecordIterator
   // a timestamp for versioned read
   Timestamp_t timestamp_{};
 
-  std::optional<EpochGuard> guard_{std::nullopt};
+  std::optional<EpochGuard> gc_guard_{std::nullopt};
 
-  std::optional<EpochGuard> version_guard_{std::nullopt};
+  std::optional<EpochGuard> cc_guard_{std::nullopt};
 
   // a temporal record for operator*
-  std::pair<Key, Payload> tmp_record_{};
+  std::pair<Key, Payload> record_{};
 };
 
 }  // namespace dbgroup::index::b_tree::component
