@@ -109,7 +109,7 @@ class VersionRecord
   IsDeleted() const  //
       -> bool
   {
-    return is_deleted_ == 1;
+    return is_deleted_;
   }
 
   /*##################################################################################
