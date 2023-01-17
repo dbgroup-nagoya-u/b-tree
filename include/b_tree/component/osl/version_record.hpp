@@ -50,7 +50,7 @@ class VersionRecord
       const bool is_deleted = false,
       VersionRecord *next = nullptr)
       : is_deleted_{static_cast<size_t>(is_deleted)},
-        timestamp_{static_cast<size_t>(timestamp)},
+        timestamp_{timestamp},
         next_{next},
         payload_{payload}
   {
