@@ -1370,19 +1370,14 @@ class NodeFixLen
     auto current_version_ptr = &head;
     auto next_version_ptr = current_version_ptr->GetNextPtr();
     auto version_ts = current_version_ptr->GetTimestamp();
-    while (next_version_ptr != nullptr) {
-      if (version_ts >= ts) {
-        current_version_ptr = next_version_ptr;
-        next_version_ptr = current_version_ptr->GetNextPtr();
-        version_ts = current_version_ptr->GetTimestamp();
-      } else {
-        if (current_version_ptr->IsDeleted()) return std::nullopt;
-        return current_version_ptr->GetPayload();
-      }
+    while (next_version_ptr != nullptr && version_ts >= ts) {
+      // go to the next record
+      current_version_ptr = next_version_ptr;
+      next_version_ptr = current_version_ptr->GetNextPtr();
+      version_ts = current_version_ptr->GetTimestamp();
     }
-    // current version is tail node
-    if (current_version_ptr->IsDeleted()) return std::nullopt;
-    return current_version_ptr->GetPayload();
+    // found the visible version
+    return (current_version_ptr->IsDeleted()) ? std::nullopt : current_version_ptr->GetPayload();
   }
 
   /**
