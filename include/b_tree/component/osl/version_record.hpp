@@ -35,7 +35,7 @@ class VersionRecord
    * Public constructors
    *################################################################################*/
 
-  constexpr VersionRecord() = default;
+  constexpr VersionRecord() : is_deleted_{}, timestamp_{} {}
 
   /**
    * @brief Construct a new instance.
@@ -49,8 +49,8 @@ class VersionRecord
       const Payload &payload,
       const bool is_deleted = false,
       VersionRecord *next = nullptr)
-      : is_deleted_{static_cast<const size_t>(is_deleted)},
-        timestamp_{static_cast<const size_t>(timestamp)},
+      : is_deleted_{static_cast<size_t>(is_deleted)},
+        timestamp_{static_cast<size_t>(timestamp)},
         next_{next},
         payload_{payload}
   {
@@ -135,17 +135,17 @@ class VersionRecord
    * Internal member
    *################################################################################*/
 
-  /// a flaf for indicating a deleted record.
-  const size_t is_deleted_ : 1 = 0;
+  /// a flag for indicating a deleted record.
+  size_t is_deleted_ : 1;
 
   /// the version value of this record.
-  const size_t timestamp_ : 63 = 0;
+  size_t timestamp_ : 63;
 
   /// the next record.
   VersionRecord<Payload> *next_{nullptr};
 
   /// an actual data.
-  const Payload payload_{};
+  Payload payload_{};
 };
 
 }  // namespace dbgroup::index::b_tree::component::osl
