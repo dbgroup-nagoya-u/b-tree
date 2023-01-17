@@ -37,7 +37,7 @@ class VersionRecord
 
   constexpr VersionRecord() = default;
 
-    /**
+  /**
    * @brief Construct a new instance.
    *
    * @param timestamp a timestamp which represents when the version was written
@@ -79,7 +79,7 @@ class VersionRecord
   /**
    * @return the timestamp(i.e., version) of this node
    */
-  [[nodiscard]] auto
+  [[nodiscard]] constexpr auto
   GetTimestamp() const  //
       -> Timestamp_t
   {
@@ -89,7 +89,7 @@ class VersionRecord
   /**
    * @return the payload of this version
    */
-  [[nodiscard]] auto
+  [[nodiscard]] constexpr auto
   GetPayload() const  //
       -> Payload
   {
@@ -100,14 +100,14 @@ class VersionRecord
    * @return a pointer to the next node on chain
    * @return nullptr when this node is the latest version
    */
-  [[nodiscard]] auto
+  [[nodiscard]] constexpr auto
   GetNextPtr() const  //
       -> VersionRecord<Payload, Timestamp_t> *
   {
     return next_;
   }
 
-  [[nodiscard]] auto
+  [[nodiscard]] constexpr auto
   IsDeleted() const  //
       -> bool
   {
