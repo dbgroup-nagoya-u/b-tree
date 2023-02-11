@@ -89,7 +89,12 @@ class RecordIterator
    * @brief Destroy the iterator object.
    *
    */
-  ~RecordIterator() = default;
+  ~RecordIterator()
+  {
+    if (node_) {
+      node_->UnlockS();
+    }
+  }
 
   /*####################################################################################
    * Public operators for iterators
