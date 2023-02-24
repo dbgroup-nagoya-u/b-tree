@@ -17,15 +17,16 @@
 #ifndef B_TREE_COMPONENT_PML_B_TREE_HPP
 #define B_TREE_COMPONENT_PML_B_TREE_HPP
 
+// C++ standard libraries
 #include <future>
 #include <optional>
 #include <thread>
 #include <vector>
 
 // local sources
+#include "b_tree/component/pml/node_fixlen.hpp"
+#include "b_tree/component/pml/node_varlen.hpp"
 #include "b_tree/component/record_iterator.hpp"
-#include "node_fixlen.hpp"
-#include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::pml
 {

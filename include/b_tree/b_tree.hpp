@@ -21,10 +21,10 @@
 #include "utility.hpp"
 
 // actual B+tree implementations
-#include "component/oml/b_tree.hpp"
-#include "component/osl/b_tree.hpp"
-#include "component/pml/b_tree.hpp"
-#include "component/psl/b_tree.hpp"
+#include "b_tree/component/oml/b_tree.hpp"
+#include "b_tree/component/osl/b_tree.hpp"
+#include "b_tree/component/pml/b_tree.hpp"
+#include "b_tree/component/psl/b_tree.hpp"
 
 namespace dbgroup::index::b_tree
 {

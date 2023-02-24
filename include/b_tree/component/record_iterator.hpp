@@ -17,14 +17,15 @@
 #ifndef B_TREE_COMPONENT_RECORD_ITERATOR_HPP
 #define B_TREE_COMPONENT_RECORD_ITERATOR_HPP
 
+// C++ standard libraries
 #include <optional>
 #include <utility>
 
-// organization libraries
+// external sources
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
-#include "common.hpp"
+#include "b_tree/component/common.hpp"
 
 namespace dbgroup::index::b_tree::component
 {

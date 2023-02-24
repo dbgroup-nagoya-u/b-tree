@@ -17,7 +17,7 @@
 #include "b_tree/component/oml/node_fixlen.hpp"
 #include "b_tree/component/oml/node_varlen.hpp"
 
-// external libraries
+// external sources
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::b_tree::component::oml::test

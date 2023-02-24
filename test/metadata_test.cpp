@@ -16,7 +16,7 @@
 
 #include "b_tree/component/metadata.hpp"
 
-// external libraries
+// external sources
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::b_tree::component::test

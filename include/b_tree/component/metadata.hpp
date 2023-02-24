@@ -19,7 +19,7 @@
 #define B_TREE_COMPONENT_METADATA_HPP
 
 // local sources
-#include "common.hpp"
+#include "b_tree/component/common.hpp"
 
 namespace dbgroup::index::b_tree::component
 {

@@ -18,12 +18,13 @@
 #ifndef B_TREE_COMPONENT_PSL_NODE_FIXLEN_HPP
 #define B_TREE_COMPONENT_PSL_NODE_FIXLEN_HPP
 
+// C++ standard libraries
 #include <atomic>
 #include <optional>
 #include <utility>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "lock/pessimistic_lock.hpp"
 
 // local sources

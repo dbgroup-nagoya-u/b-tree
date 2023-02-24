@@ -17,18 +17,19 @@
 #ifndef B_TREE_COMPONENT_OSL_B_TREE_HPP
 #define B_TREE_COMPONENT_OSL_B_TREE_HPP
 
+// C++ standard libraries
 #include <future>
 #include <optional>
 #include <thread>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
+#include "b_tree/component/osl/node_fixlen.hpp"
+#include "b_tree/component/osl/node_varlen.hpp"
 #include "b_tree/component/record_iterator.hpp"
-#include "node_fixlen.hpp"
-#include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::osl
 {
