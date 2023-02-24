@@ -266,6 +266,24 @@ class BTree
     return b_tree_.Bulkload(entries, thread_num);
   }
 
+  /*####################################################################################
+   * Public utilities
+   *##################################################################################*/
+
+  /**
+   * @brief Collect statistical data of this tree.
+   *
+   * @retval 1st: the number of nodes.
+   * @retval 2nd: the actual usage in bytes.
+   * @retval 3rd: the virtual usage in bytes.
+   */
+  auto
+  CollectStatisticalData()  //
+      -> std::vector<std::tuple<size_t, size_t, size_t>>
+  {
+    return b_tree_.CollectStatisticalData();
+  }
+
  private:
   /*####################################################################################
    * Internal utility functions
