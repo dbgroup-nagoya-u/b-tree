@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <memory>
 
 // local sources
@@ -61,6 +62,27 @@ constexpr uint32_t kInnerFlag = 1;
 
 /// a flag for indicating closed-interval.
 constexpr bool kClosed = true;
+
+/*######################################################################################
+ * Internal utility classes
+ *####################################################################################*/
+
+/**
+ * @brief A struct for representing GC targets.
+ *
+ */
+struct PageTarget {
+  // do not call destructor
+  using T = void;
+
+  // do not reuse pages in this example
+  static constexpr bool kReusePages = true;
+
+  // use the standard delete function to release garbage
+  static const inline std::function<void(void *)> deleter = [](void *ptr) {
+    ::operator delete(ptr);
+  };
+};
 
 /*######################################################################################
  * Internal utility functions

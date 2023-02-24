@@ -58,7 +58,7 @@ class BTree
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -79,13 +79,15 @@ class BTree
   BTree(  //
       const size_t gc_interval_micro,
       const size_t gc_thread_num)
-      : gc_{gc_interval_micro, gc_thread_num, true}
+      : gc_{gc_interval_micro, gc_thread_num}
   {
     auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kUseVarLenLayout) {
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
+
+    gc_.StartGC();
   }
 
   BTree(const BTree &) = delete;
@@ -440,7 +442,7 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    auto *page = gc_.template GetPageIfPossible<PageTarget>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
@@ -744,7 +746,7 @@ class BTree
       switch (node->DeleteChild(*del_key)) {
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
-          gc_.AddGarbage(r_child);
+          gc_.AddGarbage<PageTarget>(r_child);
           return;
 
         case NodeRC::kAbortMerge:
@@ -760,7 +762,7 @@ class BTree
         case NodeRC::kNeedMerge:
         default:
           l_child->Merge(r_child);
-          gc_.AddGarbage(r_child);
+          gc_.AddGarbage<PageTarget>(r_child);
 
           if (stack.empty()) {
             TryShrinkTree(node);
@@ -783,7 +785,7 @@ class BTree
   {
     if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
-        gc_.AddGarbage(node);
+        gc_.AddGarbage<PageTarget>(node);
         node = node->RemoveRoot();
       } while (node->GetRecordCount() == 1 && node->IsInner());
       root_.store(node, std::memory_order_relaxed);
@@ -874,7 +876,7 @@ class BTree
    *##################################################################################*/
 
   /// a garbage collector for node pages.
-  GC_t gc_{};
+  GC_t gc_{kDefaultGCTime, kDefaultGCThreadNum};
 
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};

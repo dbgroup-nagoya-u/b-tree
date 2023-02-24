@@ -60,7 +60,7 @@ struct MyClass {
  * Constants for testing
  *####################################################################################*/
 
-constexpr size_t kThreadNum = B_TREE_TEST_THREAD_NUM;
+constexpr size_t kThreadNum = DBGROUP_TEST_THREAD_NUM;
 
 constexpr size_t kVarDataLength = 12;
 

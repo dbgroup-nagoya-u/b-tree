@@ -9,10 +9,10 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
-        B_TREE_TEST_THREAD_NUM: 8
-        B_TREE_TEST_RANDOM_SEED: 0
-        B_TREE_TEST_EXEC_NUM: 1E5
-        B_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 0
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
@@ -20,10 +20,10 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
-        B_TREE_TEST_THREAD_NUM: 8
-        B_TREE_TEST_RANDOM_SEED: 0
-        B_TREE_TEST_EXEC_NUM: 1E5
-        B_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 0
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
@@ -31,7 +31,7 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
-        B_TREE_TEST_THREAD_NUM: 8
-        B_TREE_TEST_RANDOM_SEED: 0
-        B_TREE_TEST_EXEC_NUM: 1E5
-        B_TREE_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_THREAD_NUM: 8
+        DBGROUP_TEST_RANDOM_SEED: 0
+        DBGROUP_TEST_EXEC_NUM: 1E5
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
