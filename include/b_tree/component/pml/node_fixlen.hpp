@@ -184,6 +184,16 @@ class NodeFixLen
   }
 
   /**
+   * @return the data usage of this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetNodeUsage() const  //
+      -> size_t
+  {
+    return kHeaderLen + (record_count_ * kKeyLen) + block_size_;
+  }
+
+  /**
    * @return the next node with a shared lock.
    */
   [[nodiscard]] auto
