@@ -40,25 +40,25 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/memory-manager")
 # Build targets
 #--------------------------------------------------------------------------------------#
 
-if(NOT TARGET b_tree::b_tree)
-  add_library(b_tree INTERFACE)
-  add_library(b_tree::b_tree ALIAS b_tree)
-  target_compile_features(b_tree INTERFACE
+if(NOT TARGET dbgroup::${PROJECT_NAME})
+  add_library(${PROJECT_NAME} INTERFACE)
+  add_library(dbgroup::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+  target_compile_features(${PROJECT_NAME} INTERFACE
     "cxx_std_17"
   )
-  target_compile_definitions(b_tree INTERFACE
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
     B_TREE_PAGE_SIZE=${B_TREE_PAGE_SIZE}
     B_TREE_MAX_DELETED_SPACE_SIZE=${B_TREE_MAX_DELETED_SPACE_SIZE}
     B_TREE_MIN_FREE_SPACE_SIZE=${B_TREE_MIN_FREE_SPACE_SIZE}
     B_TREE_MIN_USED_SPACE_SIZE=${B_TREE_MIN_USED_SPACE_SIZE}
     B_TREE_MAX_VARLEN_DATA_SIZE=${B_TREE_MAX_VARLEN_DATA_SIZE}
   )
-  target_include_directories(b_tree INTERFACE
+  target_include_directories(${PROJECT_NAME} INTERFACE
     "${B_TREE_SOURCE_DIR}/include"
   )
-  target_link_libraries(b_tree INTERFACE
-    cpp_utility::cpp_utility
-    memory_manager::memory_manager
+  target_link_libraries(${PROJECT_NAME} INTERFACE
+    dbgroup::cpp_utility
+    dbgroup::memory_manager
   )
 endif()
 

@@ -18,6 +18,7 @@
 #ifndef B_TREE_UTILITY_HPP
 #define B_TREE_UTILITY_HPP
 
+// C++ standard libraries
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,12 @@ enum ReturnCode {
   kKeyNotExist = -2,
   kKeyExist,
 };
+
+/// the default time interval for garbage collection [us].
+constexpr size_t kDefaultGCTime = 10000;  // 10 ms
+
+/// the default number of worker threads for garbage collection.
+constexpr size_t kDefaultGCThreadNum = 1;
 
 /// a flag for indicating pessimistic locking.
 constexpr bool kPessimisticLock = false;

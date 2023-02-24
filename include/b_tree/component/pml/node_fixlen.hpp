@@ -18,12 +18,13 @@
 #ifndef B_TREE_COMPONENT_PML_NODE_FIXLEN_HPP
 #define B_TREE_COMPONENT_PML_NODE_FIXLEN_HPP
 
+// C++ standard libraries
 #include <atomic>
 #include <optional>
 #include <utility>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "lock/pessimistic_lock.hpp"
 
 // local sources
@@ -811,14 +812,14 @@ class NodeFixLen
       std::vector<NodeEntry> &nodes)
   {
     constexpr auto kKeyLen = sizeof(Key);
-    const auto kRecLen = kKeyLen + pay_len_;
+    const auto rec_len = kKeyLen + pay_len_;
 
     // extract and insert entries into this node
     auto offset = kPageSize;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
-      node_size += kRecLen;
+      node_size += rec_len;
       if (node_size + 2 * kKeyLen > kPageSize) break;
 
       // insert an entry into this node

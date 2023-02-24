@@ -17,18 +17,19 @@
 #ifndef B_TREE_COMPONENT_OML_B_TREE_HPP
 #define B_TREE_COMPONENT_OML_B_TREE_HPP
 
+// C++ standard libraries
 #include <future>
 #include <optional>
 #include <thread>
 #include <vector>
 
-// organization libraries
+// external sources
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
+#include "b_tree/component/oml/node_fixlen.hpp"
+#include "b_tree/component/oml/node_varlen.hpp"
 #include "b_tree/component/record_iterator.hpp"
-#include "node_fixlen.hpp"
-#include "node_varlen.hpp"
 
 namespace dbgroup::index::b_tree::component::oml
 {
@@ -58,7 +59,7 @@ class BTree
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<Node_t>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -79,13 +80,15 @@ class BTree
   BTree(  //
       const size_t gc_interval_micro,
       const size_t gc_thread_num)
-      : gc_{gc_interval_micro, gc_thread_num, true}
+      : gc_{gc_interval_micro, gc_thread_num}
   {
     auto *root = new (GetNodePage()) Node_t{kLeafFlag};
     if constexpr (!kUseVarLenLayout) {
       root->SetPayloadLength(kPayLen);
     }
     root_.store(root, std::memory_order_release);
+
+    gc_.StartGC();
   }
 
   BTree(const BTree &) = delete;
@@ -406,7 +409,7 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<Node_t>();
+    auto *page = gc_.template GetPageIfPossible<PageTarget>();
     return (page == nullptr) ? (::operator new(kPageSize)) : page;
   }
 
@@ -660,7 +663,7 @@ class BTree
     // perform merging
     c_ver = l_node->Merge(r_node);
     parent->DeleteChild(l_pos);
-    gc_.AddGarbage(r_node);
+    gc_.AddGarbage<PageTarget>(r_node);
 
     return true;
   }
@@ -685,7 +688,7 @@ class BTree
     }
 
     // remove the root node
-    gc_.AddGarbage(node);
+    gc_.AddGarbage<PageTarget>(node);
     node = node->RemoveRoot();
     root_.store(node, std::memory_order_release);
 
@@ -774,7 +777,7 @@ class BTree
    *##################################################################################*/
 
   /// a garbage collector for node pages.
-  GC_t gc_{};
+  GC_t gc_{kDefaultGCTime, kDefaultGCThreadNum};
 
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};

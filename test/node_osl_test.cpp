@@ -17,7 +17,7 @@
 #include "b_tree/component/osl/node_fixlen.hpp"
 #include "b_tree/component/osl/node_varlen.hpp"
 
-// external libraries
+// external sources
 #include "gtest/gtest.h"
 
 namespace dbgroup::index::b_tree::component::osl::test

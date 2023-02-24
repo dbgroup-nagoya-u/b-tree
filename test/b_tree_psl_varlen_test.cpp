@@ -16,7 +16,7 @@
 
 #include "b_tree/b_tree.hpp"
 
-// organization libraries
+// external sources
 #include "external/index-fixtures/index_fixture.hpp"
 
 namespace dbgroup::index::test

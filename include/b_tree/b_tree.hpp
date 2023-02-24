@@ -21,10 +21,10 @@
 #include "utility.hpp"
 
 // actual B+tree implementations
-#include "component/oml/b_tree.hpp"
-#include "component/osl/b_tree.hpp"
-#include "component/pml/b_tree.hpp"
-#include "component/psl/b_tree.hpp"
+#include "b_tree/component/oml/b_tree.hpp"
+#include "b_tree/component/osl/b_tree.hpp"
+#include "b_tree/component/pml/b_tree.hpp"
+#include "b_tree/component/psl/b_tree.hpp"
 
 namespace dbgroup::index::b_tree
 {
@@ -84,8 +84,8 @@ class BTree
    *
    */
   explicit BTree(  //
-      const size_t gc_interval_micro = 1000,
-      const size_t gc_thread_num = 1)
+      const size_t gc_interval_micro = kDefaultGCTime,
+      const size_t gc_thread_num = kDefaultGCThreadNum)
       : b_tree_{gc_interval_micro, gc_thread_num}
   {
   }
