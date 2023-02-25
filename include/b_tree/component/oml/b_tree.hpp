@@ -833,7 +833,7 @@ class BTree
    *##################################################################################*/
 
   /// a garbage collector for node pages.
-  GC_t gc_{kDefaultGCTime, kDefaultGCThreadNum};
+  GC_t gc_{};
 
   /// a root node of this tree.
   std::atomic<Node_t *> root_{nullptr};
