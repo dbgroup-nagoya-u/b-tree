@@ -1150,7 +1150,7 @@ class NodeVarLen
 
       // check whether the node has sufficent space
       node_size += rec_len + sizeof(Metadata);
-      if (node_size + kMaxKeyLen > kPageSize) break;
+      if (node_size + kMaxKeyLen > kNodeCapacityForBulkLoading) break;
 
       // insert an entry into this node
       offset = SetPayload(offset, &payload, kPayLen);

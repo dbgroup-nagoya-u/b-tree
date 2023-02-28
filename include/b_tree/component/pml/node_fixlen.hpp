@@ -830,7 +830,7 @@ class NodeFixLen
     for (; iter < iter_end; ++iter) {
       // check whether the node has sufficent space
       node_size += rec_len;
-      if (node_size + 2 * kKeyLen > kPageSize) break;
+      if (node_size + 2 * kKeyLen > kNodeCapacityForBulkLoading) break;
 
       // insert an entry into this node
       const auto &[key, payload, key_len] = ParseEntry(*iter);

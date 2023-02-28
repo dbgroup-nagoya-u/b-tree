@@ -52,6 +52,9 @@ enum NodeRC {
 /// an expected maximum height of a tree.
 constexpr size_t kExpectedTreeHeight = 8;
 
+/// leave free space for later modifications.
+constexpr size_t kNodeCapacityForBulkLoading = kPageSize * 0.9;
+
 /// a sleep time for retrying.
 constexpr auto kRetryWait = std::chrono::microseconds{10};
 
