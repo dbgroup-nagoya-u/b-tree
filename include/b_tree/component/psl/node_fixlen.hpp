@@ -1,6 +1,6 @@
 
 /*
- * Copyright 2022 Database Group, Nagoya University
+ * Copyright 2023 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ namespace dbgroup::index::b_tree::component::psl
  * optimizes a page layout for fixed-length data.
  *
  * @tparam Key a target key class.
- * @tparam Comp a comparetor class for keys.
+ * @tparam Comp a comparator class for keys.
  */
 template <class Key, class Comp>
 class NodeFixLen
@@ -73,6 +73,8 @@ class NodeFixLen
   /**
    * @brief Construct a new root node.
    *
+   * @param l_key a separator key.
+   * @param l_key_len the length of the separator key.
    * @param l_node a left child node which is the previous root node.
    * @param r_node a right child node.
    */
@@ -114,8 +116,8 @@ class NodeFixLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a inner node.
-   * @return false otherwise.
+   * @retval true if this is a inner node.
+   * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsInner() const  //
@@ -163,7 +165,9 @@ class NodeFixLen
    * The returned node is locked with an SIX lock and the other is unlocked.
    *
    * @param key a search key.
-   * @return this node or a right sibling one.
+   * @retval 1st: this node or a right sibling one.
+   * @retval 2nd: a separator key.
+   * @retval 3rd: the length of the separator key.
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
@@ -919,7 +923,7 @@ class NodeFixLen
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    * @param prev_node a left sibling node.
-   * @param nodes the container of construcred nodes.
+   * @param nodes the container of constructed nodes.
    */
   template <class Entry>
   void
@@ -936,7 +940,7 @@ class NodeFixLen
     auto offset = kPageSize;
     auto node_size = kHeaderLen;
     for (; iter < iter_end; ++iter) {
-      // check whether the node has sufficent space
+      // check whether the node has sufficient space
       node_size += rec_len;
       if (node_size + 2 * kKeyLen > kNodeCapacityForBulkLoading) break;
 
@@ -1079,6 +1083,7 @@ class NodeFixLen
    *
    * @param offset an offset to the top of the record block.
    * @param payload a target payload to be written.
+   * @return the updated offset value.
    */
   auto
   SetPayload(  //
@@ -1186,7 +1191,6 @@ class NodeFixLen
   /**
    * @brief Parse an entry of bulkload according to key's type.
    *
-   * @tparam Payload a payload type.
    * @tparam Entry std::pair or std::tuple for containing entries.
    * @param entry a bulkload entry.
    * @retval 1st: a target key.

@@ -1,6 +1,6 @@
 
 /*
- * Copyright 2022 Database Group, Nagoya University
+ * Copyright 2023 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ namespace dbgroup::index::b_tree::component::oml
  * contain variable-length data.
  *
  * @tparam Key a target key class.
- * @tparam Comp a comparetor class for keys.
+ * @tparam Comp a comparator class for keys.
  */
 template <class Key, class Comp>
 class NodeVarLen
@@ -118,8 +118,8 @@ class NodeVarLen
    *##################################################################################*/
 
   /**
-   * @return true if this is a inner node.
-   * @return false otherwise.
+   * @retval true if this is a inner node.
+   * @retval false otherwise.
    */
   [[nodiscard]] constexpr auto
   IsInner() const  //
@@ -167,7 +167,11 @@ class NodeVarLen
    * The returned node is locked with an SIX lock and the other is unlocked.
    *
    * @param key a search key.
-   * @return this node or a right sibling one.
+   * @param r_node a split right node.
+   * @retval 1st: this node or a right sibling one.
+   * @retval 2nd: a separator key.
+   * @retval 3rd: the length of the separator key.
+   * @retval 4th: a version value for optimistic concurrency controls.
    */
   [[nodiscard]] auto
   GetValidSplitNode(  //
@@ -193,7 +197,7 @@ class NodeVarLen
   }
 
   /**
-   * @brief
+   * @brief Check if this node needs to do structure modification operations.
    *
    * @param new_rec_len the length of a new record.
    * @retval 1st: kNeedSplit if this node requires splitting before modification.
@@ -679,6 +683,7 @@ class NodeVarLen
    * @brief Read a payload of a specified key if it exists.
    *
    * @tparam Payload a class of payload.
+   * @param node a current node to be read.
    * @param key a target key.
    * @param out_payload a reference to be stored a target payload.
    * @retval kCompleted if a target record is read.
@@ -752,6 +757,7 @@ class NodeVarLen
    * target leaf node. If a specified key exists in a target leaf node, this function
    * does nothing and returns kKeyExist as a return code.
    *
+   * @param node a current node to be inserted.
    * @param key a target key to be written.
    * @param key_len the length of a target key.
    * @param payload a target payload to be written.
@@ -806,6 +812,7 @@ class NodeVarLen
    * does not exist in a target leaf node, this function does nothing and returns
    * kKeyNotExist as a return code.
    *
+   * @param node a current node to be updated.
    * @param key a target key to be written.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
@@ -846,6 +853,7 @@ class NodeVarLen
    * exist in a leaf node, this function does nothing and returns kKeyNotExist as a
    * return code.
    *
+   * @param node a current node to be deleted.
    * @param key a target key to be written.
    * @retval kSuccess if a record is deleted.
    * @retval kKeyNotExist otherwise.
@@ -879,7 +887,6 @@ class NodeVarLen
   /**
    * @brief Insert a new child node into this node.
    *
-   * @param l_node a left child node.
    * @param r_node a right child (i.e., new) node.
    * @param sep_key a separator key.
    * @param sep_key_len the length of the separator key.
@@ -913,7 +920,6 @@ class NodeVarLen
   /**
    * @brief Delete a child node from this node.
    *
-   * @param l_node a left child node.
    * @param pos the position of the left child node.
    */
   void
@@ -1058,7 +1064,7 @@ class NodeVarLen
    * @param iter the begin position of target records.
    * @param iter_end the end position of target records.
    * @param prev_node a left sibling node.
-   * @param nodes the container of construcred nodes.
+   * @param nodes the container of constructed nodes.
    */
   template <class Entry>
   void
@@ -1080,7 +1086,7 @@ class NodeVarLen
       const auto &[key, payload, key_len] = ParseEntry(*iter);
       const auto rec_len = key_len + kPayLen;
 
-      // check whether the node has sufficent space
+      // check whether the node has sufficient space
       node_size += rec_len + sizeof(Metadata);
       if (node_size + kMaxKeyLen > kNodeCapacityForBulkLoading) break;
 
@@ -1408,6 +1414,7 @@ class NodeVarLen
    * @param offset an offset to the top of the record block.
    * @param key a target key to be set.
    * @param key_len the length of the key.
+   * @return the updated offset value.
    */
   auto
   SetKey(  //
@@ -1433,6 +1440,7 @@ class NodeVarLen
    * @param offset an offset to the top of the record block.
    * @param payload a target payload to be written.
    * @param pay_len the length of a target payload.
+   * @return the updated offset value.
    */
   auto
   SetPayload(  //
@@ -1653,7 +1661,6 @@ class NodeVarLen
   /**
    * @brief Parse an entry of bulkload according to key's type.
    *
-   * @tparam Payload a payload type.
    * @tparam Entry std::pair or std::tuple for containing entries.
    * @param entry a bulkload entry.
    * @retval 1st: a target key.
