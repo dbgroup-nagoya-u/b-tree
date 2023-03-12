@@ -72,7 +72,6 @@ class BTree
                                             BTreePSL<Key, Payload, Comp, kUseVarLenLayout>,
                                             BTreePML<Key, Payload, Comp, kUseVarLenLayout>>>;
 
-  using RecordIterator_t = component::RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
 
   /*####################################################################################
@@ -136,8 +135,7 @@ class BTree
   auto
   Scan(  //
       const ScanKey &begin_key = std::nullopt,
-      const ScanKey &end_key = std::nullopt)  //
-      -> RecordIterator_t
+      const ScanKey &end_key = std::nullopt)
   {
     return b_tree_.Scan(begin_key, end_key);
   }

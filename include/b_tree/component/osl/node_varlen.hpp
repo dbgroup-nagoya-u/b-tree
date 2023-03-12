@@ -149,6 +149,16 @@ class NodeVarLen
   }
 
   /**
+   * @return the next node.
+   */
+  [[nodiscard]] auto
+  GetNextNode()  //
+      -> Node *
+  {
+    return next_;
+  }
+
+  /**
    * @return the next node with a shared lock.
    */
   [[nodiscard]] auto
@@ -276,6 +286,17 @@ class NodeVarLen
   }
 
   /**
+   * @param pos the position of a target record.
+   * @return the size of a target key.
+   */
+  [[nodiscard]] auto
+  GetKeySize(const size_t pos) const  //
+      -> size_t
+  {
+    return meta_array_[pos].key_len;
+  }
+
+  /**
    * @tparam Payload a class of payload.
    * @param pos the position of a target record.
    * @return a payload in a target record.
@@ -339,6 +360,27 @@ class NodeVarLen
   /*####################################################################################
    * Public lock management APIs
    *##################################################################################*/
+
+  /**
+   * @return The current version value.
+   */
+  auto
+  GetVersion()  //
+      -> uint64_t
+  {
+    return mutex_.GetVersion();
+  }
+
+  /**
+   * @param ver an expected version value.
+   * @retval true if the given version value is the same as the current one.
+   * @retval false otherwise.
+   */
+  auto
+  HasSameVersion(const uint64_t ver)
+  {
+    return mutex_.HasSameVersion(ver);
+  }
 
   /**
    * @brief Acquire a shared lock for this node.
