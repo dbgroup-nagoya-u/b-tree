@@ -393,6 +393,18 @@ class BTree
    *##################################################################################*/
 
   /**
+   * @brief Allocate or reuse a memory region for a base node.
+   *
+   * @returns the reserved memory page.
+   */
+  [[nodiscard]] static auto
+  GetNodePage()  //
+      -> void *
+  {
+    return ::operator new(kPageSize, component::kCacheAlignVal);
+  }
+
+  /**
    * @return a root node with a shared lock.
    */
   [[nodiscard]] auto
@@ -528,7 +540,7 @@ class BTree
       }
     }
 
-    delete node;
+    DeleteAlignedPtr(node);
   }
 
   /**
@@ -587,7 +599,7 @@ class BTree
       -> Node_t *
   {
     parent->UpgradeToX();
-    auto *r_node = new Node_t{l_node->IsInner()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsInner()};
     l_node->Split(r_node);
     parent->InsertChild(l_node, r_node, pos);
     return r_node;
@@ -606,9 +618,9 @@ class BTree
     mutex_.UpgradeToX();
 
     auto *l_node = root_;
-    auto *r_node = new Node_t{l_node->IsInner()};
+    auto *r_node = new (GetNodePage()) Node_t{l_node->IsInner()};
     l_node->Split(r_node);
-    root_ = new Node_t{l_node, r_node};
+    root_ = new (GetNodePage()) Node_t{l_node, r_node};
 
     mutex_.DowngradeToSIX();
     return l_node->GetValidSplitNode(key, r_node);
@@ -634,7 +646,7 @@ class BTree
     // perform merging
     l_node->Merge(r_node);
     parent->DeleteChild(l_pos);
-    delete r_node;
+    DeleteAlignedPtr(r_node);
   }
 
   /**
@@ -650,7 +662,7 @@ class BTree
       // if a root node has only one child, shrink a tree
       auto *child = root_->template GetPayload<Node_t *>(0);
       child->LockSIX();
-      delete root_;
+      DeleteAlignedPtr(root_);
       root_ = child;
 
       mutex_.DowngradeToSIX();
@@ -716,7 +728,7 @@ class BTree
     // load child nodes into parent nodes
     const auto &iter_end = iter + n;
     for (Node_t *prev_node = nullptr; iter < iter_end;) {
-      auto *node = new Node_t{kIsInner};
+      auto *node = new (GetNodePage()) Node_t{kIsInner};
       if constexpr (!kUseVarLenLayout && !kIsInner) {
         node->SetPayloadLength(kPayLen);
       }
@@ -739,7 +751,7 @@ class BTree
    *##################################################################################*/
 
   /// a root node of this tree.
-  Node_t *root_ = new Node_t{kLeafFlag};
+  Node_t *root_ = new (GetNodePage()) Node_t{kLeafFlag};
 
   /// mutex for managing a tree lock.
   ::dbgroup::lock::PessimisticLock mutex_{};

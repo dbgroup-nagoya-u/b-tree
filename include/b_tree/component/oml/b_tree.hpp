@@ -417,7 +417,7 @@ class BTree
       -> void *
   {
     auto *page = gc_.template GetPageIfPossible<PageTarget>();
-    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
   }
 
   /**
@@ -555,7 +555,7 @@ class BTree
       }
     }
 
-    ::operator delete(node);
+    DeleteAlignedPtr(node);
   }
 
   /**

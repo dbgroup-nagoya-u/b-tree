@@ -121,6 +121,9 @@ constexpr size_t kMinUsedSpaceSize = B_TREE_MIN_USED_SPACE_SIZE;
 /// The maximum size of variable-length data.
 constexpr size_t kMaxVarLenDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
 
+/// Assumes that one cache line is represented by 64 bytes.
+constexpr size_t kCacheLineSize = 64;
+
 }  // namespace dbgroup::index::b_tree
 
 #endif

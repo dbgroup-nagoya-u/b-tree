@@ -1608,8 +1608,9 @@ class NodeVarLen
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node>          //
-      temp_node_{new (::operator new(kPageSize)) Node{0}};  // NOLINT
+  static thread_local inline std::unique_ptr<Node, std::function<void(void *)>>  //
+      temp_node_{new (::operator new(kPageSize, kCacheAlignVal)) Node{0},        // NOLINT
+                 std::function<void(void *)>{DeleteAlignedPtr}};
 };
 
 }  // namespace dbgroup::index::b_tree::component::psl

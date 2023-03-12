@@ -111,23 +111,6 @@ class NodeVarLen
   ~NodeVarLen() = default;
 
   /*####################################################################################
-   * new/delete operators
-   *##################################################################################*/
-
-  static auto
-  operator new([[maybe_unused]] std::size_t n)  //
-      -> void *
-  {
-    return ::operator new(kPageSize);
-  }
-
-  static void
-  operator delete(void *p) noexcept
-  {
-    ::operator delete(p);
-  }
-
-  /*####################################################################################
    * Public getters for header information
    *##################################################################################*/
 
@@ -1406,8 +1389,9 @@ class NodeVarLen
   Metadata meta_array_[0];
 
   // a temporary node for SMOs.
-  static thread_local inline std::unique_ptr<Node> temp_node_ =  // NOLINT
-      std::make_unique<Node>(0);
+  static thread_local inline std::unique_ptr<Node, std::function<void(void *)>>  //
+      temp_node_{new (::operator new(kPageSize, kCacheAlignVal)) Node{0},        // NOLINT
+                 std::function<void(void *)>{DeleteAlignedPtr}};
 };
 
 }  // namespace dbgroup::index::b_tree::component::pml
