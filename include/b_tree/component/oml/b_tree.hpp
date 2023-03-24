@@ -76,6 +76,8 @@ class BTree
   /**
    * @brief Construct a new BTree object.
    *
+   * @param gc_interval_micro time interval for garbage collection [us].
+   * @param gc_thread_num the number of worker threads for garbage collection.
    */
   BTree(  //
       const size_t gc_interval_micro,
@@ -118,6 +120,7 @@ class BTree
    * @brief The entity of a function for reading records.
    *
    * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval the payload of a given key wrapped with std::optional if it is in this tree.
    * @retval std::nullopt otherwise.
    */
@@ -204,7 +207,7 @@ class BTree
    * @param key a target key to be inserted.
    * @param payload a target payload to be inserted.
    * @param key_len the length of a target key.
-   * @retval.kSuccess if inserted.
+   * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
   auto
@@ -273,6 +276,7 @@ class BTree
   /**
    * @brief The entity of a function for bulkinserting records.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param entries vector of entries to be bulkloaded.
    * @param thread_num the number of threads to perform bulkloading.
    * @return kSuccess.
@@ -437,7 +441,9 @@ class BTree
    *
    * This function performs SMOs for a root node if required.
    *
-   * @return a root node or a valid child node if a root node is split.
+   * @param key a search key.
+   * @retval 1st: a root node or a valid child node if a root node is split.
+   * @return 2nd: version value of the node.
    */
   [[nodiscard]] auto
   GetRootForWrite(const Key &key)  //
@@ -615,9 +621,14 @@ class BTree
   /**
    * @brief Split a given node.
    *
-   * @param l_node a node to be split.
-   * @param parent a parent node of `l_node`.
-   * @param pos the position of `l_node` in its parent node.
+   * @param key a search key.
+   * @param child a node to be split.
+   * @param c_ver an expected version value of `child`.
+   * @param parent a parent node of `child`.
+   * @param p_ver an expected version value of `parent`.
+   * @param pos the position of `child` in its parent node.
+   * @retval true if succeeded.
+   * @retval false if failed.
    */
   auto
   TrySplit(  //
@@ -655,7 +666,10 @@ class BTree
    * @brief Split a root node and install a new root node into this tree.
    *
    * @param key a search key.
-   * @return one of the split child nodes that includes a given key.
+   * @param node a node expected to be the root node.
+   * @param ver an expected version value of `node`.
+   * @retval true if succeeded.
+   * @retval false if failed.
    */
   [[nodiscard]] auto
   TryRootSplit(  //
@@ -693,8 +707,12 @@ class BTree
    * @brief Merge a given node with its right-sibling node if possible.
    *
    * @param l_node a node to be merged.
+   * @param c_ver an expected version value of `l_node`.
    * @param parent a parent node of `l_node`.
-   * @param pos the position of `l_node` in its parent node.
+   * @param p_ver an expected version value of `parent`.
+   * @param l_pos the position of `l_node` in its parent node.
+   * @retval true if succeeded.
+   * @retval false if failed.
    */
   auto
   TryMerge(  //
@@ -727,6 +745,10 @@ class BTree
   /**
    * @brief Remove a root node that has only one child node.
    *
+   * @param node a node expected to be the root node.
+   * @param ver an expected version value of `node`.
+   * @retval true if succeeded.
+   * @retval false if failed.
    */
   auto
   TryShrinkTree(  //
@@ -761,6 +783,7 @@ class BTree
    * Note that this function does not create a root node. The main process must create a
    * root node by using the nodes constructed by this function.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
    * @retval 1st: the height of a constructed tree.
@@ -789,9 +812,10 @@ class BTree
   /**
    * @brief Construct internal nodes based on given child nodes.
    *
-   * @param child_nodes child nodes in a lower layer.
-   * @retval true if constructed nodes cannot be contained in a single node.
-   * @retval false otherwise.
+   * @tparam Entry a container of a key/payload pair.
+   * @param iter the begin position of target records.
+   * @param n the number of entries to be bulkloaded.
+   * @return constructed nodes.
    */
   template <class Entry>
   auto
