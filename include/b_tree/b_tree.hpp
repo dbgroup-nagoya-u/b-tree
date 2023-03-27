@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Database Group, Nagoya University
+ * Copyright 2023 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -114,6 +114,7 @@ class BTree
    * @brief Read the payload corresponding to a given key if it exists.
    *
    * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval the payload of a given key wrapped with std::optional if it is in this tree.
    * @retval std::nullopt otherwise.
    */
@@ -249,6 +250,7 @@ class BTree
    * variable-length keys). Note that keys in records are assumed to be unique and
    * sorted.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param entries vector of entries to be bulkloaded.
    * @param thread_num the number of threads to perform bulkloading.
    * @return kSuccess.
