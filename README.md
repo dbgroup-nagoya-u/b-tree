@@ -4,6 +4,16 @@
 
 This repository contains open source implementations of B<sup>+</sup>-trees for research use. The purpose of this implementation is to reproduce B<sup>+</sup>-trees and measure its performance.
 
+- [Build](#build)
+    - [Prerequisites](#prerequisites)
+    - [Build Options](#build-options)
+    - [Build and Run Unit Tests](#build-and-run-unit-tests)
+- [Usage](#usage)
+    - [Linking by CMake](#linking-by-cmake)
+    - [Implemented B+-Tree Variants](#implemented-b-tree-variants)
+    - [Read/Write APIs](#readwrite-apis)
+- [Acknowledgments](#acknowledgments)
+
 ## Build
 
 **Note**: this is a header only library. You can use this without pre-build.
@@ -70,6 +80,42 @@ ctest -C Release
     )
     ```
 
+### Implemented B<sup>+</sup>-Tree Variants
+
+We implement four variants of B<sup>+</sup>-trees.
+
+1. Pessimistic Multi-level Locking (PML): using pessimistic locking with multi-level SMOs (i.e., lock coupling[^1]).
+2. Pessimistic Single-level Locking (PSL): using pessimistic locking with single-level SMOs (i.e., B<sup>link</sup>-tree[^2]).
+3. Optimistic Multi-level Locking (OML): using optimistic locking with multi-level SMOs (i.e., optimistic lock coupling[^3]).
+4. Optimistic Single-level Locking (OSL): using optimistic locking with single-level SMOs (i.e., OLFIT[^4]).
+
+Our `::dbgroup::index::b_tree::BTree` uses OSL by default, but you can select a preferred one as follows:
+
+1. `::dbgroup::index::b_tree::BTreePML`
+2. `::dbgroup::index::b_tree::BTreePSL`
+3. `::dbgroup::index::b_tree::BTreeOML`
+4. `::dbgroup::index::b_tree::BTreeOSL`
+
+Note that our B<sup>+</sup>-trees optimize their node layout with fixed-length data (i.e., non-string keys). If you want to control the node layout, please use the following aliases:
+
+- `::dbgroup::index::b_tree::BTreePMLVarLen`
+- `::dbgroup::index::b_tree::BTreePMLFixLen`
+- `::dbgroup::index::b_tree::BTreePSLVarLen`
+- `::dbgroup::index::b_tree::BTreePSLFixLen`
+- `::dbgroup::index::b_tree::BTreeOMLVarLen`
+- `::dbgroup::index::b_tree::BTreeOMLFixLen`
+- `::dbgroup::index::b_tree::BTreeOSLVarLen`
+- `::dbgroup::index::b_tree::BTreeOSLFixLen`
+
 ### Read/Write APIs
 
-We provide the same read/write APIs for the reproduced indexes. See [here](https://github.com/dbgroup-nagoya-u/index-benchmark/wiki/Common-APIs-for-Index-Implementations) for common APIs and usage examples.
+We provide the same read/write APIs for the implemented indexes. See [here](https://github.com/dbgroup-nagoya-u/index-benchmark/wiki/Common-APIs-for-Index-Implementations) for common APIs and usage examples.
+
+## Acknowledgments
+
+This work is based on results from project JPNP16007 commissioned by the New Energy and Industrial Technology Development Organization (NEDO), and it was supported partially by KAKENHI (JP20K19804, JP21H03555, and JP22H03594).
+
+[^1]: [Theodore Johnson and Dennis Sasha, "The Performance of Current B-Tree Algorithms," ACM TODS Vol. 18, No. 1, pp. 51-101, 1993.](https://doi.org/10.1145/151284.151286)
+[^2]: [Philip L. Lehman and S. Bing Yao, "Efficient Locking for Concurrent Operations on B-Trees," ACM TODS Vol. 6, No. 4, pp. 650-670, 1981.](https://doi.org/10.1145/319628.319663)
+[^3]: [Viktor Leis, Florian Scheibner, Alfons Kemper, and Thomas Neumann. "The ART of Practical Synchronization," In Proc. DaMoN, Article No. 3, 2016.](https://doi.org/10.1145/2933349.2933352)
+[^4]: [Sang K. Cha, Sangyong Hwang, Kihong Kim, and Keunjoo Kwon, "Cache-Conscious Concurrency Control of Main-Memory Indexes on Shared-Memory Multiprocessor Systems," In Proc. VLDB, 181-190, 2001.](https://dl.acm.org/doi/10.5555/645927.672375)

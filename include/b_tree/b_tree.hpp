@@ -148,13 +148,12 @@ class BTree
   /**
    * @brief Write (i.e., put) a given key/payload pair.
    *
-   * If a given key does not exist in this tree, this function performs an insert
-   * operation. If a given key has been already inserted, this function perfroms an
-   * update operation. Thus, this function always returns kSuccess as a return code.
+   * This function always overwrites a payload and can be optimized for that purpose;
+   * the procedure may omit the key uniqueness check.
    *
-   * @param key a target key to be written.
-   * @param payload a target payload to be written.
-   * @param key_len the length of a target key.
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
    * @return kSuccess.
    */
   auto
@@ -170,14 +169,13 @@ class BTree
   /**
    * @brief Insert a given key/payload pair.
    *
-   * This function performs a uniqueness check in its processing. If a given key does
-   * not exist in this tree, this function inserts a target payload to this tree. If
-   * there is a given key in this tree, this function does nothing and returns kKeyExist
-   * as a return code.
+   * This function performs a uniqueness check on its processing. If the given key does
+   * not exist in this tree, this function inserts a target payload into this tree. If
+   * the given key exists in this tree, this function does nothing and returns kKeyExist.
    *
-   * @param key a target key to be inserted.
-   * @param payload a target payload to be inserted.
-   * @param key_len the length of a target key.
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
    * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
@@ -194,14 +192,14 @@ class BTree
   /**
    * @brief Update the record corresponding to a given key with a given payload.
    *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function updates the corresponding record. If a given key
-   * does not exist in this tree, this function does nothing and returns kKeyNotExist as
-   * a return code.
+   * This function performs a uniqueness check on its processing. If the given key
+   * exists in this tree, this function updates the corresponding payload. If the given
+   * key does not exist in this tree, this function does nothing and returns
+   * kKeyNotExist.
    *
-   * @param key a target key to be updated.
-   * @param payload a payload for updating.
-   * @param key_len the length of a target key (maybe unused in B+trees).
+   * @param key a target key.
+   * @param payload a target payload.
+   * @param key_len the length of the target key.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist otherwise.
    */
@@ -218,12 +216,12 @@ class BTree
   /**
    * @brief Delete the record corresponding to a given key from this tree.
    *
-   * This function performs a uniqueness check in its processing. If there is a given
-   * key in this tree, this function deletes it. If a given key does not exist in this
-   * tree, this function does nothing and returns kKeyNotExist as a return code.
+   * This function performs a uniqueness check on its processing. If the given key
+   * exists in this tree, this function deletes it. If the given key does not exist in
+   * this tree, this function does nothing and returns kKeyNotExist.
    *
-   * @param key a target key to be deleted.
-   * @param key_len the length of a target key (maybe unused in B+trees).
+   * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval kSuccess if deleted.
    * @retval kKeyNotExist otherwise.
    */
@@ -243,14 +241,14 @@ class BTree
   /**
    * @brief Bulkload specified kay/payload pairs.
    *
-   * This function bulkloads given entries into this index. The entries are assumed to
-   * be given as a vector of pairs of Key and Payload (or key/payload/key-length for
-   * variable-length keys). Note that keys in records are assumed to be unique and
+   * This function loads the given entries into this index, assuming that the entries
+   * are given as a vector of key/payload pairs (or the tuples key/payload/key-length
+   * for variable-length keys). Note that keys in records are assumed to be unique and
    * sorted.
    *
    * @tparam Entry a container of a key/payload pair.
-   * @param entries vector of entries to be bulkloaded.
-   * @param thread_num the number of threads to perform bulkloading.
+   * @param entries the vector of entries to be bulkloaded.
+   * @param thread_num the number of threads used for bulk loading.
    * @return kSuccess.
    */
   template <class Entry>
@@ -275,7 +273,7 @@ class BTree
    *
    * @retval 1st: the number of nodes.
    * @retval 2nd: the actual usage in bytes.
-   * @retval 3rd: the virtual usage in bytes.
+   * @retval 3rd: the virtual usage (i.e., reserved memory) in bytes.
    */
   auto
   CollectStatisticalData()  //
