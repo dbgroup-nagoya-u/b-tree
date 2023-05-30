@@ -1,5 +1,5 @@
 /*
- * Copyright 2022 Database Group, Nagoya University
+ * Copyright 2023 Database Group, Nagoya University
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,8 @@ class BTree
   /**
    * @brief Construct a new BTree object.
    *
+   * @param gc_interval_micro time interval for garbage collection [us].
+   * @param gc_thread_num the number of worker threads for garbage collection.
    */
   BTree(  //
       [[maybe_unused]] const size_t gc_interval_micro,
@@ -109,6 +111,7 @@ class BTree
    * @brief The entity of a function for reading records.
    *
    * @param key a target key.
+   * @param key_len the length of the target key.
    * @retval the payload of a given key wrapped with std::optional if it is in this tree.
    * @retval std::nullopt otherwise.
    */
@@ -186,7 +189,7 @@ class BTree
    * @param key a target key to be inserted.
    * @param payload a target payload to be inserted.
    * @param key_len the length of a target key.
-   * @retval.kSuccess if inserted.
+   * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
   auto
@@ -245,6 +248,7 @@ class BTree
   /**
    * @brief The entity of a function for bulkinserting records.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param entries vector of entries to be bulkloaded.
    * @param thread_num the number of threads to perform bulkloading.
    * @return kSuccess.
@@ -425,6 +429,7 @@ class BTree
    *
    * This function performs SMOs for a root node if required.
    *
+   * @param key a search key.
    * @return a root node or a valid child node if a root node is split.
    */
   [[nodiscard]] auto
@@ -590,6 +595,7 @@ class BTree
    * @param l_node a node to be split.
    * @param parent a parent node of `l_node`.
    * @param pos the position of `l_node` in its parent node.
+   * @return a split right node.
    */
   auto
   Split(  //
@@ -679,6 +685,7 @@ class BTree
    * Note that this function does not create a root node. The main process must create a
    * root node by using the nodes constructed by this function.
    *
+   * @tparam Entry a container of a key/payload pair.
    * @param iter the begin position of target records.
    * @param n the number of entries to be bulkloaded.
    * @retval 1st: the height of a constructed tree.
@@ -707,9 +714,10 @@ class BTree
   /**
    * @brief Construct internal nodes based on given child nodes.
    *
-   * @param child_nodes child nodes in a lower layer.
-   * @retval true if constructed nodes cannot be contained in a single node.
-   * @retval false otherwise.
+   * @tparam Entry a container of a key/payload pair.
+   * @param iter the begin position of target records.
+   * @param n the number of entries to be bulkloaded.
+   * @return constructed nodes.
    */
   template <class Entry>
   auto
