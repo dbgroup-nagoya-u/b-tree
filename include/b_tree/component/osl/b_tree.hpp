@@ -27,9 +27,9 @@
 #include "memory/epoch_based_gc.hpp"
 
 // local sources
+#include "b_tree/component/optimistic_record_iterator.hpp"
 #include "b_tree/component/osl/node_fixlen.hpp"
 #include "b_tree/component/osl/node_varlen.hpp"
-#include "b_tree/component/record_iterator.hpp"
 
 namespace dbgroup::index::b_tree::component::osl
 {
@@ -57,7 +57,7 @@ class BTree
   using NodeFixLen_t = NodeFixLen<Key, Comp>;
   using Node_t = std::conditional_t<kUseVarLenLayout, NodeVarLen_t, NodeFixLen_t>;
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
-  using RecordIterator_t = RecordIterator<BTree_t>;
+  using RecordIterator_t = OptimisticRecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
 
@@ -154,22 +154,9 @@ class BTree
       -> RecordIterator_t
   {
     auto &&guard = gc_.CreateEpochGuard();
+    auto *node = (begin_key) ? SearchLeafNode(std::get<0>(*begin_key)) : SearchLeftmostLeaf();
 
-    Node_t *node{};
-    size_t begin_pos = 0;
-
-    if (begin_key) {
-      const auto &[key, key_len, is_closed] = begin_key.value();
-      node = SearchLeafNode(key);
-      Node_t::CheckKeyRangeAndLockForRead(node, key);
-      const auto [rc, pos] = node->SearchRecord(key);
-      begin_pos = (rc == NodeRC::kKeyAlreadyInserted && !is_closed) ? pos + 1 : pos;
-    } else {
-      node = SearchLeftmostLeaf();
-    }
-
-    const auto [is_end, end_pos] = node->SearchEndPositionFor(end_key);
-    return RecordIterator_t{node, begin_pos, end_pos, end_key, is_end, std::move(guard)};
+    return RecordIterator_t{node, begin_key, end_key, std::move(guard)};
   }
 
   /*####################################################################################
@@ -469,7 +456,7 @@ class BTree
       -> void *
   {
     auto *page = gc_.template GetPageIfPossible<PageTarget>();
-    return (page == nullptr) ? (::operator new(kPageSize)) : page;
+    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
   }
 
   /**
@@ -604,7 +591,7 @@ class BTree
       }
     }
 
-    ::operator delete(node);
+    DeleteAlignedPtr(node);
   }
 
   /**

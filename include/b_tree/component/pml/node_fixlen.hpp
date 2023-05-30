@@ -105,23 +105,6 @@ class NodeFixLen
   ~NodeFixLen() = default;
 
   /*####################################################################################
-   * new/delete operators
-   *##################################################################################*/
-
-  static auto
-  operator new([[maybe_unused]] std::size_t n)  //
-      -> void *
-  {
-    return ::operator new(kPageSize);
-  }
-
-  static void
-  operator delete(void *p) noexcept
-  {
-    ::operator delete(p);
-  }
-
-  /*####################################################################################
    * Public getters for header information
    *##################################################################################*/
 

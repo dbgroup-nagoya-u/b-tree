@@ -69,7 +69,7 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = std::unique_ptr<Node>(GetLeafNode());
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       node_->SetPayloadLength(kPayLen);
     }
@@ -79,6 +79,17 @@ class NodeFixture : public testing::Test
   TearDown() override
   {
     node_.reset(nullptr);
+  }
+
+  /*####################################################################################
+   * Utilities
+   *##################################################################################*/
+
+  static auto
+  GetLeafNode()  //
+      -> Node *
+  {
+    return new (::operator new(kPageSize, kCacheAlignVal)) Node{kLeafFlag};
   }
 
   /*####################################################################################
@@ -278,7 +289,7 @@ class NodeFixture : public testing::Test
     }
 
     // perform splitting
-    auto *r_node = new Node{kLeafFlag};
+    auto *r_node = GetLeafNode();
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       r_node->SetPayloadLength(kPayLen);
     }
@@ -312,7 +323,7 @@ class NodeFixture : public testing::Test
     auto *r_node = node_.release();
 
     // fill a left node
-    node_ = std::make_unique<Node>(kLeafFlag);
+    node_ = std::unique_ptr<Node>(GetLeafNode());
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       node_->SetPayloadLength(kPayLen);
     }
@@ -326,7 +337,7 @@ class NodeFixture : public testing::Test
     node_->LockSIX();
     node_->Merge(r_node);
     node_->UnlockSIX();
-    delete r_node;
+    DeleteAlignedPtr(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {

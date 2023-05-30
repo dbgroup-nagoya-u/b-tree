@@ -67,9 +67,23 @@ constexpr uint32_t kInnerFlag = 1;
 /// a flag for indicating closed-interval.
 constexpr bool kClosed = true;
 
+/// the chacheline size for memory alignment.
+constexpr std::align_val_t kCacheAlignVal = static_cast<std::align_val_t>(kCacheLineSize);
+
 /*######################################################################################
  * Internal utility classes
  *####################################################################################*/
+
+/**
+ * @brief A deleter function to release aligned pages.
+ *
+ * @param ptr the address of pages to be released.
+ */
+inline void
+DeleteAlignedPtr(void *ptr)
+{
+  ::operator delete(ptr, kCacheAlignVal);
+}
 
 /**
  * @brief A struct for representing GC targets.
@@ -83,9 +97,7 @@ struct PageTarget {
   static constexpr bool kReusePages = true;
 
   // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter = [](void *ptr) {
-    ::operator delete(ptr);
-  };
+  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
 };
 
 /*######################################################################################

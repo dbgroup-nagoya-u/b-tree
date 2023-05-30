@@ -147,6 +147,16 @@ class NodeFixLen
   }
 
   /**
+   * @return the next node.
+   */
+  [[nodiscard]] auto
+  GetNextNode()  //
+      -> Node *
+  {
+    return next_;
+  }
+
+  /**
    * @return the next node with a shared lock.
    */
   [[nodiscard]] auto
@@ -339,6 +349,27 @@ class NodeFixLen
   /*####################################################################################
    * Public lock management APIs
    *##################################################################################*/
+
+  /**
+   * @return The current version value.
+   */
+  auto
+  GetVersion()  //
+      -> uint64_t
+  {
+    return mutex_.GetVersion();
+  }
+
+  /**
+   * @param ver an expected version value.
+   * @retval true if the given version value is the same as the current one.
+   * @retval false otherwise.
+   */
+  auto
+  HasSameVersion(const uint64_t ver)
+  {
+    return mutex_.HasSameVersion(ver);
+  }
 
   /**
    * @brief Acquire a shared lock for this node.
