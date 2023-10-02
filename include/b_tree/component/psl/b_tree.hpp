@@ -59,7 +59,7 @@ class BTree
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = RecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Page>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -466,8 +466,8 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<PageTarget>();
-    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
+    auto *page = gc_.template GetPageIfPossible<Page>();
+    return (page == nullptr) ? (::dbgroup::memory::Allocate<Page>()) : page;
   }
 
   /**
@@ -617,7 +617,7 @@ class BTree
       }
     }
 
-    DeleteAlignedPtr(node);
+    ::dbgroup::memory::Release<Page>(node);
   }
 
   /**
@@ -813,7 +813,7 @@ class BTree
       switch (node->DeleteChild(*del_key)) {
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
-          gc_.AddGarbage<PageTarget>(r_child);
+          gc_.AddGarbage<Page>(r_child);
           return;
 
         case NodeRC::kAbortMerge:
@@ -829,7 +829,7 @@ class BTree
         case NodeRC::kNeedMerge:
         default:
           l_child->Merge(r_child);
-          gc_.AddGarbage<PageTarget>(r_child);
+          gc_.AddGarbage<Page>(r_child);
 
           if (stack.empty()) {
             TryShrinkTree(node);
@@ -852,7 +852,7 @@ class BTree
   {
     if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
-        gc_.AddGarbage<PageTarget>(node);
+        gc_.AddGarbage<Page>(node);
         node = node->RemoveRoot();
       } while (node->GetRecordCount() == 1 && node->IsInner());
       root_.store(node, std::memory_order_relaxed);

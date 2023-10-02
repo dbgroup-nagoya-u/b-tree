@@ -69,7 +69,7 @@ class NodeFixture : public testing::Test
   void
   SetUp() override
   {
-    node_ = std::unique_ptr<Node>(GetLeafNode());
+    node_ = GetLeafNode();
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       node_->SetPayloadLength(kPayLen);
     }
@@ -78,7 +78,7 @@ class NodeFixture : public testing::Test
   void
   TearDown() override
   {
-    node_.reset(nullptr);
+    ::dbgroup::memory::Release<Page>(node_);
   }
 
   /*####################################################################################
@@ -89,7 +89,7 @@ class NodeFixture : public testing::Test
   GetLeafNode()  //
       -> Node *
   {
-    return new (::operator new(kPageSize, kCacheAlignVal)) Node{kLeafFlag};
+    return new (::dbgroup::memory::Allocate<Page>()) Node{kLeafFlag};
   }
 
   /*####################################################################################
@@ -305,7 +305,8 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
-        node_.reset(r_node);
+        ::dbgroup::memory::Release<Page>(node_);
+        node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
     }
@@ -320,10 +321,10 @@ class NodeFixture : public testing::Test
     for (size_t i = kHalfNum; i < kRecNumInNode; ++i) {
       Write(i, i);
     }
-    auto *r_node = node_.release();
+    auto *r_node = node_;
 
     // fill a left node
-    node_ = std::unique_ptr<Node>(GetLeafNode());
+    node_ = GetLeafNode();
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       node_->SetPayloadLength(kPayLen);
     }
@@ -337,7 +338,7 @@ class NodeFixture : public testing::Test
     node_->LockSIX();
     node_->Merge(r_node);
     node_->UnlockSIX();
-    DeleteAlignedPtr(r_node);
+    ::dbgroup::memory::Release<Page>(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
@@ -349,7 +350,7 @@ class NodeFixture : public testing::Test
    * Internal member variables
    *##################################################################################*/
 
-  std::unique_ptr<Node> node_{nullptr};
+  Node *node_{nullptr};
 };
 
 /*######################################################################################

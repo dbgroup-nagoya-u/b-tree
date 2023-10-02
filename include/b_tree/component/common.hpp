@@ -70,34 +70,23 @@ constexpr bool kClosed = true;
 /// the chacheline size for memory alignment.
 constexpr std::align_val_t kCacheAlignVal = static_cast<std::align_val_t>(kCacheLineSize);
 
+/// The alignment size for internal pages.
+constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
+
 /*######################################################################################
  * Internal utility classes
  *####################################################################################*/
 
 /**
- * @brief A deleter function to release aligned pages.
- *
- * @param ptr the address of pages to be released.
- */
-inline void
-DeleteAlignedPtr(void *ptr)
-{
-  ::operator delete(ptr, kCacheAlignVal);
-}
-
-/**
- * @brief A struct for representing GC targets.
+ * @brief A dummy struct for representing internal pages.
  *
  */
-struct PageTarget {
-  // do not call destructor
-  using T = void;
-
-  // do not reuse pages in this example
+struct alignas(kPageAlign) Page : public ::dbgroup::memory::DefaultTarget {
+  // reuse pages
   static constexpr bool kReusePages = true;
 
-  // use the standard delete function to release garbage
-  static const inline std::function<void(void *)> deleter{DeleteAlignedPtr};
+  /// @brief A dummy member variable to ensure the page size.
+  uint8_t dummy[kPageSize];
 };
 
 /*######################################################################################

@@ -405,7 +405,7 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    return ::operator new(kPageSize, component::kCacheAlignVal);
+    return ::dbgroup::memory::Allocate<Page>();
   }
 
   /**
@@ -545,7 +545,7 @@ class BTree
       }
     }
 
-    DeleteAlignedPtr(node);
+    ::dbgroup::memory::Release<Page>(node);
   }
 
   /**
@@ -652,7 +652,7 @@ class BTree
     // perform merging
     l_node->Merge(r_node);
     parent->DeleteChild(l_pos);
-    DeleteAlignedPtr(r_node);
+    ::dbgroup::memory::Release<Page>(r_node);
   }
 
   /**
@@ -668,7 +668,7 @@ class BTree
       // if a root node has only one child, shrink a tree
       auto *child = root_->template GetPayload<Node_t *>(0);
       child->LockSIX();
-      DeleteAlignedPtr(root_);
+      ::dbgroup::memory::Release<Page>(root_);
       root_ = child;
 
       mutex_.DowngradeToSIX();

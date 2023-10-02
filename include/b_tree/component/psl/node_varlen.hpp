@@ -1614,8 +1614,8 @@ class NodeVarLen
 
   // a temporary node for SMOs.
   static thread_local inline std::unique_ptr<Node, std::function<void(void *)>>  //
-      temp_node_{new (::operator new(kPageSize, kCacheAlignVal)) Node{0},        // NOLINT
-                 std::function<void(void *)>{DeleteAlignedPtr}};
+      temp_node_{new (::dbgroup::memory::Allocate<Page>()) Node{0},              // NOLINT
+                 std::function<void(void *)>{::dbgroup::memory::Release<Page>}};
 };
 
 }  // namespace dbgroup::index::b_tree::component::psl

@@ -75,7 +75,7 @@ class NodeFixture : public testing::Test
   void
   TearDown() override
   {
-    ::operator delete(node_);
+    ::dbgroup::memory::Release<Page>(node_);
   }
 
   /*####################################################################################
@@ -86,7 +86,7 @@ class NodeFixture : public testing::Test
   CreateNode(const bool is_leaf)  //
       -> Node *
   {
-    auto *node = new (::operator new(kPageSize)) Node{is_leaf};
+    auto *node = new (::dbgroup::memory::Allocate<Page>()) Node{is_leaf};
     if constexpr (std::is_same_v<Node, NodeFixLen_t>) {
       node->SetPayloadLength(kPayLen);
     }
@@ -304,7 +304,7 @@ class NodeFixture : public testing::Test
     // check the split nodes have the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
       if (i == l_count) {
-        ::operator delete(node_);
+        ::dbgroup::memory::Release<Page>(node_);
         node_ = r_node;
       }
       VerifyRead(i, i, kExpectSuccess);
@@ -332,7 +332,7 @@ class NodeFixture : public testing::Test
     node_->LockSIX();
     r_node->LockSIX();
     node_->Merge(r_node);
-    ::operator delete(r_node);
+    ::dbgroup::memory::Release<Page>(r_node);
 
     // check the merged node has the written records
     for (size_t i = 0; i < kRecNumInNode; ++i) {
