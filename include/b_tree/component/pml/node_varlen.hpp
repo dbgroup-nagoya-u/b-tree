@@ -51,6 +51,7 @@ class NodeVarLen
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Node = NodeVarLen;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   // aliases for bulkloading
@@ -830,6 +831,8 @@ class NodeVarLen
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
     constexpr auto kPayLen = sizeof(Payload);
 
+    const auto &[leftmost_key, leftmost_key_len] = ParseKey(*iter);
+
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
     auto node_size = kHeaderLen + kMaxKeyLen;
@@ -850,15 +853,15 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
 
     // set a lowest key
-    l_key_len_ = meta_array_[0].key_len;
-    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
+    l_key_len_ = leftmost_key_len;
+    l_key_offset_ = SetKey(kPageSize, leftmost_key, l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
       prev_node->LinkNext(this);
     }
 
-    nodes.emplace_back(GetKey(0), this, meta_array_[0].key_len);
+    nodes.emplace_back(leftmost_key, this, leftmost_key_len);
   }
 
   /**
@@ -985,13 +988,19 @@ class NodeVarLen
       -> std::optional<Key>
   {
     if (h_key_len_ == 0) return std::nullopt;
+
+    Key high_key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
     } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
+    return high_key;
   }
 
   /*####################################################################################
@@ -1017,13 +1026,18 @@ class NodeVarLen
   GetKey(const Metadata meta) const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta), meta.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -1324,6 +1338,34 @@ class NodeVarLen
     } else {
       const auto &[key, payload] = entry;
       return {key, payload, sizeof(Key)};
+    }
+  }
+
+  /**
+   * @brief Parse an entry of bulkload according to key's type.
+   *
+   * @tparam Entry std::pair or std::tuple for containing entries.
+   * @param entry a bulkload entry.
+   * @retval 1st: a target key.
+   * @retval 2nd: the length of a target key.
+   */
+  template <class Entry>
+  constexpr auto
+  ParseKey(const Entry &entry)  //
+      -> std::pair<Key, size_t>
+  {
+    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
+    static_assert(2 <= kTupleSize && kTupleSize <= 4);
+
+    if constexpr (kTupleSize == 4) {
+      const auto &[key, payload, key_len, pay_len] = entry;
+      return {key, key_len};
+    } else if constexpr (kTupleSize == 3) {
+      const auto &[key, payload, key_len] = entry;
+      return {key, key_len};
+    } else {
+      const auto &[key, payload] = entry;
+      return {key, sizeof(Key)};
     }
   }
 

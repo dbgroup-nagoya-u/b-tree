@@ -175,25 +175,21 @@ class NodeFixLen
    * The returned node is locked with an SIX lock and the other is unlocked.
    *
    * @param key a search key.
-   * @retval 1st: this node or a right sibling one.
-   * @retval 2nd: a separator key.
-   * @retval 3rd: the length of the separator key.
+   * @return This node or a right sibling one.
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> std::tuple<Node *, Key, size_t>
+      -> Node *
   {
-    auto sep_key = GetHighKey();
-
     auto *node = this;
-    if (!Comp{}(key, sep_key)) {
+    if (CompHighKey(key)) {
+      next_->mutex_.UnlockSIX();
+    } else {
       node = next_;
       mutex_.UnlockSIX();
-    } else {
-      next_->mutex_.UnlockSIX();
     }
 
-    return {node, std::move(sep_key), kKeyLen};
+    return node;
   }
 
   /**
@@ -519,18 +515,10 @@ class NodeFixLen
     while (true) {
       ver = node->mutex_.GetVersion();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.HasSameVersion(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -561,18 +549,10 @@ class NodeFixLen
     while (true) {
       const auto ver = node->mutex_.GetVersion();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0) {
-          if (node->mutex_.TryLockS(ver)) return;
-          continue;
-        }
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) {
-          if (node->mutex_.TryLockS(ver)) return;
-          continue;
-        }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.TryLockS(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -601,13 +581,10 @@ class NodeFixLen
     while (true) {
       const auto ver = node->mutex_.GetVersion();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0 || Comp{}(key, node->GetHighKey())) {
-          if (node->mutex_.TryLockSIX(ver)) return;
-          continue;
-        }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.TryLockSIX(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -1238,6 +1215,18 @@ class NodeFixLen
       -> const Key &
   {
     return keys_[record_count_];
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    return has_high_key_ == 0 || Comp{}(key, keys_[record_count_]);
   }
 
   /*####################################################################################

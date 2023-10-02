@@ -165,24 +165,20 @@ class NodeFixLen
    * The returned node is locked with an SIX lock and the other is unlocked.
    *
    * @param key a search key.
-   * @retval 1st: this node or a right sibling one.
-   * @retval 2nd: a separator key.
-   * @retval 3rd: the length of the separator key.
+   * @return This node or a right sibling one.
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> std::tuple<Node *, Key, size_t>
+      -> Node *
   {
-    auto sep_key = GetHighKey();
-
     auto *node = this;
-    if (!Comp{}(key, sep_key)) {
+    if (!Comp{}(key, GetHighKey())) {
       node = next_;
       node->mutex_.LockSIX();
       mutex_.UnlockSIX();
     }
 
-    return {node, std::move(sep_key), kKeyLen};
+    return node;
   }
 
   /**
@@ -475,13 +471,8 @@ class NodeFixLen
     while (true) {
       node->mutex_.LockS();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0) return node;
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) return node;
-      }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) return node;
 
       // go to the next node
       auto *next = node->next_;
@@ -509,11 +500,8 @@ class NodeFixLen
     while (true) {
       node->mutex_.LockSIX();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0 || Comp{}(key, node->GetHighKey())) return node;
-      }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) return node;
 
       // go to the next node
       auto *next = node->next_;
@@ -1061,6 +1049,18 @@ class NodeFixLen
       -> const Key &
   {
     return keys_[record_count_];
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    return has_high_key_ == 0 || Comp{}(key, keys_[record_count_]);
   }
 
   /*####################################################################################

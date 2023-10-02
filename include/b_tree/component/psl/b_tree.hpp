@@ -200,14 +200,12 @@ class BTree
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
-      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      auto *target_node = node->GetValidSplitNode(key);
       target_node->Write(key, key_len, &payload, kPayLen);
 
       // complete splitting by inserting a new entry
+      const auto &[sep_key, sep_key_len] = node->GetHighKeyForSMOs();
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(sep_key);
-      }
     }
 
     return kSuccess;
@@ -239,14 +237,12 @@ class BTree
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
-      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      auto *target_node = node->GetValidSplitNode(key);
       target_node->Insert(key, key_len, &payload, kPayLen);
 
       // complete splitting by inserting a new entry
+      const auto &[sep_key, sep_key_len] = node->GetHighKeyForSMOs();
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(sep_key);
-      }
     }
 
     return kSuccess;
@@ -726,14 +722,12 @@ class BTree
       if (rc == NodeRC::kNeedSplit) {
         // since a parent node is full, perform splitting
         auto *r_node = HalfSplit(node);
-        auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(l_key);
+        auto *target_node = node->GetValidSplitNode(l_key);
         target_node->InsertChild(r_child, l_key, l_key_len);
 
         // complete splitting by inserting a new entry
+        const auto &[sep_key, sep_key_len] = node->GetHighKeyForSMOs();
         CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-        if constexpr (IsVarLenData<Key>()) {
-          ::operator delete(sep_key);
-        }
         return;
       }
 
