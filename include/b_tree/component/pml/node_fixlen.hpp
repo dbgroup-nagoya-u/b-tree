@@ -205,11 +205,11 @@ class NodeFixLen
       -> Node *
   {
     auto *node = this;
-    if (!has_high_key_ || !Comp{}(key, GetHighKey())) {
+    if (CompHighKey(key)) {
+      r_node->mutex_.UnlockSIX();
+    } else {
       node = r_node;
       mutex_.UnlockSIX();
-    } else {
-      r_node->mutex_.UnlockSIX();
     }
 
     return node;
@@ -911,7 +911,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -932,6 +932,18 @@ class NodeFixLen
       -> const Key &
   {
     return keys_[record_count_];
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    return has_high_key_ == 0 || Comp{}(key, keys_[record_count_]);
   }
 
   /*####################################################################################

@@ -1028,7 +1028,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return !Comp{}(GetHighKey(), std::get<0>(*end_key));
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**

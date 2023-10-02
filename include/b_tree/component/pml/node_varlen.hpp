@@ -88,7 +88,7 @@ class NodeVarLen
 
     // insert r_node
     offset = SetPayload(offset, &r_node, kPtrLen);
-    offset = SetKey(offset, *(l_node->GetHighKey()), l_key_len);
+    offset = SetKey(offset, l_node->GetHighKey(), l_key_len);
     meta_array_[1] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // update header information
@@ -215,12 +215,11 @@ class NodeVarLen
       -> Node *
   {
     auto *node = this;
-    const auto &high_key = GetHighKey();
-    if (!high_key || !Comp{}(key, *high_key)) {
+    if (CompHighKey(key)) {
+      r_node->mutex_.UnlockSIX();
+    } else {
       node = r_node;
       mutex_.UnlockSIX();
-    } else {
-      r_node->mutex_.UnlockSIX();
     }
 
     return node;
@@ -670,7 +669,7 @@ class NodeVarLen
     const auto key_len = l_node->h_key_len_;
     const auto rec_len = key_len + kPtrLen;
     auto offset = SetPayload(kPageSize - block_size_, &r_node, kPtrLen);
-    offset = SetKey(offset, *(l_node->GetHighKey()), key_len);
+    offset = SetKey(offset, l_node->GetHighKey(), key_len);
     meta_array_[pos + 1] = Metadata{offset, key_len, rec_len};
 
     // update header information
@@ -946,7 +945,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), *GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -985,10 +984,8 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (h_key_len_ == 0) return std::nullopt;
-
     Key high_key;
     if constexpr (IsVarLenData<Key>()) {
       thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
@@ -1001,6 +998,31 @@ class NodeVarLen
       memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
     return high_key;
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    if (h_key_len_ == 0) return true;
+
+    Key high_key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
+    } else {
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
+    }
+    return Comp{}(key, high_key);
   }
 
   /*####################################################################################

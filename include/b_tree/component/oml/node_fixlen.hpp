@@ -504,16 +504,8 @@ class NodeFixLen
     while (true) {
       const auto ver = mutex_.GetVersion();
 
-      // check the current node is not removed
-      if (is_removed_) {
-        if (!mutex_.HasSameVersion(ver)) continue;
-        child = nullptr;  // retry from a root node
-        break;
-      }
-
-      // check the current node has a target key
-      const auto &high_key = GetHighKey();
-      if (has_high_key_ && (!Comp{}(key, high_key))) {
+      // check the current node is not removed and has a target key
+      if (is_removed_ > 0 || !CompHighKey(key)) {
         if (!mutex_.HasSameVersion(ver)) continue;
         child = nullptr;  // retry from a root node
         break;
@@ -551,9 +543,8 @@ class NodeFixLen
   {
     while (true) {
       while (mutex_.HasSameVersion(ver)) {
-        // check the current node has a target key
-        const auto &high_key = GetHighKey();
-        if (has_high_key_ && !Comp{}(key, high_key)) {
+        // check the current node is not removed and has a target key
+        if (is_removed_ > 0 || !CompHighKey(key)) {
           if (!mutex_.HasSameVersion(ver)) break;
           return {0, nullptr};  // retry from a root node
         }
@@ -616,18 +607,10 @@ class NodeFixLen
     while (true) {
       ver = node->mutex_.GetVersion();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
+      // check the current node is not removed and has a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.HasSameVersion(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -1201,7 +1184,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -1223,6 +1206,18 @@ class NodeFixLen
       -> const Key &
   {
     return keys_[record_count_];
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    return has_high_key_ == 0 || Comp{}(key, keys_[record_count_]);
   }
 
   /**

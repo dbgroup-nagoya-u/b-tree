@@ -91,7 +91,7 @@ class NodeVarLen
 
     // insert r_node
     offset = SetPayload(offset, &r_node, kPtrLen);
-    offset = SetKey(offset, *(l_node->GetHighKey()), l_key_len);
+    offset = SetKey(offset, l_node->GetHighKey(), l_key_len);
     meta_array_[1] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // update header information
@@ -249,7 +249,7 @@ class NodeVarLen
   GetHighKeyForSMOs() const  //
       -> std::pair<Key, size_t>
   {
-    return {*GetHighKey(), h_key_len_};
+    return {GetHighKey(), h_key_len_};
   }
 
   /*####################################################################################
@@ -524,16 +524,8 @@ class NodeVarLen
     while (true) {
       const auto ver = mutex_.GetVersion();
 
-      // check the current node is not removed
-      if (is_removed_) {
-        if (!mutex_.HasSameVersion(ver)) continue;
-        child = nullptr;  // retry from a root node
-        break;
-      }
-
-      // check the current node has a target key
-      const auto &high_key = GetHighKey();
-      if (high_key && (!Comp{}(key, *high_key))) {
+      // check the current node is not removed and has a target key
+      if (is_removed_ > 0 || !CompHighKey(key)) {
         if (!mutex_.HasSameVersion(ver)) continue;
         child = nullptr;  // retry from a root node
         break;
@@ -571,9 +563,8 @@ class NodeVarLen
   {
     while (true) {
       while (mutex_.HasSameVersion(ver)) {
-        // check the current node has a target key
-        const auto &high_key = GetHighKey();
-        if (high_key && !Comp{}(key, *high_key)) {
+        // check the current node is not removed and has a target key
+        if (is_removed_ > 0 || !CompHighKey(key)) {
           if (!mutex_.HasSameVersion(ver)) break;
           return {0, nullptr};  // retry from a root node
         }
@@ -635,19 +626,11 @@ class NodeVarLen
     uint64_t ver{};
     while (true) {
       ver = node->mutex_.GetVersion();
-      const auto &high_key = node->GetHighKey();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (!high_key) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-        if (Comp{}(key, *high_key)) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
+      // check the current node is not removed and has a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.HasSameVersion(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -1252,7 +1235,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), *GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -1291,10 +1274,8 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (h_key_len_ == 0) return std::nullopt;
-
     Key high_key;
     if constexpr (IsVarLenData<Key>()) {
       thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
@@ -1307,6 +1288,31 @@ class NodeVarLen
       memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
     return high_key;
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    if (h_key_len_ == 0) return true;
+
+    Key high_key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
+    } else {
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
+    }
+    return Comp{}(key, high_key);
   }
 
   /**
