@@ -984,7 +984,7 @@ class NodeVarLen
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a lowest key
     auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + kPayLen;
 
       // check whether the node has sufficient space
@@ -1546,59 +1546,6 @@ class NodeVarLen
     }
 
     return offset;
-  }
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
-
-  /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseKey(const Entry &entry)  //
-      -> std::pair<Key, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 4);
-
-    if constexpr (kTupleSize == 4) {
-      const auto &[key, payload, key_len, pay_len] = entry;
-      return {key, key_len};
-    } else if constexpr (kTupleSize == 3) {
-      const auto &[key, payload, key_len] = entry;
-      return {key, key_len};
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, sizeof(Key)};
-    }
   }
 
   /**

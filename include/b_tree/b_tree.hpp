@@ -154,13 +154,15 @@ class BTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @return kSuccess.
    */
   auto
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
     return b_tree_.Write(key, payload, key_len);
@@ -176,6 +178,7 @@ class BTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if inserted.
    * @retval kKeyExist otherwise.
    */
@@ -183,7 +186,8 @@ class BTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
     return b_tree_.Insert(key, payload, key_len);
@@ -200,6 +204,7 @@ class BTree
    * @param key a target key.
    * @param payload a target payload.
    * @param key_len the length of the target key.
+   * @param pay_len the length of the target payload.
    * @retval kSuccess if updated.
    * @retval kKeyNotExist otherwise.
    */
@@ -207,7 +212,8 @@ class BTree
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      [[maybe_unused]] const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
     return b_tree_.Update(key, payload, key_len);

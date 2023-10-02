@@ -189,7 +189,8 @@ class BTree
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
       auto *target_node = node->GetValidSplitNode(key);
-      target_node->Write(key, key_len, &payload, kPayLen);
+      const auto pos = target_node->SearchRecord(key).second;
+      target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
       const auto &[sep_key, sep_key_len] = node->GetHighKeyForSMOs();
@@ -226,7 +227,8 @@ class BTree
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
       auto *target_node = node->GetValidSplitNode(key);
-      target_node->Write(key, key_len, &payload, kPayLen);
+      const auto pos = target_node->SearchRecord(key).second;
+      target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
       const auto &[sep_key, sep_key_len] = node->GetHighKeyForSMOs();
@@ -495,7 +497,6 @@ class BTree
         node = root_.load(std::memory_order_acquire);
       }
     }
-    node->LockS();
 
     return node;
   }
