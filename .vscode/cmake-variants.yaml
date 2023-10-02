@@ -9,6 +9,10 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -20,6 +24,10 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -31,6 +39,10 @@ buildType:
       settings:
         CMAKE_CXX_CLANG_TIDY: "clang-tidy"
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5

@@ -1,6 +1,6 @@
 # B<sup>+</sup>-trees
 
-![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/b-tree/workflows/Ubuntu-20.04/badge.svg?branch=main)
+[![Ubuntu-20.04](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/unit_tests.yaml/badge.svg)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/unit_tests.yaml)
 
 This repository contains open source implementations of B<sup>+</sup>-trees for research use. The purpose of this implementation is to reproduce B<sup>+</sup>-trees and measure its performance.
 
@@ -36,8 +36,11 @@ sudo apt update && sudo apt install -y build-essential cmake
 
 #### Build Options for Unit Testing
 
-- `B_TREE_BUILD_TESTS`: Building unit tests for this library if `ON` (default `OFF`).
-- `DBGROUP_TEST_BUILD_MULTI_THREAD_TESTS`: Building multi-threading tests if `ON` (default `ON`).
+- `B_TREE_BUILD_TESTS`: Build unit tests for this library if `ON` (default `OFF`).
+- `B_TREE_TEST_BUILD_PML`: Build tests for PML-based B+trees if `ON` (default `OFF`).
+- `B_TREE_TEST_BUILD_PSL`: Build tests for PSL-based B+trees if `ON` (default `OFF`).
+- `B_TREE_TEST_BUILD_OML`: Build tests for OML-based B+trees if `ON` (default `OFF`).
+- `B_TREE_TEST_BUILD_OSL`: Build tests for OSL-based B+trees if `ON` (default `OFF`).
 - `DBGROUP_TEST_THREAD_NUM`: The maximum number of threads to perform unit tests (default `8`).
 - `DBGROUP_TEST_RANDOM_SEED`: A fixed seed value to reproduce unit tests (default `0`).
 - `DBGROUP_TEST_EXEC_NUM`: The number of executions per a thread (default `1E5`).
@@ -48,7 +51,9 @@ sudo apt update && sudo apt install -y build-essential cmake
 
 ```bash
 mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DB_TREE_BUILD_TESTS=ON ..
+cmake -DCMAKE_BUILD_TYPE=Release -DB_TREE_BUILD_TESTS=ON \
+  -DB_TREE_TEST_BUILD_PML=ON -DB_TREE_TEST_BUILD_PSL=ON \
+  -DB_TREE_TEST_BUILD_OML=ON -DB_TREE_TEST_BUILD_OSL=ON ..
 make -j
 ctest -C Release
 ```
