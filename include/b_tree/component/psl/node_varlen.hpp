@@ -177,9 +177,10 @@ class NodeVarLen
       -> Node *
   {
     auto *node = this;
-    if (!CompHighKey(key)) {
+    if (CompHighKey(key)) {
+      next_->mutex_.UnlockSIX();
+    } else {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
     }
 
@@ -217,39 +218,59 @@ class NodeVarLen
   }
 
   /**
-   * @retval a lowest key in this node if exist.
-   * @retval std::nullopt otherwise.
+   * @retval a highest key in this node.
    */
   [[nodiscard]] auto
-  GetLowKey()  //
-      -> std::optional<Key>
+  GetHighKey() const  //
+      -> Key
   {
-    mutex_.LockS();
+    Key high_key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
 
-    std::optional<Key> low_key = std::nullopt;
-    if (l_key_len_ > 0) {
-      if constexpr (IsVarLenData<Key>()) {
-        low_key = reinterpret_cast<Key>(GetLowKeyAddr());
-      } else {
-        Key key{};
-        memcpy(&key, GetLowKeyAddr(), sizeof(Key));
-        low_key = std::move(key);
-      }
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
+    } else {
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
-
-    mutex_.UnlockS();
-    return low_key;
+    return high_key;
   }
 
   /**
-   * @retval 1st: a highest key.
-   * @retval 2nd: the length of the highest key.
+   * @param is_left a flag for indicating this node is a split left node.
+   * @retval 1st: a separator key.
+   * @retval 2nd: the length of the separator key.
    */
   [[nodiscard]] auto
-  GetHighKeyForSMOs() const  //
+  GetSeparatorKey(const bool is_left) const  //
       -> std::pair<Key, size_t>
   {
-    return {GetHighKey(), h_key_len_};
+    Key sep_key;
+    size_t key_len;
+    void *addr;
+
+    if (is_left) {
+      key_len = h_key_len_;
+      addr = GetHighKeyAddr();
+    } else {
+      key_len = l_key_len_;
+      addr = GetLowKeyAddr();
+    }
+
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      sep_key = tls_key.get();
+      memcpy(sep_key, addr, key_len);
+    } else {
+      memcpy(&sep_key, addr, sizeof(Key));
+    }
+
+    return {sep_key, key_len};
   }
 
   /*####################################################################################
@@ -857,7 +878,7 @@ class NodeVarLen
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
 
-    r_node->mutex_.UnlockX();
+    r_node->mutex_.DowngradeToSIX();
 
     /*------------------------------
      * reflect left-split
@@ -1177,27 +1198,6 @@ class NodeVarLen
       -> void *
   {
     return ShiftAddr(this, h_key_offset_);
-  }
-
-  /**
-   * @retval a highest key in this node.
-   */
-  [[nodiscard]] auto
-  GetHighKey() const  //
-      -> Key
-  {
-    Key high_key;
-    if constexpr (IsVarLenData<Key>()) {
-      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
-          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
-                  ::dbgroup::memory::Release<KeyWOPtr>};
-
-      high_key = tls_key.get();
-      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
-    } else {
-      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
-    }
-    return high_key;
   }
 
   /**
