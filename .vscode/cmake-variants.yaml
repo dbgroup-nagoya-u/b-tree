@@ -7,8 +7,12 @@ buildType:
       long: Include debugging information without optimizations
       buildType: Debug
       settings:
-        CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        CMAKE_CXX_CLANG_TIDY: ""
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -18,8 +22,12 @@ buildType:
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
-        CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        CMAKE_CXX_CLANG_TIDY: ""
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -29,8 +37,12 @@ buildType:
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
-        CMAKE_CXX_CLANG_TIDY: "clang-tidy"
+        CMAKE_CXX_CLANG_TIDY: ""
         B_TREE_BUILD_TESTS: ON
+        B_TREE_TEST_BUILD_PML: ON
+        B_TREE_TEST_BUILD_PSL: ON
+        B_TREE_TEST_BUILD_OML: ON
+        B_TREE_TEST_BUILD_OSL: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5

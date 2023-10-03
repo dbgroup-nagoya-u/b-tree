@@ -59,7 +59,7 @@ class BTree
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = OptimisticRecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Page>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -188,15 +188,13 @@ class BTree
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
-      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      auto *target_node = node->GetValidSplitNode(key);
       const auto pos = target_node->SearchRecord(key).second;
       target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
+      const auto &[sep_key, sep_key_len] = target_node->GetSeparatorKey(target_node == node);
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(sep_key);
-      }
     }
 
     return kSuccess;
@@ -228,15 +226,13 @@ class BTree
     if (rc == NodeRC::kNeedSplit) {
       // perform splitting if needed
       auto *r_node = HalfSplit(node);
-      auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(key);
+      auto *target_node = node->GetValidSplitNode(key);
       const auto pos = target_node->SearchRecord(key).second;
       target_node->InsertRecord(key, key_len, &payload, kPayLen, pos);
 
       // complete splitting by inserting a new entry
+      const auto &[sep_key, sep_key_len] = target_node->GetSeparatorKey(target_node == node);
       CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-      if constexpr (IsVarLenData<Key>()) {
-        ::operator delete(sep_key);
-      }
     }
 
     return kSuccess;
@@ -455,8 +451,8 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<PageTarget>();
-    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
+    auto *page = gc_.template GetPageIfPossible<Page>();
+    return (page == nullptr) ? (::dbgroup::memory::Allocate<Page>()) : page;
   }
 
   /**
@@ -501,7 +497,6 @@ class BTree
         node = root_.load(std::memory_order_acquire);
       }
     }
-    node->LockS();
 
     return node;
   }
@@ -542,22 +537,23 @@ class BTree
    * @brief Search a parent node of a given one to construct a valid node stack.
    *
    * @param stack the instance of a stack to be reused.
+   * @param key A search key.
    * @param target_node a child node to be searched.
    */
   void
   SearchParentNode(  //
       std::vector<Node_t *> &stack,
+      const Key &key,
       const Node_t *target_node) const
   {
     auto *node = root_.load(std::memory_order_acquire);
-    const auto &key = target_node->GetLowKey();
     Node_t *child{};
     // search a target node with its lowest key
     while (true) {
       if (node->IsInner()) {
-        child = Node_t::SearchChild(node, *key);
+        child = Node_t::SearchChild(node, key);
       } else {
-        Node_t::CheckKeyRange(node, *key);
+        Node_t::CheckKeyRange(node, key);
       }
       if (node == target_node) return;
       if (node == nullptr) {
@@ -591,7 +587,7 @@ class BTree
       }
     }
 
-    DeleteAlignedPtr(node);
+    ::dbgroup::memory::Release<Page>(node);
   }
 
   /**
@@ -676,7 +672,7 @@ class BTree
         if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
 
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, r_child);
+        SearchParentNode(stack, l_key, r_child);
         continue;
       }
 
@@ -690,7 +686,7 @@ class BTree
       if (node == nullptr) {
         // a root node is removed
         if (TryRootSplit(l_child, r_child, l_key, l_key_len)) return;
-        SearchParentNode(stack, r_child);
+        SearchParentNode(stack, l_key, r_child);
         continue;
       }
 
@@ -700,14 +696,12 @@ class BTree
       if (rc == NodeRC::kNeedSplit) {
         // since a parent node is full, perform splitting
         const auto *r_node = HalfSplit(node);
-        auto &&[target_node, sep_key, sep_key_len] = node->GetValidSplitNode(l_key);
+        auto *target_node = node->GetValidSplitNode(l_key);
         target_node->InsertChild(r_child, l_key, l_key_len);
 
         // complete splitting by inserting a new entry
+        const auto &[sep_key, sep_key_len] = target_node->GetSeparatorKey(target_node == node);
         CompleteSplit(stack, node, r_node, sep_key, sep_key_len);
-        if constexpr (IsVarLenData<Key>()) {
-          ::operator delete(sep_key);
-        }
         return;
       }
 
@@ -761,9 +755,11 @@ class BTree
       auto *r_child = l_child->GetMergeableSiblingNode();
       if (r_child == nullptr) return;
 
+      const auto &del_key = l_child->GetHighKey();
+
       if (stack.empty()) {
         // other threads have modified this tree concurrently, so retry
-        SearchParentNode(stack, r_child);
+        SearchParentNode(stack, del_key, r_child);
         continue;
       }
 
@@ -773,21 +769,19 @@ class BTree
         stack.pop_back();
       }
 
-      const auto &del_key = r_child->GetLowKey();
-
       // traverse horizontally to reach a valid parent node
-      Node_t::CheckKeyRangeAndLockForWrite(node, *del_key);
+      Node_t::CheckKeyRangeAndLockForWrite(node, del_key);
       if (node == nullptr) {
         // a root node is removed
-        SearchParentNode(stack, r_child);
+        SearchParentNode(stack, del_key, r_child);
         continue;
       }
 
       // delete an entry from a tree
-      switch (node->DeleteChild(*del_key)) {
+      switch (node->DeleteChild(del_key)) {
         case NodeRC::kCompleted:
           l_child->Merge(r_child);
-          gc_.AddGarbage<PageTarget>(r_child);
+          gc_.AddGarbage<Page>(r_child);
           return;
 
         case NodeRC::kAbortMerge:
@@ -803,7 +797,7 @@ class BTree
         case NodeRC::kNeedMerge:
         default:
           l_child->Merge(r_child);
-          gc_.AddGarbage<PageTarget>(r_child);
+          gc_.AddGarbage<Page>(r_child);
 
           if (stack.empty()) {
             TryShrinkTree(node);
@@ -826,7 +820,7 @@ class BTree
   {
     if (node == root_.load(std::memory_order_relaxed) && node->GetRecordCount() == 1) {
       do {
-        gc_.AddGarbage<PageTarget>(node);
+        gc_.AddGarbage<Page>(node);
         node = node->RemoveRoot();
       } while (node->GetRecordCount() == 1 && node->IsInner());
       root_.store(node, std::memory_order_relaxed);

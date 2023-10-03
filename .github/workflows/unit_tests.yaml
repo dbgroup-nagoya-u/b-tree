@@ -13,27 +13,26 @@ env:
 jobs:
   unit_test:
     runs-on: ubuntu-20.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       matrix:
         page-size: [1024, 2048, 4096, 8192]
+        cc-policy: ["PML", "PSL", "OML", "OSL"]
     steps:
 
     - name: Clone Repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         submodules: recursive
 
     - name: Create Build Environment
       shell: bash
-      run: |
-        sudo apt-get install -y libgflags-dev
-        cmake -E make_directory ${{github.workspace}}/build
+      run: cmake -E make_directory ${{github.workspace}}/build
 
     - name: Configure CMake
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: cmake ${GITHUB_WORKSPACE} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DB_TREE_PAGE_SIZE=${{matrix.page-size}} -DB_TREE_BUILD_TESTS=ON -DDBGROUP_TEST_BUILD_MULTI_THREAD_TESTS=OFF -DDBGROUP_TEST_THREAD_NUM=${THREAD_NUM}
+      run: cmake ${GITHUB_WORKSPACE} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DB_TREE_PAGE_SIZE=${{matrix.page-size}} -DB_TREE_BUILD_TESTS=ON -DB_TREE_TEST_BUILD_${{matrix.cc-policy}}=ON -DDBGROUP_TEST_THREAD_NUM=${THREAD_NUM}
 
     - name: Build
       shell: bash

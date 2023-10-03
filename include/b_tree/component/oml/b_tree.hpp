@@ -59,7 +59,7 @@ class BTree
   using BTree_t = BTree<Key, Payload, Comp, kUseVarLenLayout>;
   using RecordIterator_t = OptimisticRecordIterator<BTree_t>;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using GC_t = ::dbgroup::memory::EpochBasedGC<PageTarget>;
+  using GC_t = ::dbgroup::memory::EpochBasedGC<Page>;
 
   // aliases for bulkloading
   template <class Entry>
@@ -420,8 +420,8 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.template GetPageIfPossible<PageTarget>();
-    return (page == nullptr) ? (::operator new(kPageSize, component::kCacheAlignVal)) : page;
+    auto *page = gc_.template GetPageIfPossible<Page>();
+    return (page == nullptr) ? (::dbgroup::memory::Allocate<Page>()) : page;
   }
 
   /**
@@ -561,7 +561,7 @@ class BTree
       }
     }
 
-    DeleteAlignedPtr(node);
+    ::dbgroup::memory::Release<Page>(node);
   }
 
   /**
@@ -640,9 +640,6 @@ class BTree
     l_node->Split(r_node);
     auto &&[new_child, sep_key, sep_key_len, new_c_ver] = l_node->GetValidSplitNode(key, r_node);
     parent->InsertChild(r_node, sep_key, sep_key_len, pos);
-    if constexpr (IsVarLenData<Key>()) {
-      ::operator delete(sep_key);
-    }
 
     child = new_child;
     c_ver = new_c_ver;
@@ -682,9 +679,7 @@ class BTree
     auto *new_root = new (GetNodePage()) Node_t{l_node, r_node};
     root_.store(new_root, std::memory_order_release);
     auto &&[new_node, sep_key, sep_key_len, new_ver] = l_node->GetValidSplitNode(key, r_node);
-    if constexpr (IsVarLenData<Key>()) {
-      ::operator delete(sep_key);
-    }
+
     node = new_node;
     ver = new_ver;
     return true;
@@ -724,7 +719,7 @@ class BTree
     // perform merging
     c_ver = l_node->Merge(r_node);
     parent->DeleteChild(l_pos);
-    gc_.AddGarbage<PageTarget>(r_node);
+    gc_.AddGarbage<Page>(r_node);
 
     return true;
   }
@@ -753,7 +748,7 @@ class BTree
     }
 
     // remove the root node
-    gc_.AddGarbage<PageTarget>(node);
+    gc_.AddGarbage<Page>(node);
     node = node->RemoveRoot();
     root_.store(node, std::memory_order_release);
 

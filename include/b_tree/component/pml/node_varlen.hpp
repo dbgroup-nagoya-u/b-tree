@@ -51,6 +51,7 @@ class NodeVarLen
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Node = NodeVarLen;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   // aliases for bulkloading
@@ -87,7 +88,7 @@ class NodeVarLen
 
     // insert r_node
     offset = SetPayload(offset, &r_node, kPtrLen);
-    offset = SetKey(offset, *(l_node->GetHighKey()), l_key_len);
+    offset = SetKey(offset, l_node->GetHighKey(), l_key_len);
     meta_array_[1] = Metadata{offset, l_key_len, l_key_len + kPtrLen};
 
     // update header information
@@ -214,12 +215,11 @@ class NodeVarLen
       -> Node *
   {
     auto *node = this;
-    const auto &high_key = GetHighKey();
-    if (!high_key || !Comp{}(key, *high_key)) {
+    if (CompHighKey(key)) {
+      r_node->mutex_.UnlockSIX();
+    } else {
       node = r_node;
       mutex_.UnlockSIX();
-    } else {
-      r_node->mutex_.UnlockSIX();
     }
 
     return node;
@@ -669,7 +669,7 @@ class NodeVarLen
     const auto key_len = l_node->h_key_len_;
     const auto rec_len = key_len + kPtrLen;
     auto offset = SetPayload(kPageSize - block_size_, &r_node, kPtrLen);
-    offset = SetKey(offset, *(l_node->GetHighKey()), key_len);
+    offset = SetKey(offset, l_node->GetHighKey(), key_len);
     meta_array_[pos + 1] = Metadata{offset, key_len, rec_len};
 
     // update header information
@@ -830,11 +830,13 @@ class NodeVarLen
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
     constexpr auto kPayLen = sizeof(Payload);
 
+    const auto &[leftmost_key, leftmost_key_len] = ParseKey(*iter);
+
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a highest key
     auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + kPayLen;
 
       // check whether the node has sufficient space
@@ -850,15 +852,15 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
 
     // set a lowest key
-    l_key_len_ = meta_array_[0].key_len;
-    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
+    l_key_len_ = leftmost_key_len;
+    l_key_offset_ = SetKey(kPageSize, leftmost_key, l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
       prev_node->LinkNext(this);
     }
 
-    nodes.emplace_back(GetKey(0), this, meta_array_[0].key_len);
+    nodes.emplace_back(leftmost_key, this, leftmost_key_len);
   }
 
   /**
@@ -943,7 +945,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), *GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -982,16 +984,45 @@ class NodeVarLen
    */
   [[nodiscard]] auto
   GetHighKey() const  //
-      -> std::optional<Key>
+      -> Key
   {
-    if (h_key_len_ == 0) return std::nullopt;
+    Key high_key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
     } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
+    return high_key;
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    if (h_key_len_ == 0) return true;
+
+    Key high_key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
+    } else {
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
+    }
+    return Comp{}(key, high_key);
   }
 
   /*####################################################################################
@@ -1017,13 +1048,18 @@ class NodeVarLen
   GetKey(const Metadata meta) const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta), meta.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -1303,31 +1339,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
-
-  /**
    * @brief Link this node to a right sibling node.
    *
    * @param r_node a right sibling node.
@@ -1392,8 +1403,8 @@ class NodeVarLen
 
   // a temporary node for SMOs.
   static thread_local inline std::unique_ptr<Node, std::function<void(void *)>>  //
-      temp_node_{new (::operator new(kPageSize, kCacheAlignVal)) Node{0},        // NOLINT
-                 std::function<void(void *)>{DeleteAlignedPtr}};
+      temp_node_{new (::dbgroup::memory::Allocate<Page>()) Node{0},              // NOLINT
+                 std::function<void(void *)>{::dbgroup::memory::Release<Page>}};
 };
 
 }  // namespace dbgroup::index::b_tree::component::pml

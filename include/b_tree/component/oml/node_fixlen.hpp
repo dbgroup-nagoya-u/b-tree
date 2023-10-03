@@ -504,16 +504,8 @@ class NodeFixLen
     while (true) {
       const auto ver = mutex_.GetVersion();
 
-      // check the current node is not removed
-      if (is_removed_) {
-        if (!mutex_.HasSameVersion(ver)) continue;
-        child = nullptr;  // retry from a root node
-        break;
-      }
-
-      // check the current node has a target key
-      const auto &high_key = GetHighKey();
-      if (has_high_key_ && (!Comp{}(key, high_key))) {
+      // check the current node is not removed and has a target key
+      if (is_removed_ > 0 || !CompHighKey(key)) {
         if (!mutex_.HasSameVersion(ver)) continue;
         child = nullptr;  // retry from a root node
         break;
@@ -551,9 +543,8 @@ class NodeFixLen
   {
     while (true) {
       while (mutex_.HasSameVersion(ver)) {
-        // check the current node has a target key
-        const auto &high_key = GetHighKey();
-        if (has_high_key_ && !Comp{}(key, high_key)) {
+        // check the current node is not removed and has a target key
+        if (is_removed_ > 0 || !CompHighKey(key)) {
           if (!mutex_.HasSameVersion(ver)) break;
           return {0, nullptr};  // retry from a root node
         }
@@ -616,18 +607,10 @@ class NodeFixLen
     while (true) {
       ver = node->mutex_.GetVersion();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->has_high_key_ == 0) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) {
-          if (node->mutex_.HasSameVersion(ver)) break;
-          continue;
-        }
+      // check the current node is not removed and has a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) {
+        if (node->mutex_.HasSameVersion(ver)) break;
+        continue;
       }
 
       // go to the next node
@@ -984,9 +967,9 @@ class NodeFixLen
     r_node->mutex_.LockX();
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - 1 + has_high_key_] =
-        keys_[record_count_ - 1 + has_high_key_];               // a highest key
-    r_node->keys_[r_count + has_high_key_] = r_node->keys_[0];  // a lowest key
+    const auto &sep_key = r_node->keys_[0];
+    r_node->keys_[r_count] = keys_[record_count_];     // a highest key
+    r_node->keys_[r_count + has_high_key_] = sep_key;  // a lowest key
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
@@ -1005,9 +988,10 @@ class NodeFixLen
       next_ = r_node;
     }
     has_high_key_ = 1;
+
     // update lowest/highest keys
-    keys_[l_count + has_low_key_] = keys_[0];  // a lowest key
-    keys_[l_count] = r_node->keys_[0];         // a highest key
+    keys_[l_count + has_low_key_] = keys_[record_count_ + has_high_key_];  // a lowest key
+    keys_[l_count] = sep_key;                                              // a highest key
   }
 
   /**
@@ -1022,13 +1006,13 @@ class NodeFixLen
     mutex_.UpgradeToX();
 
     // copy right records to this nodes
-    const auto lowest_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
+    const auto low_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
     if (r_node->has_high_key_) {
-      keys_[record_count_ + has_low_key_] = std::move(lowest_key);
       keys_[record_count_] = r_node->keys_[r_node->record_count_];
-    } else {
-      keys_[record_count_] = std::move(lowest_key);
+    }
+    if (has_low_key_) {
+      keys_[record_count_ + r_node->has_high_key_] = std::move(low_key);
     }
 
     // update a header
@@ -1201,7 +1185,7 @@ class NodeFixLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -1223,6 +1207,18 @@ class NodeFixLen
       -> const Key &
   {
     return keys_[record_count_];
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CompHighKey(const Key &key) const  //
+      -> bool
+  {
+    return has_high_key_ == 0 || Comp{}(key, keys_[record_count_]);
   }
 
   /**

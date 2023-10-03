@@ -51,6 +51,7 @@ class NodeVarLen
    * Type aliases
    *##################################################################################*/
 
+  using KeyWOPtr = std::remove_pointer_t<Key>;
   using Node = NodeVarLen;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   template <class Entry>
@@ -169,24 +170,21 @@ class NodeVarLen
    * The returned node is locked with an SIX lock and the other is unlocked.
    *
    * @param key a search key.
-   * @retval 1st: this node or a right sibling one.
-   * @retval 2nd: a separator key.
-   * @retval 3rd: the length of the separator key.
+   * @return This node or a right sibling one.
    */
   [[nodiscard]] auto
   GetValidSplitNode(const Key &key)  //
-      -> std::tuple<Node *, Key, size_t>
+      -> Node *
   {
-    const auto &[sep_key, sep_key_len] = GetHighKeyForSMOs();
-
     auto *node = this;
-    if (!Comp{}(key, sep_key)) {
+    if (CompHighKey(key)) {
+      next_->mutex_.UnlockSIX();
+    } else {
       node = next_;
-      node->mutex_.LockSIX();
       mutex_.UnlockSIX();
     }
 
-    return {node, sep_key, sep_key_len};
+    return node;
   }
 
   /**
@@ -220,46 +218,59 @@ class NodeVarLen
   }
 
   /**
-   * @retval a lowest key in this node if exist.
-   * @retval std::nullopt otherwise.
+   * @retval a highest key in this node.
    */
   [[nodiscard]] auto
-  GetLowKey()  //
-      -> std::optional<Key>
+  GetHighKey() const  //
+      -> Key
   {
-    mutex_.LockS();
+    Key high_key;
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
 
-    std::optional<Key> low_key = std::nullopt;
-    if (l_key_len_ > 0) {
-      if constexpr (IsVarLenData<Key>()) {
-        low_key = reinterpret_cast<Key>(GetLowKeyAddr());
-      } else {
-        Key key{};
-        memcpy(&key, GetLowKeyAddr(), sizeof(Key));
-        low_key = std::move(key);
-      }
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
+    } else {
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
-
-    mutex_.UnlockS();
-    return low_key;
+    return high_key;
   }
 
   /**
-   * @retval 1st: a highest key.
-   * @retval 2nd: the length of the highest key.
+   * @param is_left a flag for indicating this node is a split left node.
+   * @retval 1st: a separator key.
+   * @retval 2nd: the length of the separator key.
    */
   [[nodiscard]] auto
-  GetHighKeyForSMOs() const  //
+  GetSeparatorKey(const bool is_left) const  //
       -> std::pair<Key, size_t>
   {
-    if constexpr (IsVarLenData<Key>()) {
-      // allocate space dynamically to keep a copied key
-      auto *h_key = reinterpret_cast<Key>(::operator new(h_key_len_));
-      memcpy(h_key, GetHighKeyAddr(), h_key_len_);
-      return {h_key, h_key_len_};
+    Key sep_key;
+    size_t key_len;
+    void *addr;
+
+    if (is_left) {
+      key_len = h_key_len_;
+      addr = GetHighKeyAddr();
     } else {
-      return {GetHighKey(), h_key_len_};
+      key_len = l_key_len_;
+      addr = GetLowKeyAddr();
     }
+
+    if constexpr (IsVarLenData<Key>()) {
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      sep_key = tls_key.get();
+      memcpy(sep_key, addr, key_len);
+    } else {
+      memcpy(&sep_key, addr, sizeof(Key));
+    }
+
+    return {sep_key, key_len};
   }
 
   /*####################################################################################
@@ -480,13 +491,8 @@ class NodeVarLen
     while (true) {
       node->mutex_.LockS();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->h_key_len_ == 0) return node;
-        const auto &high_key = node->GetHighKey();
-        if (Comp{}(key, high_key)) return node;
-      }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) return node;
 
       // go to the next node
       auto *next = node->next_;
@@ -514,11 +520,8 @@ class NodeVarLen
     while (true) {
       node->mutex_.LockSIX();
 
-      // check the node is not removed
-      if (node->is_removed_ == 0) {
-        // check the node includes a target key
-        if (node->h_key_len_ == 0 || Comp{}(key, node->GetHighKey())) return node;
-      }
+      // check the node is not removed and includes a target key
+      if (node->is_removed_ == 0 && node->CompHighKey(key)) return node;
 
       // go to the next node
       auto *next = node->next_;
@@ -875,7 +878,7 @@ class NodeVarLen
     r_node->block_size_ = kPageSize - r_offset;
     r_node->next_ = next_;
 
-    r_node->mutex_.UnlockX();
+    r_node->mutex_.DowngradeToSIX();
 
     /*------------------------------
      * reflect left-split
@@ -996,11 +999,13 @@ class NodeVarLen
     constexpr auto kMaxKeyLen = (IsVarLenData<Key>()) ? kMaxVarLenDataSize : sizeof(Key);
     constexpr auto kPayLen = sizeof(Payload);
 
+    const auto &[leftmost_key, leftmost_key_len] = ParseKey(*iter);
+
     // extract and insert entries into this node
     auto offset = kPageSize - kMaxKeyLen;  // reserve the space for a lowest key
     auto node_size = kHeaderLen + kMaxKeyLen;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len] = ParseEntry(*iter);
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + kPayLen;
 
       // check whether the node has sufficient space
@@ -1016,15 +1021,15 @@ class NodeVarLen
     block_size_ = kPageSize - offset;
 
     // set a lowest key
-    l_key_len_ = meta_array_[0].key_len;
-    l_key_offset_ = SetKey(kPageSize, GetKey(0), l_key_len_);
+    l_key_len_ = leftmost_key_len;
+    l_key_offset_ = SetKey(kPageSize, leftmost_key, l_key_len_);
 
     // link the sibling nodes if exist
     if (prev_node != nullptr) {
       prev_node->LinkNext(this);
     }
 
-    nodes.emplace_back(GetKey(0), this, l_key_len_);
+    nodes.emplace_back(leftmost_key, this, leftmost_key_len);
   }
 
   /**
@@ -1112,7 +1117,7 @@ class NodeVarLen
   {
     if (!next_) return true;     // the rightmost node
     if (!end_key) return false;  // perform full scan
-    return Comp{}(std::get<0>(*end_key), GetHighKey());
+    return CompHighKey(std::get<0>(*end_key));
   }
 
   /**
@@ -1196,19 +1201,28 @@ class NodeVarLen
   }
 
   /**
-   * @retval a highest key in this node.
+   * @param key A search key.
+   * @retval true if the given key is less than highest key.
+   * @retval false otherwise.
    */
   [[nodiscard]] auto
-  GetHighKey() const  //
-      -> Key
+  CompHighKey(const Key &key) const  //
+      -> bool
   {
+    if (h_key_len_ == 0) return true;
+
+    Key high_key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetHighKeyAddr());
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      high_key = tls_key.get();
+      memcpy(high_key, GetHighKeyAddr(), h_key_len_);
     } else {
-      Key key{};
-      memcpy(&key, GetHighKeyAddr(), sizeof(Key));
-      return key;
+      memcpy(&high_key, GetHighKeyAddr(), sizeof(Key));
     }
+    return Comp{}(key, high_key);
   }
 
   /*####################################################################################
@@ -1234,13 +1248,18 @@ class NodeVarLen
   GetKey(const Metadata meta) const  //
       -> Key
   {
+    Key key;
     if constexpr (IsVarLenData<Key>()) {
-      return reinterpret_cast<Key>(GetKeyAddr(meta));
+      thread_local std::unique_ptr<KeyWOPtr, std::function<void(Key)>>  //
+          tls_key{::dbgroup::memory::Allocate<KeyWOPtr>(kMaxVarLenDataSize),
+                  ::dbgroup::memory::Release<KeyWOPtr>};
+
+      key = tls_key.get();
+      memcpy(key, GetKeyAddr(meta), meta.key_len);
     } else {
-      Key key{};
       memcpy(&key, GetKeyAddr(meta), sizeof(Key));
-      return key;
     }
+    return key;
   }
 
   /**
@@ -1530,31 +1549,6 @@ class NodeVarLen
   }
 
   /**
-   * @brief Parse an entry of bulkload according to key's type.
-   *
-   * @tparam Entry std::pair or std::tuple for containing entries.
-   * @param entry a bulkload entry.
-   * @retval 1st: a target key.
-   * @retval 2nd: a target payload.
-   * @retval 3rd: the length of a target key.
-   */
-  template <class Entry>
-  constexpr auto
-  ParseEntry(const Entry &entry)  //
-      -> std::tuple<Key, std::tuple_element_t<1, Entry>, size_t>
-  {
-    constexpr auto kTupleSize = std::tuple_size_v<Entry>;
-    static_assert(2 <= kTupleSize && kTupleSize <= 3);
-
-    if constexpr (kTupleSize == 3) {
-      return entry;
-    } else {
-      const auto &[key, payload] = entry;
-      return {key, payload, sizeof(Key)};
-    }
-  }
-
-  /**
    * @brief Link this node to a right sibling node.
    *
    * @param r_node a right sibling node.
@@ -1614,8 +1608,8 @@ class NodeVarLen
 
   // a temporary node for SMOs.
   static thread_local inline std::unique_ptr<Node, std::function<void(void *)>>  //
-      temp_node_{new (::operator new(kPageSize, kCacheAlignVal)) Node{0},        // NOLINT
-                 std::function<void(void *)>{DeleteAlignedPtr}};
+      temp_node_{new (::dbgroup::memory::Allocate<Page>()) Node{0},              // NOLINT
+                 std::function<void(void *)>{::dbgroup::memory::Release<Page>}};
 };
 
 }  // namespace dbgroup::index::b_tree::component::psl

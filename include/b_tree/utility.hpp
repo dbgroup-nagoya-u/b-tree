@@ -24,6 +24,9 @@
 #include <cstdint>
 #include <cstring>
 
+// external sources
+#include "memory/utility.hpp"
+
 namespace dbgroup::index::b_tree
 {
 /*######################################################################################
@@ -120,6 +123,9 @@ constexpr size_t kMinUsedSpaceSize = B_TREE_MIN_USED_SPACE_SIZE;
 
 /// The maximum size of variable-length data.
 constexpr size_t kMaxVarLenDataSize = B_TREE_MAX_VARLEN_DATA_SIZE;
+
+/// The page size of virtual memory address.
+constexpr size_t kVMPageSize = 4096;
 
 /// Assumes that one cache line is represented by 64 bytes.
 constexpr size_t kCacheLineSize = 64;
