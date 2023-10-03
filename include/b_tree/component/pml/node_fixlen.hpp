@@ -725,9 +725,9 @@ class NodeFixLen
     // copy right half records to a right node
     r_node->pay_len_ = pay_len_;
     auto r_offset = r_node->CopyRecordsFrom(this, l_count, record_count_, kPageSize);
-    r_node->keys_[r_count - 1 + has_high_key_] =
-        keys_[record_count_ - 1 + has_high_key_];               // a highest key
-    r_node->keys_[r_count + has_high_key_] = r_node->keys_[0];  // a lowest key
+    const auto &sep_key = r_node->keys_[0];
+    r_node->keys_[r_count] = keys_[record_count_];     // a highest key
+    r_node->keys_[r_count + has_high_key_] = sep_key;  // a lowest key
 
     // update a right header
     r_node->block_size_ = kPageSize - r_offset;
@@ -747,8 +747,8 @@ class NodeFixLen
     }
     has_high_key_ = 1;
     // update lowest/highest keys
-    keys_[l_count + has_low_key_] = keys_[0];  // a lowest key
-    keys_[l_count] = r_node->keys_[0];         // a highest key
+    keys_[l_count + has_low_key_] = keys_[record_count_ + has_high_key_];  // a lowest key
+    keys_[l_count] = sep_key;                                              // a highest key
 
     mutex_.DowngradeToSIX();
     r_node->mutex_.LockSIX();
@@ -766,14 +766,15 @@ class NodeFixLen
     r_node->UpgradeToX();
 
     // copy right records to this nodes
-    const auto lowest_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
+    const auto low_key = keys_[record_count_ - 1 + has_high_key_ + has_low_key_];
     auto offset = CopyRecordsFrom(r_node, 0, r_node->record_count_, kPageSize - block_size_);
     if (r_node->has_high_key_) {
-      keys_[record_count_ + has_low_key_] = std::move(lowest_key);
       keys_[record_count_] = r_node->keys_[r_node->record_count_];
-    } else {
-      keys_[record_count_] = std::move(lowest_key);
     }
+    if (has_low_key_) {
+      keys_[record_count_ + r_node->has_high_key_] = std::move(low_key);
+    }
+
     // update a header
     block_size_ = kPageSize - offset;
     if (!is_inner_) {
