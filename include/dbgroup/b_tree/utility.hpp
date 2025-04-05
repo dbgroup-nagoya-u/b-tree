@@ -27,42 +27,36 @@ namespace dbgroup::index::b_tree
  * Global enum and constants
  *############################################################################*/
 
-/// the default time interval for garbage collection [us].
+/// @brief The default time interval for garbage collection [us].
 constexpr size_t kDefaultGCTime = 10000;  // 10 ms
 
-/// the default number of worker threads for garbage collection.
+/// @brief The default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
 
-/// a flag for indicating pessimistic locking.
-constexpr bool kPessimisticLock = false;
+/// @brief A flag for using multi-level SMO.
+constexpr bool kMultiLevelSMO = false;
 
-/// a flag for indicating optimistic locking.
-constexpr bool kOptimisticLock = true;
+/// @brief A flag for using single-level SMO.
+constexpr bool kSingleLevelSMO = true;
 
-/// a flag for indicating multi-layer locking.
-constexpr bool kMultiLayerLock = false;
-
-/// a flag for indicating multi-layer locking.
-constexpr bool kSingleLayerLock = true;
+/// @brief A flag for using optimistic concurrency controls.
+constexpr bool kUseOptimisticCC = true;
 
 /*############################################################################*
  * Tuning parameters for B+trees
  *############################################################################*/
 
-/// The default page size of each node.
+/// @brief The default page size of each node.
 constexpr size_t kPageSize = (B_TREE_PAGE_SIZE);
 
-/// The maximum size of deleted space size for invoking split.
-constexpr size_t kMaxDeletedSpaceSize = (B_TREE_MAX_DELETED_SPACE_SIZE);
+/// @brief A ratio for splitting leftmost/rightmost nodes.
+constexpr double kSepRatio{B_TREE_EDGE_NODES_SPLIT_RATIO};
 
-/// The minimum size of free space size for invoking split.
-constexpr size_t kMinFreeSpaceSize = (B_TREE_MIN_FREE_SPACE_SIZE);
+/// @brief The minimum usage for invoking merge.
+constexpr size_t kMinNodeUsage = (B_TREE_MIN_NODE_USAGE);
 
-/// The minimum size of used space size for invoking merge.
-constexpr size_t kMinUsedSpaceSize = (B_TREE_MIN_USED_SPACE_SIZE);
-
-/// The maximum size of variable-length data.
-constexpr size_t kMaxVarLenDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
+/// @brief The maximum size of variable-length data.
+constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
 
 /// @brief A sleep time for backoff [us].
 constexpr std::chrono::microseconds kBackOffTime{B_TREE_BACKOFF_TIME};

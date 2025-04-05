@@ -1,0 +1,711 @@
+/*
+ * Copyright 2023 Database Group, Nagoya University
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef B_TREE_DBGROUP_B_TREE_COMPONENT_NODE_HPP_
+#define B_TREE_DBGROUP_B_TREE_COMPONENT_NODE_HPP_
+
+// C++ standard libraries
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
+// external sources
+#include "dbgroup/constants.hpp"
+#include "dbgroup/index/utility.hpp"
+#include "dbgroup/lock/optimistic_lock.hpp"
+#include "dbgroup/memory/utility.hpp"
+
+// local sources
+#include "dbgroup/b_tree/component/common.hpp"
+#include "dbgroup/b_tree/component/metadata.hpp"
+#include "dbgroup/b_tree/utility.hpp"
+
+// we intentionally use a zero-length array for record metadata
+#pragma GCC diagnostic ignored "-Warray-bounds"
+
+namespace dbgroup::index::b_tree::component
+{
+/**
+ * @brief A class for representing nodes in B+trees.
+ *
+ * @tparam Key A target key class.
+ * @tparam Comp A comparator class for keys.
+ * @tparam Lock A lock class for concurrency controls.
+ * @tparam kUseOptimisticCC A flag for using optimistic concurrency controls.
+ */
+template <class Key, class Comp, class Lock, bool kUseOptimisticCC>
+class Node
+{
+  /*##########################################################################*
+   * Type aliases
+   *##########################################################################*/
+
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+
+ public:
+  /*##########################################################################*
+   * Public types
+   *##########################################################################*/
+
+  using OptGuard = OptGuardExtractor<Lock, kUseOptimisticCC>::type;
+  using SGuard = SGuardExtractor<Lock, !kUseOptimisticCC>::type;
+  using SIXGuard = SIXGuardExtractor<Lock, !kUseOptimisticCC>::type;
+  using XGuard = typename Lock::XGuard;
+  using ReadGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SGuard>;
+  using CheckGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SIXGuard>;
+
+  /*##########################################################################*
+   * Public constructors and assignment operators
+   *##########################################################################*/
+
+  /**
+   * @brief Construct an empty node.
+   *
+   * @param level The level where this node is.
+   */
+  constexpr explicit Node(  //
+      const size_t level = 0)
+      : level_{static_cast<uint8_t>(level)}
+  {
+    static_assert(                    //
+        sizeof(Node) <= kHeaderSize,  //
+        "Header regions must be in 32 bytes.");
+  }
+
+  /**
+   * @brief Construct a new root node.
+   *
+   * @param level The level where this node is.
+   * @param key A separator key.
+   * @param key_len The length of a separator key.
+   * @param l_child A left child node.
+   * @param r_child A right child node.
+   */
+  Node(  //
+      const size_t level,
+      const Key &key,
+      const size_t key_len,
+      const void *l_child,
+      const void *r_child)  //
+      : rec_num_{2},
+        block_size_{static_cast<uint16_t>(2 * kPtrSize + key_len)},
+        usage_{static_cast<uint16_t>(kHeaderSize + 2 * (kMetaSize + kPtrSize) + key_len)},
+        level_{static_cast<uint8_t>(level)}
+  {
+    constexpr size_t kLChildOffset = kPageSize - kPtrSize;
+    constexpr size_t kRChildOffset = kPageSize - 2 * kPtrSize;
+
+    std::memcpy(ShiftAddr(this, kLChildOffset), &l_child, kPtrSize);
+    meta_arr_[0] = Metadata{kLChildOffset, 0, kPtrSize};
+
+    const auto offset = kRChildOffset - key_len;
+    std::memcpy(ShiftAddr(this, kRChildOffset), &r_child, kPtrSize);
+    std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
+    meta_arr_[1] = Metadata{offset, key_len, key_len + kPtrSize};
+  }
+
+  /**
+   * @brief Construct split nodes.
+   *
+   * @param[in,out] l_node A left (source) node.
+   * @note This is a split right node.
+   */
+  explicit Node(  //
+      Node *l_node)
+      : level_{l_node->level_}, leftmost_{false}, sib_node_{l_node->sib_node_}
+  {
+    auto *tmp = new (&_tls_page) Node{};
+
+    // copy split-left records to a temporary region
+    const size_t rec_num = l_node->rec_num_;
+    size_t pos = 0;
+    size_t l_off = kPageSize;
+    const double sep_ratio = l_node->leftmost_ && sib_node_     ? 1.0 - kSepRatio
+                             : !l_node->leftmost_ && !sib_node_ ? kSepRatio
+                                                                : 0.5;
+    const size_t sep_size = (l_node->usage_ - l_node->hk_len_) * sep_ratio;
+    tmp->template CopyRecords<kSplit>(l_node, pos, rec_num, l_off, sep_size);
+    const auto meta = l_node->meta_arr_[pos];
+    l_off -= meta.key_len;
+    std::memcpy(ShiftAddr(tmp, l_off), ShiftAddr(l_node, meta.offset), meta.key_len);
+    tmp->block_size_ += meta.key_len;
+    tmp->usage_ += meta.key_len;
+
+    // copy split-right records to this node
+    size_t r_offset = kPageSize;
+    CopyHighKey(l_node, r_offset);
+    CopyRecords(l_node, pos, rec_num, r_offset);
+
+    // copy the split-left records to the left node
+    l_node->sib_node_ = this;
+    l_node->rec_num_ = tmp->rec_num_;
+    l_node->block_size_ = tmp->block_size_;
+    l_node->usage_ = tmp->usage_;
+    l_node->hk_len_ = meta.key_len;
+    l_node->hk_offset_ = l_off;
+    std::memcpy(l_node->meta_arr_, tmp->meta_arr_, kMetaSize * tmp->rec_num_);
+    std::memcpy(ShiftAddr(l_node, l_off), ShiftAddr(tmp, l_off), tmp->block_size_);
+  }
+
+  Node(const Node &) = delete;
+  Node(Node &&) = delete;
+
+  auto operator=(const Node &) -> Node & = delete;
+  auto operator=(Node &&) -> Node & = delete;
+
+  /*##########################################################################*
+   * Public destructors
+   *##########################################################################*/
+
+  /**
+   * @brief Destroy the node object.
+   *
+   */
+  ~Node() = default;
+
+  /*##########################################################################*
+   * Public getters
+   *##########################################################################*/
+
+  /**
+   * @return The level where this node is.
+   */
+  [[nodiscard]] constexpr auto
+  GetLevel() const  //
+      -> size_t
+  {
+    return level_;
+  }
+
+  /**
+   * @retval true if this node has been removed.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] constexpr auto
+  Removed() const  //
+      -> bool
+  {
+    return removed_;
+  }
+
+  /**
+   * @return A sibling node.
+   */
+  [[nodiscard]] constexpr auto
+  GetSibNode() const  //
+      -> Node *
+  {
+    return sib_node_;
+  }
+
+  /**
+   * @retval 1st: A separator key.
+   * @retval 2nd: The length of a separator key.
+   */
+  [[nodiscard]] auto
+  GetSeparatorKey() const  //
+      -> std::pair<Key, size_t>
+  {
+    const auto *src_addr = ShiftAddr(this, hk_offset_);
+    if constexpr (IsVarLenData<Key>()) {
+      auto *key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
+      std::memcpy(key, src_addr, hk_len_);
+      return {key, hk_len_};
+    } else {
+      Key key{};
+      std::memcpy(&key, src_addr, sizeof(Key));
+      return {key, sizeof(Key)};
+    }
+  }
+
+  /**
+   * @param key A search key.
+   * @retval true if this node can include a given key.
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  Include(                   //
+      const Key &key) const  //
+      -> bool
+  {
+    if (hk_len_ == 0) return true;
+
+    Key h_key;
+    const auto *src_addr = ShiftAddr(this, hk_offset_);
+    if constexpr (IsVarLenData<Key>()) {
+      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
+      h_key = std::bit_cast<Key>(&tls_key);
+      std::memcpy(h_key, src_addr, hk_len_);
+    } else {
+      std::memcpy(&h_key, src_addr, sizeof(Key));
+    }
+    return kLess(key, h_key);
+  }
+
+  /**
+   * @brief Get the position of a search key using binary search.
+   *
+   * @param key A search key.
+   * @retval 1st: true if a target key is found.
+   * @retval 1st: false otherwise.
+   * @retval 2nd: The position of a found record.
+   * @note If no specified key is in this node, this returns the minimum
+   * position greater than the specified key.
+   */
+  [[nodiscard]] auto
+  SearchRecord(              //
+      const Key &key) const  //
+      -> std::pair<bool, size_t>
+  {
+    auto found = false;
+    auto pos = static_cast<int64_t>(level_ > 0);
+    int64_t end_pos = rec_num_ - 1;
+    while (pos <= end_pos) {
+      const int64_t cur_pos = (pos + end_pos) / 2;
+      const auto &index_key = GetKey(cur_pos);
+      if (kLess(key, index_key)) {
+        end_pos = cur_pos - 1;
+      } else if (kLess(index_key, key)) {
+        pos = cur_pos + 1;
+      } else {  // the target key has been found
+        pos = cur_pos;
+        found = true;
+        break;
+      }
+    }
+    return {found, pos};
+  }
+
+  /**
+   * @brief Search a child node with a given key using binary search.
+   *
+   * @param key A search key.
+   * @return A child node.
+   */
+  [[nodiscard]] auto
+  SearchChild(               //
+      const Key &key) const  //
+      -> Node *
+  {
+    auto [found, pos] = SearchRecord(key);
+    pos -= static_cast<int64_t>(!found);
+
+    Node *child;
+    const auto meta = meta_arr_[pos];
+    std::memcpy(&child, ShiftAddr(this, meta.offset + meta.key_len), kPtrSize);
+    return child;
+  }
+
+  /**
+   * @tparam Guard A desired guard type.
+   * @return A guard instance for this node.
+   */
+  template <class Guard>
+  [[nodiscard]] auto
+  GetGuard()
+  {
+    if constexpr (kUseOptimisticCC) {
+      if constexpr (std::is_same_v<Guard, typename Lock::OptGuard>) {
+        return lock_.GetVersion();
+      } else {
+        return lock_.LockX();
+      }
+    } else {
+      if constexpr (std::is_same_v<Guard, typename Lock::SGuard>) {
+        return lock_.LockS();
+      } else if constexpr (std::is_same_v<Guard, typename Lock::SIXGuard>) {
+        return lock_.LockSIX();
+      } else {
+        return lock_.LockX();
+      }
+    }
+  }
+
+  /*##########################################################################*
+   * Read APIs
+   *##########################################################################*/
+
+  /**
+   * @brief Read the payload associated with a given key.
+   *
+   * @tparam Payload A class of stored payloads.
+   * @param key A search key.
+   * @retval A found payload if exist.
+   * @retval std::nullopt otherwise.
+   */
+  template <class Payload>
+  [[nodiscard]] auto
+  Read(                      //
+      const Key &key) const  //
+      -> std::optional<Payload>
+  {
+    const auto [found, pos] = SearchRecord(key);
+    const auto meta = meta_arr_[pos];
+    if (!found || meta.deleted) return std::nullopt;
+
+    Payload payload;
+    const auto *addr = ShiftAddr(this, meta.GetPayOff());
+    if constexpr (IsVarLenData<Payload>()) {
+      using PayWOPtr = std::remove_pointer_t<Payload>;
+      alignas(alignof(PayWOPtr)) thread_local std::byte tls_payload[kMaxVarDataSize];
+      payload = std::bit_cast<Payload>(&tls_payload);
+      std::memcpy(payload, addr, meta.GetPayLen());
+    } else {
+      std::memcpy(&payload, addr, sizeof(Payload));
+    }
+    return payload;
+  }
+
+  /*##########################################################################*
+   * Write APIs
+   *##########################################################################*/
+
+  /**
+   * @brief Write a given kay/payload pair.
+   *
+   * @param x_guard A lock guard to set version.
+   * @param key A target key to be written.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval kCompleted if a record is written.
+   * @retval kNeedSplit if this node should be split before inserting a record.
+   */
+  auto
+  Write(  //
+      Lock::XGuard &x_guard,
+      const Key &key,
+      const size_t key_len,
+      const void *payload,
+      const size_t pay_len)  //
+      -> NodeRC
+  {
+    const auto rec_len = key_len + pay_len;
+    const auto total_len = rec_len + kMetaSize;
+    if (usage_ + total_len > kPageSize) return kNeedSplit;
+    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+      CleanUp();
+      if constexpr (kUseOptimisticCC) {
+        x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+      }
+    }
+
+    const auto [found, pos] = SearchRecord(key);
+    auto &meta = meta_arr_[pos];
+    auto offset = kPageSize - block_size_ - rec_len;
+    if (found) {  // try to update a record
+      if (meta.deleted) {
+        usage_ += total_len;
+        if constexpr (kUseOptimisticCC) {
+          x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+        }
+      } else {
+        usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
+      }
+      if (rec_len <= meta.rec_len) {  // reuse a record
+        offset = meta.offset;
+      } else {  // insert as a new record
+        std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
+        block_size_ += rec_len;
+      }
+      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+      meta = Metadata{offset, key_len, rec_len};
+      return kCompleted;
+    }
+
+    // insert a new record
+    std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
+    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
+    meta = Metadata{offset, key_len, rec_len};
+    ++rec_num_;
+    block_size_ += rec_len;
+    usage_ += total_len;
+    if constexpr (kUseOptimisticCC) {
+      x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+    }
+    return kCompleted;
+  }
+
+  /**
+   * @brief Insert a given kay/payload pair.
+   *
+   * @param x_guard A lock guard to set version.
+   * @param pos A position where a new record is inserted.
+   * @param key A target key to be written.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval kCompleted if a record is written.
+   * @retval kNeedSplit if this node should be split before inserting a record.
+   */
+  auto
+  Insert(  //
+      Lock::XGuard &x_guard,
+      size_t pos,
+      const Key &key,
+      const size_t key_len,
+      const void *payload,
+      const size_t pay_len)  //
+      -> NodeRC
+  {
+    const auto rec_len = key_len + pay_len;
+    const auto total_len = rec_len + kMetaSize;
+    if (usage_ + total_len > kPageSize) return kNeedSplit;
+    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+      CleanUp();
+      pos = SearchRecord(key).second;
+    }
+
+    // insert a new record
+    auto &meta = meta_arr_[pos];
+    auto offset = kPageSize - block_size_ - rec_len;
+    std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
+    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
+    meta = Metadata{offset, key_len, rec_len};
+    ++rec_num_;
+    block_size_ += rec_len;
+    usage_ += total_len;
+    if constexpr (kUseOptimisticCC) {
+      x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+    }
+    return kCompleted;
+  }
+
+  /**
+   * @brief Update a record using a given kay/payload pair.
+   *
+   * @param x_guard A lock guard to set version.
+   * @param pos A position where a target record is.
+   * @param key A target key to be written.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval kCompleted if a record is written.
+   * @retval kNeedSplit if this node should be split before inserting a record.
+   */
+  auto
+  Update(  //
+      Lock::XGuard &x_guard,
+      size_t pos,
+      const Key &key,
+      const size_t key_len,
+      const void *payload,
+      const size_t pay_len)  //
+      -> NodeRC
+  {
+    const auto rec_len = key_len + pay_len;
+    const auto total_len = rec_len + kMetaSize;
+    if (usage_ + total_len > kPageSize) return kNeedSplit;
+    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+      CleanUp();
+      pos = SearchRecord(key).second;
+      if constexpr (kUseOptimisticCC) {
+        x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+      }
+    }
+
+    auto &meta = meta_arr_[pos];
+    auto offset = kPageSize - block_size_ - rec_len;
+    if (rec_len <= meta.rec_len) {  // reuse a record
+      offset = meta.offset;
+    } else {  // insert as a new record
+      std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
+      block_size_ += rec_len;
+    }
+    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
+    meta = Metadata{offset, key_len, rec_len};
+    return kCompleted;
+  }
+
+ private:
+  /*##########################################################################*
+   * Internal types
+   *##########################################################################*/
+
+  /// @brief A type for allocating variable-length data.
+  using KeyWOPtr = std::remove_pointer_t<Key>;
+
+  /*##########################################################################*
+   * Internal constants
+   *##########################################################################*/
+
+  /// @brief A comparator instance.
+  static constexpr Comp kLess{};
+
+  /// @brief A flag for indicating whether the current SMO is splitting.
+  static constexpr bool kSplit = true;
+
+  /*##########################################################################*
+   * Internal getter for header information
+   *##########################################################################*/
+
+  /**
+   * @param pos The position of a target record.
+   * @return A key in a target record.
+   */
+  [[nodiscard]] auto
+  GetKey(                      //
+      const size_t pos) const  //
+      -> Key
+  {
+    Key key;
+    const auto meta = meta_arr_[pos];
+    const auto *src_addr = ShiftAddr(this, meta.offset);
+    if constexpr (IsVarLenData<Key>()) {
+      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
+      key = std::bit_cast<Key>(&tls_key);
+      std::memcpy(key, src_addr, meta.key_len);
+    } else {
+      std::memcpy(&key, src_addr, sizeof(Key));
+    }
+    return key;
+  }
+
+  /**
+   * @brief Clean up this node.
+   *
+   */
+  void
+  CleanUp()
+  {
+    auto *tmp = new (&_tls_page) Node{};
+
+    size_t offset = kPageSize;
+    size_t pos = 0;
+    tmp->CopyHighKey(this, offset);
+    tmp->CopyRecords(this, pos, rec_num_, offset);
+
+    rec_num_ = tmp->rec_num_;
+    block_size_ = tmp->block_size_;
+    usage_ = tmp->usage_;
+    hk_offset_ = tmp->hk_offset_;
+    std::memcpy(meta_arr_, tmp->meta_arr_, kMetaSize * rec_num_);
+    std::memcpy(ShiftAddr(this, offset), ShiftAddr(tmp, offset), block_size_);
+  }
+
+  /**
+   * @brief Copy a highest key from a given node.
+   *
+   * @param[in] src A source node that has a highest key.
+   * @param[in,out] offset An offset to the top of the record block.
+   */
+  void
+  CopyHighKey(  //
+      const Node *src,
+      size_t &offset)
+  {
+    hk_len_ = src->hk_len_;
+    offset -= hk_len_;
+    std::memcpy(ShiftAddr(this, offset), ShiftAddr(src, src->hk_offset_), hk_len_);
+    hk_offset_ = offset;
+    block_size_ += hk_len_;
+    usage_ += hk_len_;
+  }
+
+  /**
+   * @brief Copy records from a given node.
+   *
+   * @param[in] src A source node page.
+   * @param[in,out] pos The begin position of target records.
+   * @param[in] end_pos The end position of target records.
+   * @param[in,out] offset An offset to a record block.
+   * @param[in] sep_size The desired size of a left node.
+   */
+  template <bool kSearchSplitPos = false>
+  void
+  CopyRecords(  //
+      const Node *src,
+      size_t &pos,
+      const size_t end_pos,
+      size_t &offset,
+      [[maybe_unused]] const size_t sep_size = kPageSize)
+  {
+    for (; pos < end_pos; ++pos) {
+      const auto meta = src->meta_arr_[pos];
+      if (meta.deleted) continue;
+
+      const auto rec_len = meta.rec_len;
+      const auto total_len = rec_len + kMetaSize;
+      if constexpr (kSearchSplitPos) {
+        if (usage_ + (total_len / 2) > sep_size) break;
+      }
+      offset -= rec_len;
+      std::memcpy(ShiftAddr(this, offset), ShiftAddr(src, meta.offset), rec_len);
+      meta_arr_[rec_num_++] = Metadata{offset, meta.key_len, rec_len};
+      block_size_ += rec_len;
+      usage_ += total_len;
+    }
+  }
+
+  /*##########################################################################*
+   * Internal member variables
+   *##########################################################################*/
+
+  /// @brief The number of records in this node.
+  uint16_t rec_num_{};
+
+  /// @brief The total byte length of a record block.
+  uint16_t block_size_{};
+
+  /// @brief The total usage of this node.
+  uint16_t usage_{kHeaderSize};
+
+  /// @brief A offset to a highest key.
+  uint16_t hk_offset_{};
+
+  /// @brief The length of a highest key.
+  uint16_t hk_len_{};
+
+  /// @brief A level where this node is.
+  uint8_t level_{};
+
+  /// @brief A flag for indicating this node is removed from a tree.
+  bool removed_{};
+
+  /// @brief A flag for indicating the leftmost node.
+  bool leftmost_{true};
+
+  /// @brief A lock for concurrency controls.
+  Lock lock_{};
+
+  /// @brief A right sibling node.
+  Node *sib_node_{};
+
+  /// @brief An actual data block (it starts with record metadata).
+  Metadata meta_arr_[0];
+
+  /*##########################################################################*
+   * Thread local class variables
+   *##########################################################################*/
+  // NOLINTBEGIN
+
+  /// @brief A temporary node page for SMOs.
+  static thread_local inline Page _tls_page{};
+
+  // NOLINTEND
+};
+
+}  // namespace dbgroup::index::b_tree::component
+
+#endif  // B_TREE_DBGROUP_B_TREE_COMPONENT_NODE_HPP_

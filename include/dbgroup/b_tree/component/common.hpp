@@ -19,6 +19,7 @@
 
 // C++ standard libraries
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 
 // external libraries
@@ -38,8 +39,26 @@ namespace dbgroup::index::b_tree::component
 /// @brief The size of record metadata.
 constexpr size_t kMetaSize = kWordSize;
 
+/// @brief The size of pointers.
+constexpr size_t kPtrSize = kWordSize;
+
+/// @brief The length of node header.
+constexpr size_t kHeaderSize = 32;
+
 /// @brief The alignment size for internal pages.
 constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
+
+/// @brief The unit of insert/delete versions.
+constexpr uint32_t kInsDelVerUnit = 0x0000'1000U;
+
+/// @brief A bit mask for extracting insert/delete versions.
+constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
+
+/// @brief The unit of SMO versions.
+constexpr uint32_t kSMOVerUnit = 0x0100'0000U;
+
+/// @brief A bit mask for extracting SMO versions.
+constexpr uint32_t kSMOMask = 0xFF00'0000U;
 
 /*############################################################################*
  * Internal types
@@ -65,14 +84,57 @@ enum NodeRC {
  *
  */
 struct alignas(kPageAlign) Page : public ::dbgroup::memory::DefaultTarget {
-  // filling zeros in reclaimed pages
+  /// @brief Filling zeros in reclaimed pages
   using T = ZeroFilling<kPageSize>;
 
-  // reuse pages
+  /// @brief Reuse pages
   static constexpr bool kReusePages = true;
 
   /// @brief A dummy member variable to ensure the page size.
   std::byte dummy[kPageSize]{};
+};
+
+/*############################################################################*
+ * Utility types for extracting guard classes
+ *############################################################################*/
+
+template <class T, bool kHasGuard>
+struct SGuardExtractor;
+
+template <typename T>
+struct SGuardExtractor<T, true> {
+  using type = typename T::SGuard;
+};
+
+template <class T>
+struct SGuardExtractor<T, false> {
+  using type = void;
+};
+
+template <class T, bool kHasGuard>
+struct SIXGuardExtractor;
+
+template <typename T>
+struct SIXGuardExtractor<T, true> {
+  using type = typename T::SIXGuard;
+};
+
+template <class T>
+struct SIXGuardExtractor<T, false> {
+  using type = void;
+};
+
+template <class T, bool kHasGuard>
+struct OptGuardExtractor;
+
+template <typename T>
+struct OptGuardExtractor<T, true> {
+  using type = typename T::OptGuard;
+};
+
+template <class T>
+struct OptGuardExtractor<T, false> {
+  using type = void;
 };
 
 }  // namespace dbgroup::index::b_tree::component
