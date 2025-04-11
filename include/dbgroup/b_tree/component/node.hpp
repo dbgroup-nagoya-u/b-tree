@@ -30,7 +30,7 @@
 // external sources
 #include "dbgroup/constants.hpp"
 #include "dbgroup/index/utility.hpp"
-#include "dbgroup/lock/optimistic_lock.hpp"
+#include "dbgroup/lock/utility.hpp"
 #include "dbgroup/memory/utility.hpp"
 
 // local sources
@@ -51,7 +51,10 @@ namespace dbgroup::index::b_tree::component
  * @tparam Lock A lock class for concurrency controls.
  * @tparam kUseOptimisticCC A flag for using optimistic concurrency controls.
  */
-template <class Key, class Comp, class Lock, bool kUseOptimisticCC>
+template <class Key,  //
+          class Comp,
+          ::dbgroup::lock::Lockable Lock,
+          bool kUseOptimisticCC>
 class Node
 {
   /*##########################################################################*
@@ -657,6 +660,18 @@ class Node
       usage_ += total_len;
     }
   }
+
+  /*##########################################################################*
+   * Static assertions
+   *##########################################################################*/
+
+  static_assert(  //
+      sizeof(Lock) <= kWordSize,
+      "The size of a lock class must be smaller than 8 bytes.");
+
+  static_assert(  //
+      !kUseOptimisticCC || ::dbgroup::lock::OptimisticallyLockable<Lock>,
+      "A lock class must have optimistic lock APIs when using Optimistic CC.");
 
   /*##########################################################################*
    * Internal member variables

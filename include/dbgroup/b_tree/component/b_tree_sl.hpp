@@ -31,7 +31,7 @@
 // external sources
 #include "dbgroup/constants.hpp"
 #include "dbgroup/index/utility.hpp"
-#include "dbgroup/lock/common.hpp"
+#include "dbgroup/lock/utility.hpp"
 #include "dbgroup/memory/utility.hpp"
 
 // local sources
@@ -53,8 +53,8 @@ namespace dbgroup::index::b_tree::component
 template <class Key,
           class Payload,
           class Comp,
-          class InnerLock,
-          class LeafLock,
+          ::dbgroup::lock::OptimisticallyLockable InnerLock,
+          ::dbgroup::lock::Lockable LeafLock,
           bool kUseOptCCForLeaf>
 class BTreeSL
 {
