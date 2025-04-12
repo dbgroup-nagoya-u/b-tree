@@ -729,6 +729,9 @@ class Node
   /// @brief A flag for indicating the leftmost node.
   bool leftmost_{true};
 
+  /// @brief A blank block.
+  std::byte blank_[5]{};  // NOLINT
+
   /// @brief A lock for concurrency controls.
   Lock lock_{};
 
