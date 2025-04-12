@@ -19,6 +19,7 @@
 
 // C++ standard libraries
 #include <bit>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -684,6 +685,7 @@ class Node
       meta_arr_[rec_num_++] = Metadata{offset, meta.key_len, rec_len};
       block_size_ += rec_len;
       usage_ += total_len;
+      assert(kHeaderSize + kMetaSize * rec_num_ <= offset_);
     }
   }
 
