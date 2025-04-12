@@ -96,7 +96,21 @@ class BTreeSL
    * @brief Destroy the object.
    *
    */
-  ~BTreeSL() = default;
+  ~BTreeSL()
+  {
+    std::vector<std::pair<INode *, size_t>> stack{};
+    stack.reserve(kInitialHeight);
+    stack.emplace_back(root_.load(kAcquire), 0);
+    while (!stack.empty()) {
+      auto &[node, pos] = stack.back();
+      if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
+        stack.emplace_back(node->GetChild(pos++), 0);
+        continue;
+      }
+      ::dbgroup::memory::Release<Page>(node);
+      stack.pop_back();
+    }
+  }
 
   /*##########################################################################*
    * Public read APIs

@@ -199,6 +199,16 @@ class Node
   }
 
   /**
+   * @return The number of records in this node.
+   */
+  [[nodiscard]] constexpr auto
+  GetRecNum() const  //
+      -> size_t
+  {
+    return rec_num_;
+  }
+
+  /**
    * @retval true if this node has been removed.
    * @retval false otherwise.
    */
@@ -217,6 +227,21 @@ class Node
       -> Node *
   {
     return sib_node_;
+  }
+
+  /**
+   * @param pos A target record position.
+   * @return A child node.
+   */
+  [[nodiscard]] auto
+  GetChild(                    //
+      const size_t pos) const  //
+      -> Node *
+  {
+    Node *child;
+    const auto meta = meta_arr_[pos];
+    std::memcpy(&child, ShiftAddr(this, meta.offset + meta.key_len), kPtrSize);
+    return child;
   }
 
   /**
