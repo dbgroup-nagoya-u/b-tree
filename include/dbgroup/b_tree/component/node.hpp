@@ -110,7 +110,7 @@ class Node
       const void *l_child,
       const void *r_child)  //
       : rec_num_{2},
-        block_size_{static_cast<uint16_t>(2 * kPtrSize + key_len)},
+        offset_{static_cast<uint16_t>(kPageSize - (2 * kPtrSize + key_len))},
         usage_{static_cast<uint16_t>(kHeaderSize + 2 * (kMetaSize + kPtrSize) + key_len)},
         level_{static_cast<uint8_t>(level)}
   {
@@ -134,39 +134,31 @@ class Node
    */
   explicit Node(  //
       Node *l_node)
-      : level_{l_node->level_}, leftmost_{false}, sib_node_{l_node->sib_node_}
+      : offset_{static_cast<uint16_t>(kPageSize - l_node->hk_len_)},
+        level_{l_node->level_},
+        leftmost_{false},
+        sib_node_{l_node->sib_node_}
   {
     auto *tmp = new (&_tls_page) Node{};
+    tmp->offset_ = kPageSize - MaxSize<Key>();
 
     // copy split-left records to a temporary region
-    const size_t rec_num = l_node->rec_num_;
-    size_t pos = 0;
-    size_t l_off = kPageSize;
-    const double sep_ratio = l_node->leftmost_ && sib_node_     ? 1.0 - kSepRatio
-                             : !l_node->leftmost_ && !sib_node_ ? kSepRatio
-                                                                : 0.5;
+    const double sep_ratio = l_node->leftmost_ && sib_node_     ? 0.25  // NOLINTBEGIN
+                             : !l_node->leftmost_ && !sib_node_ ? 0.75
+                                                                : 0.5;  // NOLINTEND
     const size_t sep_size = (l_node->usage_ - l_node->hk_len_) * sep_ratio;
-    tmp->template CopyRecords<kSplit>(l_node, pos, rec_num, l_off, sep_size);
-    const auto meta = l_node->meta_arr_[pos];
-    l_off -= meta.key_len;
-    std::memcpy(ShiftAddr(tmp, l_off), ShiftAddr(l_node, meta.offset), meta.key_len);
-    tmp->block_size_ += meta.key_len;
-    tmp->usage_ += meta.key_len;
+    size_t pos = 0;
+    tmp->template CopyRecords<kSplit>(l_node, pos, l_node->rec_num_, sep_size);
+    const auto sep_meta = l_node->meta_arr_[pos];
+    tmp->CopyHighKey(ShiftAddr(l_node, sep_meta.offset), sep_meta.key_len);
 
     // copy split-right records to this node
-    size_t r_offset = kPageSize;
-    CopyHighKey(l_node, r_offset);
-    CopyRecords(l_node, pos, rec_num, r_offset);
+    CopyHighKey(ShiftAddr(l_node, offset_), l_node->hk_len_);
+    CopyRecords(l_node, pos, l_node->rec_num_);
 
     // copy the split-left records to the left node
+    l_node->CopyFromTmpNode();
     l_node->sib_node_ = this;
-    l_node->rec_num_ = tmp->rec_num_;
-    l_node->block_size_ = tmp->block_size_;
-    l_node->usage_ = tmp->usage_;
-    l_node->hk_len_ = meta.key_len;
-    l_node->hk_offset_ = l_off;
-    std::memcpy(l_node->meta_arr_, tmp->meta_arr_, kMetaSize * tmp->rec_num_);
-    std::memcpy(ShiftAddr(l_node, l_off), ShiftAddr(tmp, l_off), tmp->block_size_);
   }
 
   Node(const Node &) = delete;
@@ -254,7 +246,7 @@ class Node
   GetSeparatorKey() const  //
       -> std::pair<Key, size_t>
   {
-    const auto *src_addr = ShiftAddr(this, hk_offset_);
+    const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       auto *key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
       std::memcpy(key, src_addr, hk_len_);
@@ -279,7 +271,7 @@ class Node
     if (hk_len_ == 0) return true;
 
     Key h_key;
-    const auto *src_addr = ShiftAddr(this, hk_offset_);
+    const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
       h_key = std::bit_cast<Key>(&tls_key);
@@ -431,7 +423,7 @@ class Node
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
     if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
       CleanUp();
       if constexpr (kUseOptimisticCC) {
         x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
@@ -440,7 +432,7 @@ class Node
 
     const auto [found, pos] = SearchRecord(key);
     auto &meta = meta_arr_[pos];
-    auto offset = kPageSize - block_size_ - rec_len;
+    auto offset = offset_ - rec_len;
     if (found) {  // try to update a record
       if (meta.deleted) {
         usage_ += total_len;
@@ -454,7 +446,7 @@ class Node
         offset = meta.offset;
       } else {  // insert as a new record
         std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
-        block_size_ += rec_len;
+        offset_ -= rec_len;
       }
       std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
       meta = Metadata{offset, key_len, rec_len};
@@ -467,7 +459,7 @@ class Node
     std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
     meta = Metadata{offset, key_len, rec_len};
     ++rec_num_;
-    block_size_ += rec_len;
+    offset_ -= rec_len;
     usage_ += total_len;
     if constexpr (kUseOptimisticCC) {
       x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
@@ -500,20 +492,20 @@ class Node
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
     if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
       CleanUp();
       pos = SearchRecord(key).second;
     }
 
     // insert a new record
     auto &meta = meta_arr_[pos];
-    auto offset = kPageSize - block_size_ - rec_len;
+    auto offset = offset_ - rec_len;
     std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
     std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
     std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
     meta = Metadata{offset, key_len, rec_len};
     ++rec_num_;
-    block_size_ += rec_len;
+    offset_ -= rec_len;
     usage_ += total_len;
     if constexpr (kUseOptimisticCC) {
       x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
@@ -546,7 +538,7 @@ class Node
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
     if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kMetaSize * rec_num_ + block_size_ + total_len > kPageSize) {
+    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
       CleanUp();
       pos = SearchRecord(key).second;
       if constexpr (kUseOptimisticCC) {
@@ -555,12 +547,12 @@ class Node
     }
 
     auto &meta = meta_arr_[pos];
-    auto offset = kPageSize - block_size_ - rec_len;
+    auto offset = offset_ - rec_len;
     if (rec_len <= meta.rec_len) {  // reuse a record
       offset = meta.offset;
     } else {  // insert as a new record
       std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
-      block_size_ += rec_len;
+      offset_ -= rec_len;
     }
     std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
     usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
@@ -620,37 +612,44 @@ class Node
   CleanUp()
   {
     auto *tmp = new (&_tls_page) Node{};
+    tmp->offset_ = kPageSize - hk_len_;
 
-    size_t offset = kPageSize;
     size_t pos = 0;
-    tmp->CopyHighKey(this, offset);
-    tmp->CopyRecords(this, pos, rec_num_, offset);
-
-    rec_num_ = tmp->rec_num_;
-    block_size_ = tmp->block_size_;
-    usage_ = tmp->usage_;
-    hk_offset_ = tmp->hk_offset_;
-    std::memcpy(meta_arr_, tmp->meta_arr_, kMetaSize * rec_num_);
-    std::memcpy(ShiftAddr(this, offset), ShiftAddr(tmp, offset), block_size_);
+    tmp->CopyHighKey(ShiftAddr(this, tmp->offset_), hk_len_);
+    tmp->CopyRecords(this, pos, rec_num_);
+    CopyFromTmpNode();
   }
 
   /**
-   * @brief Copy a highest key from a given node.
+   * @brief Copy records and their relevant data from a TL temporary node.
    *
-   * @param[in] src A source node that has a highest key.
-   * @param[in,out] offset An offset to the top of the record block.
+   */
+  void
+  CopyFromTmpNode()
+  {
+    const auto *tmp = std::bit_cast<Node *>(&_tls_page);
+    rec_num_ = tmp->rec_num_;
+    offset_ = tmp->offset_;
+    usage_ = tmp->usage_;
+    hk_len_ = tmp->hk_len_;
+    std::memcpy(meta_arr_, tmp->meta_arr_, kMetaSize * rec_num_);
+    std::memcpy(ShiftAddr(this, offset_), ShiftAddr(tmp, offset_), kPageSize - offset_);
+  }
+
+  /**
+   * @brief Copy a highest key from a given address.
+   *
+   * @param[in] src The address of a source key.
+   * @param[in] key_len The length of a key.
    */
   void
   CopyHighKey(  //
-      const Node *src,
-      size_t &offset)
+      const void *src,
+      const size_t key_len)
   {
-    hk_len_ = src->hk_len_;
-    offset -= hk_len_;
-    std::memcpy(ShiftAddr(this, offset), ShiftAddr(src, src->hk_offset_), hk_len_);
-    hk_offset_ = offset;
-    block_size_ += hk_len_;
-    usage_ += hk_len_;
+    std::memcpy(ShiftAddr(this, kPageSize - key_len), src, key_len);
+    usage_ += key_len;
+    hk_len_ = key_len;
   }
 
   /**
@@ -659,7 +658,6 @@ class Node
    * @param[in] src A source node page.
    * @param[in,out] pos The begin position of target records.
    * @param[in] end_pos The end position of target records.
-   * @param[in,out] offset An offset to a record block.
    * @param[in] sep_size The desired size of a left node.
    */
   template <bool kSearchSplitPos = false>
@@ -668,7 +666,6 @@ class Node
       const Node *src,
       size_t &pos,
       const size_t end_pos,
-      size_t &offset,
       [[maybe_unused]] const size_t sep_size = kPageSize)
   {
     for (; pos < end_pos; ++pos) {
@@ -680,10 +677,9 @@ class Node
       if constexpr (kSearchSplitPos) {
         if (usage_ + (total_len / 2) > sep_size) break;
       }
-      offset -= rec_len;
-      std::memcpy(ShiftAddr(this, offset), ShiftAddr(src, meta.offset), rec_len);
-      meta_arr_[rec_num_++] = Metadata{offset, meta.key_len, rec_len};
-      block_size_ += rec_len;
+      offset_ -= rec_len;
+      std::memcpy(ShiftAddr(this, offset_), ShiftAddr(src, meta.offset), rec_len);
+      meta_arr_[rec_num_++] = Metadata{offset_, meta.key_len, rec_len};
       usage_ += total_len;
       assert(kHeaderSize + kMetaSize * rec_num_ <= offset_);
     }
@@ -709,13 +705,10 @@ class Node
   uint16_t rec_num_{};
 
   /// @brief The total byte length of a record block.
-  uint16_t block_size_{};
+  uint16_t offset_{};
 
   /// @brief The total usage of this node.
   uint16_t usage_{kHeaderSize};
-
-  /// @brief A offset to a highest key.
-  uint16_t hk_offset_{};
 
   /// @brief The length of a highest key.
   uint16_t hk_len_{};
