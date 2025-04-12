@@ -410,9 +410,13 @@ class BTreeSL
         node = stack.back();
         stack.pop_back();
       }
+      if (node->GetLevel() < level) {
+        stack.clear();  // the stack has expired nodes
+        continue;
+      }
 
       while (true) {
-        if (node->GetLevel() == level) {  // a level region is immutable
+        if (node->GetLevel() == level) {
           auto *out_node = std::bit_cast<std::conditional_t<kIsInner, INode *, LNode *>>(node);
           auto &&guard = AcquireGuard<kIsInner, Guard>(out_node, key);
           if (guard) return {out_node, std::move(guard)};

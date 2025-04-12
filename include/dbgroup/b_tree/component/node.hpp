@@ -190,6 +190,7 @@ class Node
 
   /**
    * @return The level where this node is.
+   * @note This parameter is immutable (readable without locks).
    */
   [[nodiscard]] constexpr auto
   GetLevel() const  //
