@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <sstream>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -565,6 +566,46 @@ class Node
     usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
     meta = Metadata{offset, key_len, rec_len};
     return kCompleted;
+  }
+
+  /*##########################################################################*
+   * Public utility
+   *##########################################################################*/
+
+  /**
+   * @return The explanation of this instance.
+   */
+  [[nodiscard]] auto
+  ToStr() const  //
+      -> std::string
+  {
+    std::stringstream ss{};
+    ss << "address    : " << this << "\n"
+       << "  level    : " << std::to_string(level_) << "\n"
+       << "  sib_node : " << sib_node_ << "\n"
+       << "  rec_num  : " << std::to_string(rec_num_) << "\n"
+       << "  usage    : " << std::to_string(usage_) << "\n"
+       << "  offset   : " << std::to_string(offset_) << "\n"
+       << "  removed  : " << removed_ << "\n"
+       << "  leftmost : " << leftmost_ << "\n";
+    if (hk_len_ > 0) {
+      Key h_key;
+      const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
+      if constexpr (IsVarLenData<Key>()) {
+        alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
+        h_key = std::bit_cast<Key>(&tls_key);
+        std::memcpy(h_key, src_addr, hk_len_);
+      } else {
+        std::memcpy(&h_key, src_addr, sizeof(Key));
+      }
+
+      if constexpr (std::is_arithmetic_v<Key>) {
+        ss << "  h_key    : " << std::to_string(h_key) << "\n";
+      } else {
+        ss << "  h_key    : " << h_key << "\n";
+      }
+    }
+    return ss.str();
   }
 
  private:
