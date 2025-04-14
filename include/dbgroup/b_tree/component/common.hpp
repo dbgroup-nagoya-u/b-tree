@@ -48,14 +48,8 @@ constexpr size_t kHeaderSize = 32;
 /// @brief The alignment size for internal pages.
 constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
 
-/// @brief The unit of insert/delete versions.
-constexpr uint32_t kInsDelVerUnit = 0x0000'1000U;
-
 /// @brief A bit mask for extracting insert/delete versions.
 constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
-
-/// @brief The unit of SMO versions.
-constexpr uint32_t kSMOVerUnit = 0x0100'0000U;
 
 /// @brief A bit mask for extracting SMO versions.
 constexpr uint32_t kSMOMask = 0xFF00'0000U;
@@ -136,6 +130,38 @@ template <class T>
 struct OptGuardExtractor<T, false> {
   using type = void;
 };
+
+/*############################################################################*
+ * Global utility functions
+ *############################################################################*/
+
+/**
+ * @tparam T A target class.
+ * @return The maximum size for storing a given class.
+ */
+template <class T>
+constexpr auto
+MaxSize() noexcept  //
+    -> size_t
+{
+  return IsVarLenData<T>() ? kMaxVarDataSize : sizeof(T);
+}
+
+/**
+ * @brief Increment a version value using a given bitmask.
+ *
+ * @tparam kMask A bitmask for extracting a target version.
+ * @tparam XGuard A class for representing an exclusive-lock guard.
+ * @param x_guard An exclusive-lock guard.
+ */
+template <uint32_t kMask, class XGuard>
+constexpr void
+VerIncrement(  //
+    XGuard &x_guard) noexcept
+{
+  constexpr uint32_t kUnit = ~kMask + 1U;
+  x_guard.SetVersion((x_guard.GetVersion() & kMask) + kUnit);
+}
 
 }  // namespace dbgroup::index::b_tree::component
 

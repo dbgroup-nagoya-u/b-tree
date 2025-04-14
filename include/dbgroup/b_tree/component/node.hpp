@@ -433,7 +433,7 @@ class Node
     if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
       CleanUp();
       if constexpr (kUseOptimisticCC) {
-        x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+        VerIncrement<kInsDelMask>(x_guard);
       }
     }
 
@@ -444,7 +444,7 @@ class Node
       if (meta.deleted) {
         usage_ += total_len;
         if constexpr (kUseOptimisticCC) {
-          x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+          VerIncrement<kInsDelMask>(x_guard);
         }
       } else {
         usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
@@ -469,7 +469,7 @@ class Node
     offset_ -= rec_len;
     usage_ += total_len;
     if constexpr (kUseOptimisticCC) {
-      x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+      VerIncrement<kInsDelMask>(x_guard);
     }
     return kCompleted;
   }
@@ -515,7 +515,7 @@ class Node
     offset_ -= rec_len;
     usage_ += total_len;
     if constexpr (kUseOptimisticCC) {
-      x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+      VerIncrement<kInsDelMask>(x_guard);
     }
     return kCompleted;
   }
@@ -549,7 +549,7 @@ class Node
       CleanUp();
       pos = SearchRecord(key).second;
       if constexpr (kUseOptimisticCC) {
-        x_guard.SetVersion((x_guard.GetVersion() & kInsDelMask) + kInsDelVerUnit);
+        VerIncrement<kInsDelMask>(x_guard);
       }
     }
 

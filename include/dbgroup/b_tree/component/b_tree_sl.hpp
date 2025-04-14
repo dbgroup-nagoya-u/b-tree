@@ -462,7 +462,7 @@ class BTreeSL
   {
     auto *r_node = new (GetNodePage()) NodeT{l_node};
     if constexpr (NodeT::kUseOptCC) {
-      l_guard.SetVersion((l_guard.GetVersion() & kSMOMask) + kSMOVerUnit);
+      VerIncrement<kSMOMask>(l_guard);
     }
     auto &&[sep_key, sep_key_len] = l_node->GetSeparatorKey();
     return {sep_key, sep_key_len, r_node};
