@@ -296,32 +296,19 @@ class Node
    * @param key A search key.
    * @retval 1st: true if a target key is found.
    * @retval 1st: false otherwise.
-   * @retval 2nd: The position of a found record.
+   * @retval 2nd: true if a target record is deleted.
+   * @retval 2nd: false otherwise.
+   * @retval 3rd: The position of a found record.
    * @note If no specified key is in this node, this returns the minimum
    * position greater than the specified key.
    */
   [[nodiscard]] auto
-  SearchRecord(              //
+  CheckUniqueness(           //
       const Key &key) const  //
-      -> std::pair<bool, size_t>
+      -> std::tuple<bool, bool, size_t>
   {
-    auto found = false;
-    auto pos = static_cast<int64_t>(level_ > 0);
-    int64_t end_pos = rec_num_ - 1;
-    while (pos <= end_pos) {
-      const int64_t cur_pos = (pos + end_pos) / 2;
-      const auto &index_key = GetKey(cur_pos);
-      if (kLess(key, index_key)) {
-        end_pos = cur_pos - 1;
-      } else if (kLess(index_key, key)) {
-        pos = cur_pos + 1;
-      } else {  // the target key has been found
-        pos = cur_pos;
-        found = true;
-        break;
-      }
-    }
-    return {found, pos};
+    const auto [found, pos] = SearchRecord(key);
+    return {found, meta_arr_[pos].deleted, pos};
   }
 
   /**
@@ -457,21 +444,21 @@ class Node
         offset_ -= rec_len;
       }
       std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    } else {
+      // insert a new record
+      std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
       meta = Metadata{offset, key_len, rec_len};
-      return kCompleted;
+      ++rec_num_;
+      offset_ -= rec_len;
+      usage_ += total_len;
+      if constexpr (kUseOptimisticCC) {
+        VerIncrement<kInsDelMask>(x_guard);
+      }
     }
-
-    // insert a new record
-    std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
-    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
-    std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
     meta = Metadata{offset, key_len, rec_len};
-    ++rec_num_;
-    offset_ -= rec_len;
-    usage_ += total_len;
-    if constexpr (kUseOptimisticCC) {
-      VerIncrement<kInsDelMask>(x_guard);
-    }
+
     return kCompleted;
   }
 
@@ -480,6 +467,7 @@ class Node
    *
    * @param x_guard A lock guard to set version.
    * @param pos A position where a new record is inserted.
+   * @param found A flag for indicating the same (deleted) key is found.
    * @param key A target key to be written.
    * @param key_len The length of a target key.
    * @param payload A target payload to be written.
@@ -491,6 +479,7 @@ class Node
   Insert(  //
       Lock::XGuard &x_guard,
       size_t pos,
+      bool found,
       const Key &key,
       const size_t key_len,
       const void *payload,
@@ -502,19 +491,30 @@ class Node
     if (usage_ + total_len > kPageSize) return kNeedSplit;
     if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
       CleanUp();
-      pos = SearchRecord(key).second;
+      std::tie(found, pos) = SearchRecord(key);
     }
 
     // insert a new record
     auto &meta = meta_arr_[pos];
     auto offset = offset_ - rec_len;
-    std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
-    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
-    std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
-    meta = Metadata{offset, key_len, rec_len};
-    ++rec_num_;
-    offset_ -= rec_len;
     usage_ += total_len;
+    if (found) {                      // found a deleted record
+      if (rec_len <= meta.rec_len) {  // reuse a record
+        offset = meta.offset;
+      } else {  // insert as a new record
+        std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
+        offset_ -= rec_len;
+      }
+      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    } else {
+      std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
+      ++rec_num_;
+      offset_ -= rec_len;
+    }
+    meta = Metadata{offset, key_len, rec_len};
+
     if constexpr (kUseOptimisticCC) {
       VerIncrement<kInsDelMask>(x_guard);
     }
@@ -650,6 +650,40 @@ class Node
       std::memcpy(&key, src_addr, sizeof(Key));
     }
     return key;
+  }
+
+  /**
+   * @brief Get the position of a search key using binary search.
+   *
+   * @param key A search key.
+   * @retval 1st: true if a target key is found.
+   * @retval 1st: false otherwise.
+   * @retval 2nd: The position of a found record.
+   * @note If no specified key is in this node, this returns the minimum
+   * position greater than the specified key.
+   */
+  [[nodiscard]] auto
+  SearchRecord(              //
+      const Key &key) const  //
+      -> std::pair<bool, size_t>
+  {
+    auto found = false;
+    auto pos = static_cast<int64_t>(level_ > 0);
+    int64_t end_pos = rec_num_ - 1;
+    while (pos <= end_pos) {
+      const int64_t cur_pos = (pos + end_pos) / 2;
+      const auto &index_key = GetKey(cur_pos);
+      if (kLess(key, index_key)) {
+        end_pos = cur_pos - 1;
+      } else if (kLess(index_key, key)) {
+        pos = cur_pos + 1;
+      } else {  // the target key has been found
+        pos = cur_pos;
+        found = true;
+        break;
+      }
+    }
+    return {found, pos};
   }
 
   /**

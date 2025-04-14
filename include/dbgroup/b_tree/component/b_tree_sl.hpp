@@ -208,8 +208,8 @@ class BTreeSL
     stack.reserve(kInitialHeight);
     while (true) {
       auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
-      const auto [found, pos] = node->SearchRecord(key);
-      if (found) {
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (found && !deleted) {
         if constexpr (kUseOptCCForLeaf) {
           if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
@@ -223,7 +223,7 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Insert(x_guard, pos, key, key_len, pay_addr, pay_len);
+      const auto rc = node->Insert(x_guard, pos, found, key, key_len, pay_addr, pay_len);
       if (rc == kCompleted) return kSuccess;
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
@@ -255,8 +255,8 @@ class BTreeSL
     stack.reserve(kInitialHeight);
     while (true) {
       auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
-      const auto [found, pos] = node->SearchRecord(key);
-      if (!found) {
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (!found || deleted) {
         if constexpr (kUseOptCCForLeaf) {
           if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
@@ -490,8 +490,11 @@ class BTreeSL
       if (stack.empty() && TryAddNewRoot(level, key, key_len, l_child, r_child)) break;
 
       // insert a new down link
-      auto &&[node, x_guard] = SearchNode<IXGuard, kInnerFlag>(stack, key, level);
-      const auto rc = node->Write(x_guard, key, key_len, &r_child, kPtrSize);
+      auto &&[node, guard] = SearchNode<IOptGuard, kInnerFlag>(stack, key, level);
+      const auto [found, _, pos] = node->CheckUniqueness(key);  // `found` must be false
+      auto &&x_guard = guard.TryLockX(kInsDelMask);
+      if (!x_guard) continue;  // another thread may insert the key
+      const auto rc = node->Insert(x_guard, pos, found, key, key_len, &r_child, kPtrSize);
       if (rc == kCompleted) break;
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
