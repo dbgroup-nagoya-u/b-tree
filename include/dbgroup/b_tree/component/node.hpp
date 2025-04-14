@@ -77,6 +77,13 @@ class Node
   using CheckGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SIXGuard>;
 
   /*##########################################################################*
+   * Public constants
+   *##########################################################################*/
+
+  /// @brief A flag for indicating this node uses optimistic CC.
+  static constexpr bool kUseOptCC = kUseOptimisticCC;
+
+  /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
 

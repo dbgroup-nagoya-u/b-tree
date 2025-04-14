@@ -295,7 +295,7 @@ class BTreeSL
   static constexpr size_t kInitialHeight = 8;
 
   /// @brief A flag for indicating inner nodes.
-  static constexpr bool kIsInner = true;
+  static constexpr bool kInnerFlag = true;
 
   /*##########################################################################*
    * Internal utility functions
@@ -304,7 +304,6 @@ class BTreeSL
   /**
    * @brief Search a target node horizontally.
    *
-   * @tparam kIsInner A flag for indicating whether a target is inner nodes.
    * @tparam Guard A guard class for reading a target node.
    * @tparam NodeT A target node class.
    * @param[in,out] node A target node.
@@ -313,7 +312,7 @@ class BTreeSL
    * @retval true if a container node has been found.
    * @retval false otherwise.
    */
-  template <bool kIsInner, class Guard, class NodeT>
+  template <class Guard, class NodeT>
   [[nodiscard]] static auto
   SearchHorizontally(  //
       NodeT *&node,
@@ -326,12 +325,16 @@ class BTreeSL
       auto *sib_node = node->GetSibNode();
       const auto removed = node->Removed();
       const auto included = node->Include(key);
-      if constexpr (kIsInner || kUseOptCCForLeaf) {
+      if constexpr (std::is_same_v<Guard, typename NodeT::OptGuard>) {
         if (!guard.VerifyVersion()) continue;
       }
 
-      if (!removed && included) return true;
-      if ((removed && !sib_node) || i++ > 1) return false;
+      if constexpr (std::is_same_v<Guard, typename NodeT::SIXGuard>) {
+        return !removed && included;
+      } else {
+        if (!removed && included) return true;
+        if (!sib_node || i++ > 0) return false;
+      }
 
       node = sib_node;
       guard = node->template GetGuard<Guard>();
@@ -341,33 +344,31 @@ class BTreeSL
   /**
    * @brief Acquire a guard instance for a target node.
    *
-   * @tparam kIsInner A flag for indicating whether a target is inner nodes.
    * @tparam Guard A desired guard class.
    * @tparam NodeT A target node class.
    * @param[in,out] node A target node.
    * @param[in] key A search key.
    * @return A guard instance for reading/modifying a target node.
    */
-  template <bool kIsInner, class Guard, class NodeT>
+  template <class Guard, class NodeT>
   [[nodiscard]] static auto
   AcquireGuard(  //
       NodeT *&node,
       const Key &key)  //
       -> Guard
   {
-    constexpr auto kRequireRead = std::is_same_v<Guard, LReadGuard>;
-    using CheckGuardForL = std::conditional_t<kRequireRead, LReadGuard, LCheckGuard>;
-    using CheckGuard = std::conditional_t<kIsInner, IOptGuard, CheckGuardForL>;
+    constexpr auto kNeedX = std::is_same_v<Guard, typename NodeT::XGuard>;
+    using TmpGuard = std::conditional_t<kNeedX, typename NodeT::CheckGuard, Guard>;
 
-    auto &&guard = node->template GetGuard<CheckGuard>();
-    while (SearchHorizontally<kIsInner>(node, guard, key)) {
-      if constexpr (kIsInner || (kUseOptCCForLeaf && std::is_same_v<Guard, LXGuard>)) {
+    auto &&guard = node->template GetGuard<TmpGuard>();
+    while (SearchHorizontally(node, guard, key)) {
+      if constexpr (!std::is_same_v<Guard, typename NodeT::XGuard>) {
+        return guard;
+      } else if constexpr (NodeT::kUseOptCC) {
         auto &&x_guard = guard.TryLockX();
         if (x_guard) return x_guard;
-      } else if constexpr (std::is_same_v<Guard, LXGuard>) {
-        return guard.UpgradeToX();
       } else {
-        return guard;
+        return guard.UpgradeToX();
       }
     }
     return Guard{};
@@ -418,7 +419,7 @@ class BTreeSL
       while (true) {
         if (node->GetLevel() == level) {
           auto *out_node = std::bit_cast<std::conditional_t<kIsInner, INode *, LNode *>>(node);
-          auto &&guard = AcquireGuard<kIsInner, Guard>(out_node, key);
+          auto &&guard = AcquireGuard<Guard>(out_node, key);
           if (guard) return {out_node, std::move(guard)};
           break;
         }
@@ -426,7 +427,7 @@ class BTreeSL
         INode *child{};
         auto &&guard = node->template GetGuard<IOptGuard>();
         while (true) {
-          if (!SearchHorizontally<kIsInner>(node, guard, key)) goto out;
+          if (!SearchHorizontally(node, guard, key)) goto out;
           child = node->SearchChild(key);
           if (guard.VerifyVersion()) break;
         }
@@ -460,7 +461,7 @@ class BTreeSL
       -> std::tuple<Key, size_t, NodeT *>
   {
     auto *r_node = new (GetNodePage()) NodeT{l_node};
-    if constexpr (!std::is_same_v<typename NodeT::OptGuard, void>) {
+    if constexpr (NodeT::kUseOptCC) {
       l_guard.SetVersion((l_guard.GetVersion() & kSMOMask) + kSMOVerUnit);
     }
     auto &&[sep_key, sep_key_len] = l_node->GetSeparatorKey();
@@ -489,7 +490,7 @@ class BTreeSL
       if (stack.empty() && TryAddNewRoot(level, key, key_len, l_child, r_child)) break;
 
       // insert a new down link
-      auto &&[node, x_guard] = SearchNode<IXGuard, kIsInner>(stack, key, level);
+      auto &&[node, x_guard] = SearchNode<IXGuard, kInnerFlag>(stack, key, level);
       const auto rc = node->Write(x_guard, key, key_len, &r_child, kPtrSize);
       if (rc == kCompleted) break;
 
