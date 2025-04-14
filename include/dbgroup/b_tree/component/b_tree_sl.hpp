@@ -211,14 +211,14 @@ class BTreeSL
       const auto [found, pos] = node->SearchRecord(key);
       if (found) {
         if constexpr (kUseOptCCForLeaf) {
-          if (!guard.VerifyVersion()) continue;
+          if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
         return kKeyExist;
       }
 
       LXGuard x_guard;
       if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX();
+        x_guard = guard.TryLockX(kInsDelMask);
         if (!x_guard) continue;  // another thread may insert the key
       } else {
         x_guard = guard.UpgradeToX();
@@ -258,14 +258,14 @@ class BTreeSL
       const auto [found, pos] = node->SearchRecord(key);
       if (!found) {
         if constexpr (kUseOptCCForLeaf) {
-          if (!guard.VerifyVersion()) continue;
+          if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
         return kKeyNotExist;
       }
 
       LXGuard x_guard;
       if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX();
+        x_guard = guard.TryLockX(kInsDelMask);
         if (!x_guard) continue;  // another thread may insert the key
       } else {
         x_guard = guard.UpgradeToX();
@@ -326,7 +326,7 @@ class BTreeSL
       const auto removed = node->Removed();
       const auto included = node->Include(key);
       if constexpr (std::is_same_v<Guard, typename NodeT::OptGuard>) {
-        if (!guard.VerifyVersion()) continue;
+        if (!guard.VerifyVersion(kSMOMask)) continue;
       }
 
       if constexpr (std::is_same_v<Guard, typename NodeT::SIXGuard>) {
@@ -365,7 +365,7 @@ class BTreeSL
       if constexpr (!std::is_same_v<Guard, typename NodeT::XGuard>) {
         return guard;
       } else if constexpr (NodeT::kUseOptCC) {
-        auto &&x_guard = guard.TryLockX();
+        auto &&x_guard = guard.TryLockX(kSMOMask);
         if (x_guard) return x_guard;
       } else {
         return guard.UpgradeToX();
@@ -429,7 +429,7 @@ class BTreeSL
         while (true) {
           if (!SearchHorizontally(node, guard, key)) goto out;
           child = node->SearchChild(key);
-          if (guard.VerifyVersion()) break;
+          if (guard.VerifyVersion(kInsDelMask)) break;
         }
         stack.emplace_back(node);
         node = child;
