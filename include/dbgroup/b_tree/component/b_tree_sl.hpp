@@ -32,6 +32,7 @@
 #include "dbgroup/constants.hpp"
 #include "dbgroup/index/utility.hpp"
 #include "dbgroup/lock/utility.hpp"
+#include "dbgroup/memory/epoch_based_gc.hpp"
 #include "dbgroup/memory/utility.hpp"
 
 // local sources
@@ -70,6 +71,8 @@ class BTreeSL
   using LReadGuard = typename LNode::ReadGuard;
   using LCheckGuard = typename LNode::CheckGuard;
   using LXGuard = typename LNode::XGuard;
+
+  using GC = ::dbgroup::memory::EpochBasedGC<Page>;
 
  public:
   /*##########################################################################*
@@ -133,6 +136,8 @@ class BTreeSL
       [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
+    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
@@ -171,6 +176,8 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
@@ -203,6 +210,8 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
@@ -250,6 +259,8 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
+    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
@@ -381,7 +392,8 @@ class BTreeSL
   GetNodePage()  //
       -> void *
   {
-    return ::dbgroup::memory::Allocate<Page>();
+    auto *page = gc_.GetPageIfPossible<Page>();
+    return page ? page : ::dbgroup::memory::Allocate<Page>();
   }
 
   /**
@@ -540,8 +552,11 @@ class BTreeSL
    * Internal member variables
    *##########################################################################*/
 
+  /// @brief A garbage collector.
+  GC gc_{};
+
   /// @brief The root node of this tree.
-  std::atomic<INode *> root_{new (::dbgroup::memory::Allocate<Page>()) INode{}};
+  std::atomic<INode *> root_{new (GetNodePage()) INode{}};
 };
 
 }  // namespace dbgroup::index::b_tree::component
