@@ -48,6 +48,12 @@ constexpr size_t kHeaderSize = 32;
 /// @brief The alignment size for internal pages.
 constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
 
+/// @brief The minimum usage for invoking merge.
+constexpr size_t kMinNodeUsage = (kPageSize / 8) - kHeaderSize;
+
+/// @brief The maximum usage for preventing merge.
+constexpr size_t kMaxMergedUsage = (kPageSize * 3 / 4) - kHeaderSize;
+
 /// @brief A bit mask for extracting insert/delete versions.
 constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
 

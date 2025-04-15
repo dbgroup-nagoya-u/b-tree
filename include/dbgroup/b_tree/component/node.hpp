@@ -71,8 +71,8 @@ class Node
    *##########################################################################*/
 
   using OptGuard = OptGuardExtractor<Lock, kUseOptimisticCC>::type;
-  using SGuard = SGuardExtractor<Lock, !kUseOptimisticCC>::type;
-  using SIXGuard = SIXGuardExtractor<Lock, !kUseOptimisticCC>::type;
+  using SGuard = typename Lock::SGuard;
+  using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
   using ReadGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SGuard>;
   using CheckGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SIXGuard>;
@@ -229,6 +229,33 @@ class Node
       -> Node *
   {
     return sib_node_;
+  }
+
+  /**
+   * @retval 1st: A sibling node if it can be merged.
+   * @retval 1st: nullptr otherwise.
+   * @retval 2nd: The corresponding SIX guard of a returned node.
+   */
+  auto
+  GetMergeableSib()  //
+      -> std::pair<Node *, SIXGuard>
+  {
+    if (sib_node_) {
+      if constexpr (kUseOptCC) {
+        auto &&guard = sib_node_->GetGuard<OptGuard>();
+        while (true) {
+          const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
+          if (merged_usage >= kMaxMergedUsage) break;
+          auto &&six_guard = guard.TryLockSIX();
+          if (six_guard) return {sib_node_, std::move(six_guard)};
+        }
+      } else {
+        auto &&six_guard = sib_node_->GetGuard<SIXGuard>();
+        const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
+        if (merged_usage < kMaxMergedUsage) return {sib_node_, std::move(six_guard)};
+      }
+    }
+    return {nullptr, SIXGuard{}};
   }
 
   /**
@@ -566,6 +593,90 @@ class Node
     usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
     meta = Metadata{offset, key_len, rec_len};
     return kCompleted;
+  }
+
+  /**
+   * @brief Delete a record using a given position.
+   *
+   * @param x_guard A lock guard to set version.
+   * @param pos A position where a target record is.
+   * @retval kNeedMerge if this node should be merged.
+   * @retval kCompleted otherwise.
+   */
+  auto
+  Delete(  //
+      Lock::XGuard &x_guard,
+      const size_t pos)  //
+      -> NodeRC
+  {
+    auto &meta = meta_arr_[pos];
+    usage_ -= meta.rec_len + kMetaSize;
+    if (level_ > 0) {
+      std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1));
+      --rec_num_;
+    } else {
+      meta.deleted = 1;
+    }
+
+    if constexpr (kUseOptimisticCC) {
+      VerIncrement<kInsDelMask>(x_guard);
+    }
+    return (usage_ < kMinNodeUsage) ? kNeedMerge : kCompleted;
+  }
+
+  /*##########################################################################*
+   * SMO APIs
+   *##########################################################################*/
+
+  /**
+   * @brief Merge a given node into this node.
+   *
+   * @param guard The SIX-lock guard of this node.
+   * @param r_node A right-merged (to be removed) node.
+   * @param r_guard The SIX-lock guard of a right node.
+   */
+  void
+  Merge(  //
+      SIXGuard guard,
+      Node *r_node,
+      SIXGuard r_guard)
+  {
+    auto *tmp = new (&_tls_page) Node{};
+    tmp->offset_ = kPageSize - r_node->hk_len_;
+
+    size_t pos = 0;
+    tmp->CopyHighKey(ShiftAddr(r_node, tmp->offset_), r_node->hk_len_);
+    tmp->CopyRecords(this, pos, rec_num_);
+    pos = 0;
+    tmp->CopyRecords(r_node, pos, r_node->rec_num_);
+    {
+      auto &&x_guard = guard.UpgradeToX();
+      CopyFromTmpNode();
+      sib_node_ = r_node->sib_node_;
+      if constexpr (kUseOptimisticCC) {
+        VerIncrement<kSMOMask>(x_guard);
+      }
+    }
+    r_node->Remove(std::move(r_guard), this);
+  }
+
+  /**
+   * @brief Set a remove flag to this node.
+   *
+   * @param guard The SIX-lock guard of this node.
+   * @param next A side link for traversing to the next target node.
+   */
+  void
+  Remove(  //
+      SIXGuard guard,
+      Node *next)
+  {
+    auto &&x_guard = guard.UpgradeToX();
+    removed_ = true;
+    sib_node_ = next;
+    if constexpr (kUseOptimisticCC) {
+      VerIncrement<kSMOMask>(x_guard);
+    }
   }
 
   /*##########################################################################*

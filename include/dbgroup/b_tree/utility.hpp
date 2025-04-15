@@ -18,7 +18,6 @@
 #define B_TREE_DBGROUP_B_TREE_UTILITY_HPP_
 
 // C++ standard libraries
-#include <chrono>
 #include <cstddef>
 
 namespace dbgroup::index::b_tree
@@ -49,17 +48,8 @@ constexpr bool kUseOptimisticCC = true;
 /// @brief The default page size of each node.
 constexpr size_t kPageSize = (B_TREE_PAGE_SIZE);
 
-/// @brief A ratio for splitting leftmost/rightmost nodes.
-constexpr double kSepRatio{B_TREE_EDGE_NODES_SPLIT_RATIO};
-
-/// @brief The minimum usage for invoking merge.
-constexpr size_t kMinNodeUsage = (B_TREE_MIN_NODE_USAGE);
-
 /// @brief The maximum size of variable-length data.
 constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
-
-/// @brief A sleep time for backoff [us].
-constexpr std::chrono::microseconds kBackOffTime{B_TREE_BACKOFF_TIME};
 
 }  // namespace dbgroup::index::b_tree
 

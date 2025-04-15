@@ -65,6 +65,7 @@ class BTreeSL
 
   using INode = Node<Key, Comp, InnerLock, kUseOptimisticCC>;
   using IOptGuard = typename INode::ReadGuard;
+  using ISIXGuard = typename INode::SIXGuard;
   using IXGuard = typename INode::XGuard;
 
   using LNode = Node<Key, Comp, LeafLock, kUseOptCCForLeaf>;
@@ -248,7 +249,7 @@ class BTreeSL
    * @param payload A target payload.
    * @param key_len The length of a target key.
    * @param pay_len The length of a target payload.
-   * @retval kSuccess if a given record is inserted.
+   * @retval kSuccess if a given record is updated.
    * @retval kKeyNotExist if a target key is not in this tree.
    */
   auto
@@ -287,6 +288,49 @@ class BTreeSL
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
       AddDownLink(stack, sep_key, sep_key_len, node, r_node);
       stack.emplace_back(std::bit_cast<INode *>(node));
+    }
+  }
+
+  /**
+   * @brief Delete a record using a given kay.
+   *
+   * @param key A target key.
+   * @param key_len The length of a target key.
+   * @retval kSuccess if a given record is deleted.
+   * @retval kKeyNotExist if a target key is not in this tree.
+   */
+  auto
+  Delete(  //
+      const Key &key,
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
+      -> ReturnCode
+  {
+    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+
+    std::vector<INode *> stack{};
+    stack.reserve(kInitialHeight);
+    while (true) {
+      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (!found || deleted) {
+        if constexpr (kUseOptCCForLeaf) {
+          if (!guard.VerifyVersion(kInsDelMask)) continue;
+        }
+        return kKeyNotExist;
+      }
+
+      LXGuard x_guard;
+      if constexpr (kUseOptCCForLeaf) {
+        x_guard = guard.TryLockX(kInsDelMask);
+        if (!x_guard) continue;  // another thread may insert the key
+      } else {
+        x_guard = guard.UpgradeToX();
+      }
+      const auto rc = node->Delete(x_guard, pos);
+      if (rc == kNeedMerge) {
+        TryMerge(stack, node, x_guard.DowngradeToSIX());
+      }
+      return kSuccess;
     }
   }
 
@@ -341,10 +385,10 @@ class BTreeSL
       }
 
       if constexpr (std::is_same_v<Guard, typename NodeT::SIXGuard>) {
-        return !removed && included;
+        return !removed && included;  // do not use side links with the SIX lock
       } else {
         if (!removed && included) return true;
-        if (!sib_node || i++ > 0) return false;
+        if (i++ > 0) return false;  // the traversal path may be too old
       }
 
       node = sib_node;
@@ -546,6 +590,81 @@ class BTreeSL
       ::dbgroup::memory::Release<Page>(root);
     }
     return false;
+  }
+
+  /**
+   * @brief Try to remove a down link and merge a given node.
+   *
+   * @tparam NodeT A target node class.
+   * @tparam SIXGuard A class for representing SIX-lock guards.
+   * @param stack A stack of traversed nodes.
+   * @param l_child A left child (to be merged) node.
+   * @param l_guard The SIX guard instance of a given child node.
+   * @param level A level where a target node is.
+   */
+  template <class NodeT, class SIXGuard>
+  void
+  TryMerge(  //
+      std::vector<INode *> &stack,
+      NodeT *l_child,
+      SIXGuard l_guard,
+      const size_t level = 1)
+  {
+    auto &&[r_child, r_guard] = l_child->GetMergeableSib();
+    if (!r_child) {
+      if constexpr (std::is_same_v<NodeT, INode>) {
+        TryRemoveRoot(l_child, std::move(l_guard));
+      }
+      return;
+    }
+
+    const auto &key = l_child->GetSeparatorKey().first;
+    while (true) {
+      auto &&[node, guard] = SearchNode<IOptGuard, kInnerFlag>(stack, key, level);
+      const auto [found, _, pos] = node->CheckUniqueness(key);
+      if (!found) {
+        if (!guard.VerifyVersion(kInsDelMask)) continue;
+        break;  // a downlink has not been inserted yet or is leftmost in a node
+      }
+      auto &&x_guard = guard.TryLockX(kInsDelMask);
+      if (!x_guard) continue;  // another thread may modify a node
+
+      const auto rc = node->Delete(x_guard, pos);
+      if (rc == kCompleted) {
+        static_cast<void>(std::move(x_guard));
+        l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
+      } else {
+        auto &&six_guard = x_guard.DowngradeToSIX();
+        l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
+        TryMerge(stack, node, std::move(six_guard), level);
+      }
+      gc_.AddGarbage<Page>(r_child);
+      break;
+    }
+    if constexpr (IsVarLenData<Key>()) {
+      ::dbgroup::memory::Release<KeyWOPtr>(key);
+    }
+  }
+
+  /**
+   * @brief Try to remove the top level of this tree.
+   *
+   * @param node A target inner node.
+   * @param guard The SIX guard instance of a given node.
+   */
+  void
+  TryRemoveRoot(  //
+      INode *node,
+      ISIXGuard guard)
+  {
+    auto *root = root_.load(kRelaxed);
+    if (node == root && !node->GetSibNode() && node->GetRecNum() == 1) {
+      auto *new_root = node->GetChild(0);
+      if (root_.compare_exchange_strong(root, new_root, kRelease, kRelaxed)) {
+        node->Remove(std::move(guard), new_root);
+        gc_.AddGarbage<Page>(root);
+      }
+    }
   }
 
   /*##########################################################################*
