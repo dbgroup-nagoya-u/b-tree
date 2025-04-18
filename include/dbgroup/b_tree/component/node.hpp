@@ -418,6 +418,52 @@ class Node
     return payload;
   }
 
+  /**
+   * @brief Copy a record if exist.
+   *
+   * @param[in] pos A position to be copied.
+   * @param[in,out] key A destination address for a key.
+   * @param[in,out] payload A destination address for a payload.
+   * @retval true if a target record is active (not deleted).
+   * @retval false otherwise.
+   */
+  [[nodiscard]] auto
+  CopyRecordTo(  //
+      const size_t pos,
+      void *key,
+      void *payload) const  //
+      -> bool
+  {
+    const auto meta = meta_arr_[pos];
+    if (meta.deleted) return false;
+
+    std::memcpy(key, ShiftAddr(this, meta.offset), meta.key_len);
+    std::memcpy(payload, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
+    return true;
+  }
+
+  /**
+   * @brief Get the end position of records for scanning and check it has been finished.
+   *
+   * @param end_key A scan-end key.
+   * @retval 1st: true if this node includes the end key.
+   * @retval 2nd: The end position of this scan operation.
+   */
+  [[nodiscard]] auto
+  SearchEndPosition(                 //
+      const ScanKey &end_key) const  //
+      -> std::pair<bool, size_t>
+  {
+    const auto is_end = !sib_node_ || (end_key && Include(std::get<0>(*end_key)));
+    size_t end_pos = rec_num_;
+    if (is_end && end_key) {
+      const auto &[key, key_len, closed] = *end_key;
+      const auto [found, deleted, pos] = CheckUniqueness(key);
+      end_pos = pos + static_cast<size_t>(found && !deleted && closed);
+    }
+    return {is_end, end_pos};
+  }
+
   /*##########################################################################*
    * Write APIs
    *##########################################################################*/

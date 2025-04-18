@@ -38,6 +38,7 @@
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
 #include "dbgroup/b_tree/component/node.hpp"
+#include "dbgroup/b_tree/record_iterator.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
@@ -73,9 +74,21 @@ class BTreeSL
   using LCheckGuard = typename LNode::CheckGuard;
   using LXGuard = typename LNode::XGuard;
 
+  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using Iterator = RecordIterator<BTreeSL>;
+  friend Iterator;  // call sibling scan from iterators
+
   using GC = ::dbgroup::memory::EpochBasedGC<Page>;
 
  public:
+  /*##########################################################################*
+   * Public types
+   *##########################################################################*/
+
+  using Key_t = Key;
+  using Payload_t = Payload;
+  using Node_t = LNode;
+
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
@@ -152,6 +165,62 @@ class BTreeSL
       }
       return payload;
     }
+  }
+
+  /**
+   * @brief Perform a range scan with given keys.
+   *
+   * @param begin_key A pair of a begin key and its openness (true=closed).
+   * @param end_key A pair of an end key and its openness (true=closed).
+   * @return An iterator for accessing scanned records.
+   */
+  auto
+  Scan(  //
+      const ScanKey &begin_key = std::nullopt,
+      const ScanKey &end_key = std::nullopt)  //
+      -> Iterator
+  {
+    auto &&gc_guard = gc_.CreateEpochGuard();
+
+    LNode *node;
+    LReadGuard guard;
+    size_t begin_pos;
+    std::vector<INode *> stack{};
+    stack.reserve(kInitialHeight);
+    if constexpr (kUseOptCCForLeaf) {
+      thread_local Page tls_page{};  // retain the copy of a target node
+      if (begin_key) {
+        const auto &[key, _, closed] = *begin_key;
+        while (true) {
+          std::tie(node, guard) = SearchNode<LReadGuard>(stack, key);
+          std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
+          if (guard.VerifyVersion()) break;
+          stack.emplace_back(node);
+        }
+        node = std::bit_cast<LNode *>(&tls_page);
+        const auto [found, deleted, pos] = node->CheckUniqueness(key);
+        begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
+      } else {
+        std::tie(node, guard) = SearchLeftmostLeaf(stack);
+        do {
+          std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
+        } while (!guard.VerifyVersion());
+        node = std::bit_cast<LNode *>(&tls_page);
+        begin_pos = 0;
+      }
+    } else {
+      if (begin_key) {
+        const auto &[key, _, closed] = *begin_key;
+        std::tie(node, guard) = SearchNode<LReadGuard>(stack, key);
+        const auto [found, deleted, pos] = node->CheckUniqueness(key);
+        begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
+      } else {
+        std::tie(node, guard) = SearchLeftmostLeaf(stack);
+        begin_pos = 0;
+      }
+    }
+
+    return RecordIterator{this, node, std::move(guard), begin_pos, end_key, std::move(gc_guard)};
   }
 
   /*##########################################################################*
@@ -492,6 +561,73 @@ class BTreeSL
       }
     out:;  // the current node has been removed or too old, so retry
     }
+  }
+
+  /**
+   * @brief Search the leftmost leaf node.
+   *
+   * @param[in,out] stack A stack of traversed nodes.
+   * @retval 1st: The leftmost node.
+   * @retval 2nd: The lock guard of the leftmost node.
+   */
+  [[nodiscard]] auto
+  SearchLeftmostLeaf(                     //
+      std::vector<INode *> &stack) const  //
+      -> std::pair<LNode *, LReadGuard>
+  {
+    auto *node = root_.load(kAcquire);
+    while (true) {
+      if (node->GetLevel() == 0) {
+        auto *leaf = std::bit_cast<LNode *>(node);
+        return {leaf, leaf->template GetGuard<LReadGuard>()};
+      }
+
+      INode *child{};
+      auto &&guard = node->template GetGuard<IOptGuard>();
+      do {
+        child = node->GetChild(0);
+      } while (!guard.VerifyVersion(kInsDelMask));
+      stack.emplace_back(node);
+      node = child;
+    }
+  }
+
+  /**
+   * @brief Go to the next node for scanning.
+   *
+   * @param[in,out] node A target node.
+   * @param[in,out] guard The guard instance of a target node.
+   * @return The begin position for scanning.
+   */
+  [[nodiscard]] auto
+  SiblingScan(  //
+      LNode *&node,
+      LReadGuard &guard) const  //
+      -> size_t
+  {
+    size_t begin_pos{};
+    if constexpr (kUseOptCCForLeaf) {
+      auto *sib_node = node->GetSibNode();
+      const auto &key = node->GetSeparatorKey().first;
+
+      std::vector<INode *> stack{};
+      stack.reserve(kInitialHeight);
+      do {
+        stack.emplace_back(sib_node);
+        std::tie(sib_node, guard) = SearchNode<LReadGuard>(stack, key);
+        std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
+      } while (!guard.VerifyVersion());
+
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      begin_pos = pos + static_cast<size_t>(!found || deleted);
+      if constexpr (IsVarLenData<Key>()) {
+        ::dbgroup::memory::Release<KeyWOPtr>(key);
+      }
+    } else {
+      node = node->GetSibNode();
+      guard = node->template GetGuard<LReadGuard>();
+    }
+    return begin_pos;
   }
 
   /*##########################################################################*
