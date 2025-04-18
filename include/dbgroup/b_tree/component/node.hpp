@@ -726,6 +726,111 @@ class Node
   }
 
   /*##########################################################################*
+   * Public bulkload API
+   *##########################################################################*/
+
+  /**
+   * @brief Bulkload records into this node.
+   *
+   * @tparam Entry A container for a key/payload pair.
+   * @param iter The begin position of target records.
+   * @param iter_end The end position of target records.
+   */
+  template <class BulkIter>
+  void
+  Bulkload(  //
+      BulkIter &iter,
+      const BulkIter &iter_end)
+  {
+    constexpr size_t kLeafCapacity = kPageSize * 3 / 4;
+    constexpr size_t kInnerCapacity =
+        kPageSize - (MaxSize<Key>() > kPageSize / 8 ? MaxSize<Key>() : kPageSize / 8);
+
+    offset_ = kPageSize - MaxSize<Key>();
+    const size_t max_usage = level_ > 0 ? kInnerCapacity : kLeafCapacity;
+    for (; iter < iter_end; ++iter) {
+      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
+      const auto rec_len = key_len + pay_len;
+      const auto total_len = rec_len + kMetaSize;
+      if (usage_ + total_len > max_usage) break;
+
+      offset_ -= rec_len;
+      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), GetSrcAddr(payload), pay_len);
+      meta_arr_[rec_num_++] = Metadata{offset_, key_len, rec_len};
+      usage_ += total_len;
+    }
+    leftmost_ = false;
+  }
+
+  /**
+   * @brief Link this node with a right sibling node.
+   *
+   * @param sib_node A right sibling node.
+   * @param key A highest key.
+   * @param key_len The length of a highest key.
+   */
+  void
+  LinkSiblingNode(  //
+      Node *sib_node,
+      const Key &key,
+      const size_t key_len)
+  {
+    sib_node_ = sib_node;
+    hk_len_ = key_len;
+    usage_ += key_len;
+    std::memcpy(ShiftAddr(this, kPageSize - key_len), GetSrcAddr(key), key_len);
+  }
+
+  /**
+   * @brief Link border nodes between partial trees.
+   *
+   * @param l_node The top border node in a left tree.
+   * @param r_node The top border node in a right tree.
+   */
+  static void
+  LinkVerticalBorderNodes(  //
+      Node *l_node,
+      Node *r_node)
+  {
+    if (l_node == nullptr) return;
+
+    while (true) {
+      // link the border nodes
+      const auto meta = r_node->meta_arr_[0];
+      const auto key_len = meta.key_len;
+      l_node->sib_node_ = r_node;
+      l_node->hk_len_ = key_len;
+      l_node->usage_ += key_len;
+      std::memcpy(ShiftAddr(l_node, kPageSize - key_len), ShiftAddr(r_node, meta.offset), key_len);
+      if (l_node->level_ == 0) return;  // all the border nodes are linked
+
+      // go down to the lower level
+      l_node = l_node->GetChild(l_node->rec_num_ - 1);
+      r_node = r_node->GetChild(0);
+    }
+  }
+
+  /**
+   * @brief Remove the leftmost keys from the leftmost nodes.
+   *
+   * @param node A root node.
+   */
+  static void
+  RemoveLeftmostKeys(  //
+      Node *node)
+  {
+    while (true) {
+      node->leftmost_ = true;
+      if (node->level_ == 0) break;
+
+      auto &meta = node->meta_arr_[0];
+      meta = Metadata{meta.GetPayOff(), 0, kWordSize};
+      node = node->GetChild(0);
+    }
+  }
+
+  /*##########################################################################*
    * Public utility
    *##########################################################################*/
 

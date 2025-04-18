@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -77,6 +78,13 @@ class BTreeSL
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using Iterator = RecordIterator<BTreeSL>;
   friend Iterator;  // call sibling scan from iterators
+
+  template <class Entry>
+  using BulkIter = typename std::vector<Entry>::const_iterator;
+  using NodeEntry = std::tuple<Key, INode *, size_t>;
+  using BulkResult = std::pair<size_t, std::vector<NodeEntry>>;
+  using BulkPromise = std::promise<BulkResult>;
+  using BulkFuture = std::future<BulkResult>;
 
   using GC = ::dbgroup::memory::EpochBasedGC<Page>;
 
@@ -403,6 +411,85 @@ class BTreeSL
     }
   }
 
+  /*##########################################################################*
+   * Public bulkload API
+   *##########################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs.
+   *
+   * @tparam Entry A container for a key/payload pair.
+   * @param entries All entries for bulkload.
+   * @param thread_num The number of threads used for bulkload.
+   * @return kSuccess.
+   */
+  template <class Entry>
+  auto
+  Bulkload(  //
+      const std::vector<Entry> &entries,
+      const size_t thread_num = 1)  //
+      -> ReturnCode
+  {
+    if (entries.empty()) return kSuccess;
+
+    std::vector<NodeEntry> nodes{};
+    auto &&iter = entries.cbegin();
+    const auto rec_num = entries.size();
+    size_t level = 1;
+    if (thread_num <= 1 || rec_num < thread_num) {
+      std::tie(level, nodes) = BulkloadWithSingleThread<Entry>(iter, rec_num);
+    } else {
+      // construct partial trees
+      std::vector<BulkFuture> futures{};
+      futures.reserve(thread_num);
+      for (size_t i = 0; i < thread_num; ++i) {
+        BulkPromise p{};
+        futures.emplace_back(p.get_future());
+        const size_t n = (rec_num + i) / thread_num;
+        std::thread t{[this](BulkPromise p, BulkIter<Entry> iter, size_t n) {
+                        p.set_value(BulkloadWithSingleThread<Entry>(iter, n));
+                      },
+                      std::move(p), iter, n};
+        t.detach();
+        iter += n;
+      }
+
+      // wait for the worker threads to construct partial trees
+      std::vector<BulkResult> trees{};
+      trees.reserve(thread_num);
+      for (auto &&future : futures) {
+        trees.emplace_back(future.get());
+        const auto partial_height = trees.back().first;
+        level = (partial_height > level) ? partial_height : level;
+      }
+
+      // align the height of partial trees and link their rightmost/leftmost nodes
+      nodes.reserve(2 * kNodeCapacity * thread_num);
+      INode *prev_node = nullptr;
+      for (auto &&[p_level, p_nodes] : trees) {
+        while (p_level < level) {
+          p_nodes = ConstructSingleLevel<NodeEntry>(p_nodes.cbegin(), p_nodes.size(), p_level++);
+        }
+        nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
+        INode::LinkVerticalBorderNodes(prev_node, std::get<1>(p_nodes.front()));
+        prev_node = std::get<1>(p_nodes.back());
+      }
+    }
+
+    // create upper layers until a root node is created
+    while (nodes.size() > 1) {
+      nodes = ConstructSingleLevel<NodeEntry>(nodes.cbegin(), nodes.size(), level++);
+    }
+    auto *new_root = std::get<1>(nodes.front());
+    INode::RemoveLeftmostKeys(new_root);
+
+    // set a new root
+    auto *old_root = root_.exchange(new_root, kRelease);
+    gc_.AddGarbage<Page>(old_root);
+
+    return ReturnCode::kSuccess;
+  }
+
  private:
   /*##########################################################################*
    * Internal types
@@ -420,6 +507,9 @@ class BTreeSL
 
   /// @brief A flag for indicating inner nodes.
   static constexpr bool kInnerFlag = true;
+
+  /// @brief The expected capacity of a node when performing bulkload.
+  static constexpr size_t kNodeCapacity = kPageSize / (sizeof(Key) + sizeof(Payload) + kMetaSize);
 
   /*##########################################################################*
    * Internal utility functions
@@ -801,6 +891,70 @@ class BTreeSL
         gc_.AddGarbage<Page>(root);
       }
     }
+  }
+
+  /*##########################################################################*
+   * Internal utilities for bulkload
+   *##########################################################################*/
+
+  /**
+   * @brief Bulkload specified kay/payload pairs with a single thread.
+   *
+   * @tparam Entry A container of a key/payload pair.
+   * @param iter The begin position of target records.
+   * @param n The number of entries.
+   * @retval 1st: The height of a constructed tree.
+   * @retval 2nd: Constructed nodes in the top level.
+   */
+  template <class Entry>
+  auto
+  BulkloadWithSingleThread(  //
+      BulkIter<Entry> iter,
+      size_t n)  //
+      -> BulkResult
+  {
+    size_t level = 0;
+    auto &&nodes = ConstructSingleLevel<Entry>(iter, n, level++);
+    while (true) {
+      n = nodes.size();
+      if (n < 2 * kNodeCapacity) break;
+      nodes = ConstructSingleLevel<NodeEntry>(nodes.cbegin(), n, level++);
+    }
+    return {level, std::move(nodes)};
+  }
+
+  /**
+   * @brief Construct nodes based on given entries.
+   *
+   * @tparam Entry A container of a key/payload pair.
+   * @param iter The begin position of target records.
+   * @param n The number of entries.
+   * @param level A target level to be constructed.
+   * @return Constructed nodes.
+   */
+  template <class Entry>
+  auto
+  ConstructSingleLevel(  //
+      BulkIter<Entry> iter,
+      const size_t n,
+      const size_t level)  //
+      -> std::vector<NodeEntry>
+  {
+    std::vector<NodeEntry> nodes{};
+    nodes.reserve((n / kNodeCapacity) + 1);
+    const auto &iter_end = std::next(iter, n);
+    for (INode *prev_node = nullptr; iter < iter_end;) {
+      const auto &[key, key_len] = ParseKey(*iter);
+      auto *node = new (GetNodePage()) INode{level};
+      nodes.emplace_back(key, node, key_len);
+      if (prev_node) {
+        prev_node->LinkSiblingNode(node, key, key_len);
+      }
+
+      node->Bulkload(iter, iter_end);
+      prev_node = node;
+    }
+    return nodes;
   }
 
   /*##########################################################################*
