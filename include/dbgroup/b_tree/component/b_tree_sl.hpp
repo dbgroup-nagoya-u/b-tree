@@ -166,7 +166,7 @@ class BTreeSL
       auto &&[node, guard] = SearchNode<LReadGuard>(stack, key);
       const auto &payload = node->template Read<Payload>(key);
       if constexpr (kUseOptCCForLeaf) {
-        if (!guard.VerifyVersion()) {
+        if (!guard.VerifyVersion(kNoMask, kMaxRetry)) {
           stack.emplace_back(node);
           continue;
         }
@@ -202,7 +202,7 @@ class BTreeSL
         while (true) {
           std::tie(node, guard) = SearchNode<LReadGuard>(stack, key);
           std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-          if (guard.VerifyVersion()) break;
+          if (guard.VerifyVersion(kNoMask, kMaxRetry)) break;
           stack.emplace_back(node);
         }
         node = std::bit_cast<LNode *>(&tls_page);
@@ -212,7 +212,7 @@ class BTreeSL
         std::tie(node, guard) = SearchLeftmostLeaf(stack);
         do {
           std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-        } while (!guard.VerifyVersion());
+        } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
         node = std::bit_cast<LNode *>(&tls_page);
         begin_pos = 0;
       }
@@ -706,7 +706,7 @@ class BTreeSL
         stack.emplace_back(sib_node);
         std::tie(sib_node, guard) = SearchNode<LReadGuard>(stack, key);
         std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
-      } while (!guard.VerifyVersion());
+      } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
 
       auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos + static_cast<size_t>(!found || deleted);
