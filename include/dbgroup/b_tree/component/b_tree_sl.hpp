@@ -967,6 +967,32 @@ class BTreeSL
   }
 
   /*##########################################################################*
+   * Static assertions
+   *##########################################################################*/
+
+  static_assert(  //
+      IsTriviallyCopyable<Key>(),
+      "A key type must be trivially copyable (i.e., copyable with std::memcpy).");
+
+  static_assert(  //
+      IsTriviallyCopyable<Payload>(),
+      "A payload type must be trivially copyable (i.e., copyable with std::memcpy).");
+
+  /// @brief The expected maximum size after node split.
+  static constexpr size_t kMaxSplitSize = kHeaderSize  //
+                                          + (kPageSize - kHeaderSize) * 3 / 4
+                                          + (MaxSize<Key>() + MaxSize<Payload>() + kMetaSize) / 2
+                                          + MaxSize<Key>();
+
+  static_assert(  //
+      kMaxSplitSize <= kPageSize,
+      "The page size is too small to store given key/payload pairs.");
+
+  static_assert(  //
+      GC::HasTarget<Page>(),
+      "Garbage collector must reuse node pages.");
+
+  /*##########################################################################*
    * Internal member variables
    *##########################################################################*/
 
