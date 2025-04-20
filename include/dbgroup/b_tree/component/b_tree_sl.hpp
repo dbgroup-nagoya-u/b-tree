@@ -73,11 +73,15 @@ class BTreeSL
   using LNode = Node<Key, Comp, LeafLock, kUseOptCCForLeaf>;
   using LReadGuard = typename LNode::ReadGuard;
   using LCheckGuard = typename LNode::CheckGuard;
+  using LOptGuard = typename LNode::OptGuard;
+  using LSGuard = typename LNode::SGuard;
   using LXGuard = typename LNode::XGuard;
 
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
-  using Iterator = RecordIterator<BTreeSL>;
-  friend Iterator;  // call sibling scan from iterators
+  using SIterator = RecordIterator<BTreeSL, LSGuard>;
+  using OptIterator = RecordIterator<BTreeSL, LOptGuard>;
+  friend SIterator;    // call sibling scan from iterators
+  friend OptIterator;  // call sibling scan from iterators
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
@@ -178,21 +182,24 @@ class BTreeSL
   /**
    * @brief Perform a range scan with given keys.
    *
+   * @tparam kUseOCCIfPossible A flag for using OCC when verifying records.
    * @param begin_key A pair of a begin key and its openness (true=closed).
    * @param end_key A pair of an end key and its openness (true=closed).
    * @return An iterator for accessing scanned records.
    */
+  template <bool kUseOCCIfPossible = true>
   auto
   Scan(  //
       const ScanKey &begin_key = std::nullopt,
-      const ScanKey &end_key = std::nullopt)  //
-      -> Iterator
+      const ScanKey &end_key = std::nullopt)
   {
-    auto &&gc_guard = gc_.CreateEpochGuard();
+    using Guard = std::conditional_t<kUseOCCIfPossible, LReadGuard, LSGuard>;
 
+    auto &&gc_guard = gc_.CreateEpochGuard();
     LNode *node;
-    LReadGuard guard;
+    Guard guard;
     size_t begin_pos;
+
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     if constexpr (kUseOptCCForLeaf) {
@@ -200,7 +207,7 @@ class BTreeSL
       if (begin_key) {
         const auto &[key, _, closed] = *begin_key;
         while (true) {
-          std::tie(node, guard) = SearchNode<LReadGuard>(stack, key);
+          std::tie(node, guard) = SearchNode<Guard>(stack, key);
           std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
           if (guard.VerifyVersion(kNoMask, kMaxRetry)) break;
           stack.emplace_back(node);
@@ -219,7 +226,7 @@ class BTreeSL
     } else {
       if (begin_key) {
         const auto &[key, _, closed] = *begin_key;
-        std::tie(node, guard) = SearchNode<LReadGuard>(stack, key);
+        std::tie(node, guard) = SearchNode<Guard>(stack, key);
         const auto [found, deleted, pos] = node->CheckUniqueness(key);
         begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
       } else {
@@ -685,18 +692,20 @@ class BTreeSL
   /**
    * @brief Go to the next node for scanning.
    *
+   * @tparam Guard A class for representing lock guards.
    * @param[in,out] node A target node.
    * @param[in,out] guard The guard instance of a target node.
    * @return The begin position for scanning.
    */
+  template <class Guard>
   [[nodiscard]] auto
   SiblingScan(  //
       LNode *&node,
-      LReadGuard &guard) const  //
+      Guard &guard) const  //
       -> size_t
   {
     size_t begin_pos{};
-    if constexpr (kUseOptCCForLeaf) {
+    if constexpr (std::is_same_v<Guard, LOptGuard>) {
       auto *sib_node = node->GetSibNode();
       const auto &key = node->GetSeparatorKey().first;
 
@@ -704,7 +713,7 @@ class BTreeSL
       stack.reserve(kInitialHeight);
       do {
         stack.emplace_back(sib_node);
-        std::tie(sib_node, guard) = SearchNode<LReadGuard>(stack, key);
+        std::tie(sib_node, guard) = SearchNode<Guard>(stack, key);
         std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
       } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
 
@@ -715,7 +724,7 @@ class BTreeSL
       }
     } else {
       node = node->GetSibNode();
-      guard = node->template GetGuard<LReadGuard>();
+      guard = node->template GetGuard<Guard>();
     }
     return begin_pos;
   }

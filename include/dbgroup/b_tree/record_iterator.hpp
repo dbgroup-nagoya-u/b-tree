@@ -18,6 +18,7 @@
 #define B_TREE_DBGROUP_B_TREE_RECORD_ITERATOR_HPP_
 
 // C++ standard libraries
+#include <deque>
 #include <optional>
 #include <utility>
 
@@ -38,10 +39,9 @@ namespace dbgroup::index::b_tree
  *
  * @tparam Index A source index class.
  */
-template <class Index>
+template <class Index, class Guard>
 class RecordIterator
 {
- public:
   /*##########################################################################*
    * Type aliases
    *##########################################################################*/
@@ -49,10 +49,10 @@ class RecordIterator
   using Key = typename Index::Key_t;
   using Payload = typename Index::Payload_t;
   using Node = typename Index::Node_t;
-  using Guard = typename Node::ReadGuard;
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using EpochGuard = ::dbgroup::thread::EpochGuard;
 
+ public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
@@ -72,24 +72,56 @@ class RecordIterator
       Node *node,
       Guard guard,
       const size_t begin_pos,
-      ScanKey end_key,
+      const ScanKey &end_key,
       EpochGuard gc_guard)
       : node_{node},
         guard_{std::move(guard)},
         pos_{begin_pos},
         index_{index},
-        end_key_{std::move(end_key)},
+        end_key_{end_key},
         gc_guard_{std::move(gc_guard)}
   {
     std::tie(is_end_, end_pos_) = node_->SearchEndPosition(end_key_);
     FetchRecord();
   }
 
-  RecordIterator(const RecordIterator &) = delete;
-  RecordIterator(RecordIterator &&) = delete;
+  RecordIterator(  //
+      RecordIterator &&obj) noexcept
+      : node_{obj.node},
+        guard_{std::move(obj.guard_)},
+        pos_{obj.pos_},
+        end_pos_{obj.end_pos_},
+        is_end_{obj.is_end_},
+        verifier_{std::move(obj.verifier_)},
+        index_{obj.index_},
+        end_key_{obj.end_key_},
+        gc_guard_{std::move(obj.gc_guard_)}
+  {
+    std::memcpy(key_, obj.key_, component::MaxSize<Key>());
+    std::memcpy(payload_, obj.payload_, component::MaxSize<Payload>());
+  }
 
+  auto
+  operator=(                          //
+      RecordIterator &&rhs) noexcept  //
+      -> RecordIterator &
+  {
+    node_ = rhs.node;
+    guard_ = std::move(rhs.guard_);
+    pos_ = rhs.pos_;
+    end_pos_ = rhs.end_pos_;
+    is_end_ = rhs.is_end_;
+    verifier_ = std::move(rhs.verifier_);
+    index_ = rhs.index_;
+    end_key_ = rhs.end_key_;
+    gc_guard_ = std::move(rhs.gc_guard_);
+    std::memcpy(key_, rhs.key_, component::MaxSize<Key>());
+    std::memcpy(payload_, rhs.payload_, component::MaxSize<Payload>());
+  }
+
+  // forbit copying
+  RecordIterator(const RecordIterator &) = delete;
   auto operator=(const RecordIterator &) -> RecordIterator & = delete;
-  auto operator=(RecordIterator &&) -> RecordIterator & = delete;
 
   /*##########################################################################*
    * Public destructors
@@ -167,6 +199,44 @@ class RecordIterator
     }
   }
 
+  /**
+   * @brief Construct a verifier for snapshot reads or phantom avoidance.
+   *
+   */
+  constexpr void
+  PrepareVerifier()
+  {
+    verifier_ = std::make_optional<ScanVerifier>();
+  }
+
+  /**
+   * @retval true if scanned records are a snapshot at some point.
+   * @retval false otherwise.
+   * @note If you have not prepared a verifier, this function always returns
+   * true.
+   */
+  [[nodiscard]] auto
+  VerifySnapshot()  //
+      -> bool
+  {
+    if (!verifier_) return true;
+    return (*verifier_).Verify(component::kNoMask);
+  }
+
+  /**
+   * @retval true if scanned records do not have phantoms (insertion/deletion).
+   * @retval false otherwise.
+   * @note If you have not prepared a verifier, this function always returns
+   * true.
+   */
+  [[nodiscard]] auto
+  VerifyNoPhantom()  //
+      -> bool
+  {
+    if (!verifier_) return true;
+    return (*verifier_).Verify(component::kInsDelMask);
+  }
+
  private:
   /*##########################################################################*
    * Internal types
@@ -178,12 +248,90 @@ class RecordIterator
   /// @brief A type for allocating variable-length payloads.
   using PayWOPtr = std::remove_pointer_t<Payload>;
 
-  /*##########################################################################*
-   * Internal constants
-   *##########################################################################*/
+  /**
+   * @brief A class for verifying scan results.
+   *
+   */
+  class ScanVerifier
+  {
+   public:
+    /*########################################################################*
+     * Public constructors and assignment operators
+     *########################################################################*/
 
-  /// @brief A flag for using optimistic CC.
-  static constexpr bool kUseOptCC = Node::kUseOptCC;
+    constexpr ScanVerifier() = default;
+
+    ScanVerifier(  //
+        ScanVerifier &&obj) noexcept
+        : guards_{std::move(obj.guards_)}
+    {
+    }
+
+    auto
+    operator=(                        //
+        ScanVerifier &&rhs) noexcept  //
+        -> ScanVerifier &
+    {
+      guards_ = std::move(rhs.guards_);
+      return *this;
+    }
+
+    // forbit copying
+    ScanVerifier(const ScanVerifier &) = delete;
+    auto operator=(const ScanVerifier &) -> ScanVerifier & = delete;
+
+    /*########################################################################*
+     * Public destructors
+     *########################################################################*/
+
+    ~ScanVerifier() = default;
+
+    /*########################################################################*
+     * Public APIs
+     *########################################################################*/
+
+    /**
+     * @brief Add a guard instance to this verifier.
+     *
+     * @param guard A guard instance to be added.
+     */
+    void
+    Add(  //
+        Guard guard)
+    {
+      guards_.emplace_back(std::move(guard));
+    }
+
+    /**
+     * @brief Perform verification based on registered guards.
+     *
+     * @param mask A bitmask for indicating target bits.
+     * @retval true if this does not find changes using a given bitmask.
+     * @retval false otherwise.
+     */
+    [[nodiscard]] auto
+    Verify(                   //
+        const uint32_t mask)  //
+        -> bool
+    {
+      auto verified = true;
+      if constexpr (std::is_same_v<Guard, typename Node::OptGuard>) {
+        for (auto &guard : guards_) {
+          verified = guard.ImmediateVerify(mask);
+          if (!verified) break;
+        }
+      }
+      return verified;
+    }
+
+   private:
+    /*########################################################################*
+     * Internal member variables
+     *########################################################################*/
+
+    /// @brief Guard instances for verification.
+    std::deque<Guard> guards_{};
+  };
 
   /*##########################################################################*
    * Internal utilities
@@ -208,6 +356,9 @@ class RecordIterator
         return;
       }
 
+      if (verifier_) {
+        (*verifier_).Add(std::move(guard_));
+      }
       pos_ = index_->SiblingScan(node_, guard_);
       std::tie(is_end_, end_pos_) = node_->SearchEndPosition(end_key_);
     }
@@ -237,6 +388,9 @@ class RecordIterator
 
   /// @brief The payload of the current record.
   alignas(alignof(PayWOPtr)) std::byte payload_[component::MaxSize<Payload>()]{};
+
+  /// @brief A verifier for snapshot read or phantom avoidance.
+  std::optional<ScanVerifier> verifier_{};
 
   /// @brief A source index structure.
   const Index *index_{};
