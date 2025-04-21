@@ -265,7 +265,6 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @param pay_len The length of a target payload.
    * @return kSuccess.
    * @note This function always overwrites a payload and can be optimized for
    * that purpose; the procedure can omit the key uniqueness check.
@@ -274,18 +273,16 @@ class BTreeSL
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))  //
+      const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto &&[node, x_guard] = SearchNode<LXGuard>(stack, key);
-      const auto rc = node->Write(x_guard, key, key_len, pay_addr, pay_len);
+      const auto rc = node->Write(x_guard, key, key_len, payload, tls_pay, merger_);
       if (rc == kCompleted) return kSuccess;
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
@@ -300,7 +297,6 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @param pay_len The length of a target payload.
    * @retval kSuccess if a given record is inserted.
    * @retval kKeyExist if a target key has been already inserted.
    */
@@ -308,13 +304,11 @@ class BTreeSL
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))  //
+      const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
@@ -334,7 +328,7 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Insert(x_guard, pos, found, key, key_len, pay_addr, pay_len);
+      const auto rc = node->Insert(x_guard, pos, found, key, key_len, &payload, sizeof(Payload));
       if (rc == kCompleted) return kSuccess;
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
@@ -349,7 +343,6 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @param pay_len The length of a target payload.
    * @retval kSuccess if a given record is updated.
    * @retval kKeyNotExist if a target key is not in this tree.
    */
@@ -357,13 +350,11 @@ class BTreeSL
   Update(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload))  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
@@ -383,12 +374,8 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Update(x_guard, pos, key, key_len, pay_addr, pay_len);
-      if (rc == kCompleted) return kSuccess;
-
-      const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
-      AddDownLink(stack, sep_key, sep_key_len, node, r_node);
-      stack.emplace_back(std::bit_cast<INode *>(node));
+      node->Update(pos, payload, tls_pay, merger_);
+      return kSuccess;
     }
   }
 
@@ -512,6 +499,21 @@ class BTreeSL
     gc_->template AddGarbage<Page>(old_root);
 
     return ReturnCode::kSuccess;
+  }
+
+  /*##########################################################################*
+   * Public APIs
+   *##########################################################################*/
+
+  /**
+   * @brief Set a merger function for performing read-modify-write operations.
+   *
+   * @param merger A function for merging payloads.
+   */
+  constexpr void SetRecordMerger(  //
+      Payload (*merger)(const Payload &, const Payload &))
+  {
+    merger_ = merger;
   }
 
  private:
@@ -1014,6 +1016,16 @@ class BTreeSL
 
   /// @brief The root node of this tree.
   std::atomic<INode *> root_{new (GetNodePage()) INode{}};
+
+  /// @brief A function for merging payloads.
+  Payload (*merger_)(const Payload &, const Payload &){};
+
+  /*##########################################################################*
+   * Thread local class variables
+   *##########################################################################*/
+
+  /// @brief A temporary payload.
+  static thread_local inline Payload tls_pay{};
 };
 
 }  // namespace dbgroup::index::b_tree::component

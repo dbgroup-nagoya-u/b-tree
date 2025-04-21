@@ -406,15 +406,7 @@ class Node
     if (!found || meta.deleted) return std::nullopt;
 
     Payload payload;
-    const auto *addr = ShiftAddr(this, meta.GetPayOff());
-    if constexpr (IsVarLenData<Payload>()) {
-      using PayWOPtr = std::remove_pointer_t<Payload>;
-      alignas(alignof(PayWOPtr)) thread_local std::byte tls_payload[kMaxVarDataSize];
-      payload = std::bit_cast<Payload>(&tls_payload);
-      std::memcpy(payload, addr, meta.GetPayLen());
-    } else {
-      std::memcpy(&payload, addr, sizeof(Payload));
-    }
+    std::memcpy(&payload, ShiftAddr(this, meta.GetPayOff()), sizeof(Payload));
     return payload;
   }
 
@@ -471,24 +463,27 @@ class Node
   /**
    * @brief Write a given kay/payload pair.
    *
-   * @param x_guard A lock guard to set version.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
+   * @param[in] x_guard A lock guard to set version.
+   * @param[in] key A target key to be written.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[out] out_pay An instance for storing an output payload.
+   * @param[in] merger A function for merging payloads.
    * @retval kCompleted if a record is written.
    * @retval kNeedSplit if this node should be split before inserting a record.
    */
+  template <class Payload>
   auto
   Write(  //
       Lock::XGuard &x_guard,
       const Key &key,
       const size_t key_len,
-      const void *payload,
-      const size_t pay_len)  //
+      const Payload &payload,
+      Payload &out_pay,
+      Payload (*merger)(const Payload &, const Payload &))  //
       -> NodeRC
   {
-    const auto rec_len = key_len + pay_len;
+    const auto rec_len = key_len + sizeof(Payload);
     const auto total_len = rec_len + kMetaSize;
     if (usage_ + total_len > kPageSize) return kNeedSplit;
     if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
@@ -500,37 +495,37 @@ class Node
 
     const auto [found, pos] = SearchRecord(key);
     auto &meta = meta_arr_[pos];
-    auto offset = offset_ - rec_len;
-    if (found) {  // try to update a record
+    if (found) {  // reuse the found record
+      auto *pay_addr = ShiftAddr(this, meta.GetPayOff());
       if (meta.deleted) {
+        meta.deleted = 0;
         usage_ += total_len;
+        out_pay = payload;
         if constexpr (kUseOptimisticCC) {
           VerIncrement<kInsDelMask>(x_guard);
         }
+      } else if (merger) {
+        Payload cur_pay;
+        std::memcpy(&cur_pay, pay_addr, sizeof(Payload));
+        out_pay = merger(cur_pay, payload);
       } else {
-        usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
+        out_pay = payload;
       }
-      if (rec_len <= meta.rec_len) {  // reuse a record
-        offset = meta.offset;
-      } else {  // insert as a new record
-        std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
-        offset_ -= rec_len;
-      }
-      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+      std::memcpy(pay_addr, &out_pay, sizeof(Payload));
     } else {
       // insert a new record
-      std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
-      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
-      meta = Metadata{offset, key_len, rec_len};
-      ++rec_num_;
       offset_ -= rec_len;
+      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), &payload, sizeof(Payload));
+      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
+      meta = Metadata{offset_, key_len, rec_len};
+      ++rec_num_;
       usage_ += total_len;
+      out_pay = payload;
       if constexpr (kUseOptimisticCC) {
         VerIncrement<kInsDelMask>(x_guard);
       }
     }
-    meta = Metadata{offset, key_len, rec_len};
 
     return kCompleted;
   }
@@ -569,24 +564,18 @@ class Node
 
     // insert a new record
     auto &meta = meta_arr_[pos];
-    auto offset = offset_ - rec_len;
     usage_ += total_len;
-    if (found) {                      // found a deleted record
-      if (rec_len <= meta.rec_len) {  // reuse a record
-        offset = meta.offset;
-      } else {  // insert as a new record
-        std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
-        offset_ -= rec_len;
-      }
-      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
+    if (found) {  // reuse the deleted record
+      std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
+      meta.deleted = 0;
     } else {
-      std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
-      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
-      ++rec_num_;
       offset_ -= rec_len;
+      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
+      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
+      meta = Metadata{offset_, key_len, rec_len};
+      ++rec_num_;
     }
-    meta = Metadata{offset, key_len, rec_len};
 
     if constexpr (kUseOptimisticCC) {
       VerIncrement<kInsDelMask>(x_guard);
@@ -597,48 +586,28 @@ class Node
   /**
    * @brief Update a record using a given kay/payload pair.
    *
-   * @param x_guard A lock guard to set version.
-   * @param pos A position where a target record is.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
-   * @retval kCompleted if a record is written.
-   * @retval kNeedSplit if this node should be split before inserting a record.
+   * @param[in] pos A position where a target record is.
+   * @param[in] payload A target payload to be written.
+   * @param[out] out_pay An instance for storing an output payload.
+   * @param[in] merger A function for merging payloads.
    */
-  auto
+  template <class Payload>
+  void
   Update(  //
-      Lock::XGuard &x_guard,
       size_t pos,
-      const Key &key,
-      const size_t key_len,
-      const void *payload,
-      const size_t pay_len)  //
-      -> NodeRC
+      const Payload &payload,
+      Payload &out_pay,
+      Payload (*merger)(const Payload &, const Payload &))
   {
-    const auto rec_len = key_len + pay_len;
-    const auto total_len = rec_len + kMetaSize;
-    if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
-      CleanUp();
-      pos = SearchRecord(key).second;
-      if constexpr (kUseOptimisticCC) {
-        VerIncrement<kInsDelMask>(x_guard);
-      }
+    auto *pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
+    if (merger) {
+      Payload cur_pay;
+      std::memcpy(&cur_pay, pay_addr, sizeof(Payload));
+      out_pay = merger(cur_pay, payload);
+    } else {
+      out_pay = payload;
     }
-
-    auto &meta = meta_arr_[pos];
-    auto offset = offset_ - rec_len;
-    if (rec_len <= meta.rec_len) {  // reuse a record
-      offset = meta.offset;
-    } else {  // insert as a new record
-      std::memcpy(ShiftAddr(this, offset), ShiftAddr(this, meta.offset), key_len);
-      offset_ -= rec_len;
-    }
-    std::memcpy(ShiftAddr(this, offset + key_len), payload, pay_len);
-    usage_ += static_cast<int64_t>(rec_len - meta.rec_len);
-    meta = Metadata{offset, key_len, rec_len};
-    return kCompleted;
+    std::memcpy(pay_addr, &out_pay, sizeof(Payload));
   }
 
   /**
@@ -756,7 +725,7 @@ class Node
 
       offset_ -= rec_len;
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset_ + key_len), GetSrcAddr(payload), pay_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), &payload, pay_len);
       meta_arr_[rec_num_++] = Metadata{offset_, key_len, rec_len};
       usage_ += total_len;
     }
