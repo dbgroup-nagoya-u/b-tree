@@ -85,21 +85,6 @@ enum NodeRC {
   kNeedRetry,
 };
 
-/**
- * @brief A dummy struct for representing internal pages.
- *
- */
-struct alignas(kPageAlign) Page : public ::dbgroup::memory::DefaultTarget {
-  /// @brief Filling zeros in reclaimed pages
-  using T = ZeroFilling<kPageSize>;
-
-  /// @brief Reuse pages
-  static constexpr bool kReusePages = true;
-
-  /// @brief A dummy member variable to ensure the page size.
-  std::byte dummy[kPageSize]{};
-};
-
 /*############################################################################*
  * Utility types for extracting guard classes
  *############################################################################*/

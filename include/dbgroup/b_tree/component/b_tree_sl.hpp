@@ -33,13 +33,13 @@
 #include "dbgroup/constants.hpp"
 #include "dbgroup/index/utility.hpp"
 #include "dbgroup/lock/utility.hpp"
-#include "dbgroup/memory/epoch_based_gc.hpp"
 #include "dbgroup/memory/utility.hpp"
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
 #include "dbgroup/b_tree/component/node.hpp"
 #include "dbgroup/b_tree/record_iterator.hpp"
+#include "dbgroup/b_tree/utility.hpp"
 
 namespace dbgroup::index::b_tree::component
 {
@@ -56,6 +56,7 @@ namespace dbgroup::index::b_tree::component
 template <class Key,
           class Payload,
           class Comp,
+          class GC,
           ::dbgroup::lock::OptimisticallyLockable InnerLock,
           ::dbgroup::lock::Lockable LeafLock,
           bool kUseOptCCForLeaf>
@@ -90,8 +91,6 @@ class BTreeSL
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
 
-  using GC = ::dbgroup::memory::EpochBasedGC<Page>;
-
  public:
   /*##########################################################################*
    * Public types
@@ -108,8 +107,26 @@ class BTreeSL
   /**
    * @brief Construct a new tree.
    *
+   * @param gc_interval_micro GC internal [us] (default: 10ms).
+   * @param gc_thread_num the number of GC threads (default: 1).
    */
-  BTreeSL() = default;
+  explicit BTreeSL(  //
+      const size_t gc_interval_micro = kDefaultGCTime,
+      const size_t gc_thread_num = kDefaultGCThreadNum)
+      : gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
+  {
+  }
+
+  /**
+   * @brief Construct a new tree.
+   *
+   * @param gc A shared garbage collector for reusing internal pages.
+   */
+  explicit BTreeSL(  //
+      const std::shared_ptr<GC> &gc)
+      : gc_{gc}
+  {
+  }
 
   BTreeSL(const BTreeSL &) = delete;
   BTreeSL(BTreeSL &&) = delete;
@@ -162,7 +179,7 @@ class BTreeSL
       [[maybe_unused]] const size_t key_len)  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
@@ -195,7 +212,7 @@ class BTreeSL
   {
     using Guard = std::conditional_t<kUseOCCIfPossible, LReadGuard, LSGuard>;
 
-    auto &&gc_guard = gc_.CreateEpochGuard();
+    auto &&gc_guard = gc_->CreateEpochGuard();
     LNode *node;
     Guard guard;
     size_t begin_pos;
@@ -261,7 +278,7 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
@@ -295,7 +312,7 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
@@ -344,7 +361,7 @@ class BTreeSL
       const size_t pay_len = sizeof(Payload))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     const auto *pay_addr = GetSrcAddr(payload);
     std::vector<INode *> stack{};
@@ -389,7 +406,7 @@ class BTreeSL
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> ReturnCode
   {
-    [[maybe_unused]] const auto &gc_guard = gc_.CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
@@ -492,7 +509,7 @@ class BTreeSL
 
     // set a new root
     auto *old_root = root_.exchange(new_root, kRelease);
-    gc_.AddGarbage<Page>(old_root);
+    gc_->template AddGarbage<Page>(old_root);
 
     return ReturnCode::kSuccess;
   }
@@ -550,12 +567,8 @@ class BTreeSL
         if (!guard.VerifyVersion(kSMOMask)) continue;
       }
 
-      if constexpr (std::is_same_v<Guard, typename NodeT::SIXGuard>) {
-        return !removed && included;  // do not use side links with the SIX lock
-      } else {
-        if (!removed && included) return true;
-        if (i++ > 0) return false;  // the traversal path may be too old
-      }
+      if (!removed && included) return true;
+      if (i++ > 0) return false;  // the traversal path may be too old
 
       node = sib_node;
       guard = node->template GetGuard<Guard>();
@@ -602,7 +615,7 @@ class BTreeSL
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_.GetPageIfPossible<Page>();
+    auto *page = gc_->template GetPageIfPossible<Page>();
     return page ? page : ::dbgroup::memory::Allocate<Page>();
   }
 
@@ -873,7 +886,7 @@ class BTreeSL
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
         TryMerge(stack, node, std::move(six_guard), level);
       }
-      gc_.AddGarbage<Page>(r_child);
+      gc_->template AddGarbage<Page>(r_child);
       break;
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -897,7 +910,7 @@ class BTreeSL
       auto *new_root = node->GetChild(0);
       if (root_.compare_exchange_strong(root, new_root, kRelease, kRelaxed)) {
         node->Remove(std::move(guard), new_root);
-        gc_.AddGarbage<Page>(root);
+        gc_->template AddGarbage<Page>(root);
       }
     }
   }
@@ -989,7 +1002,7 @@ class BTreeSL
       "The page size is too small to store given key/payload pairs.");
 
   static_assert(  //
-      GC::HasTarget<Page>(),
+      GC::template HasTarget<Page>(),
       "Garbage collector must reuse node pages.");
 
   /*##########################################################################*
@@ -997,7 +1010,7 @@ class BTreeSL
    *##########################################################################*/
 
   /// @brief A garbage collector.
-  GC gc_{};
+  std::shared_ptr<GC> gc_{};
 
   /// @brief The root node of this tree.
   std::atomic<INode *> root_{new (GetNodePage()) INode{}};

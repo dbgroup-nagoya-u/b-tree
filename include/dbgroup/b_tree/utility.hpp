@@ -23,7 +23,7 @@
 namespace dbgroup::index::b_tree
 {
 /*############################################################################*
- * Global enum and constants
+ * Global constants
  *############################################################################*/
 
 /// @brief The default time interval for garbage collection [us].
@@ -50,6 +50,16 @@ constexpr size_t kPageSize = (B_TREE_PAGE_SIZE);
 
 /// @brief The maximum size of variable-length data.
 constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
+
+/*############################################################################*
+ * Global types
+ *############################################################################*/
+
+/**
+ * @brief A struct for representing internal pages.
+ *
+ */
+using Page = ::dbgroup::memory::PageTarget<kPageSize>;
 
 }  // namespace dbgroup::index::b_tree
 
