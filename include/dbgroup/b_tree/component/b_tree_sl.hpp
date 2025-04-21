@@ -150,7 +150,9 @@ class BTreeSL
     while (!stack.empty()) {
       auto &[node, pos] = stack.back();
       if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
-        stack.emplace_back(node->GetChild(pos++), 0);
+        INode *child;
+        node->CopyPayloadTo(pos++, child);
+        stack.emplace_back(child, 0);
         continue;
       }
       ::dbgroup::memory::Release<Page>(node);
@@ -169,9 +171,6 @@ class BTreeSL
    * @param key_len The length of a target key.
    * @retval The corresponding payload of a given key if exist.
    * @retval std::nullopt otherwise.
-   * @note If you store variable-length payloads, thread local storage
-   * temporarily retains the returned payload. You need to create a deep copy to
-   * refer to the returned payload safely whenever you want.
    */
   auto
   Read(  //
@@ -185,14 +184,20 @@ class BTreeSL
     stack.reserve(kInitialHeight);
     while (true) {
       auto &&[node, guard] = SearchNode<LReadGuard>(stack, key);
-      const auto &payload = node->template Read<Payload>(key);
-      if constexpr (kUseOptCCForLeaf) {
-        if (!guard.VerifyVersion(kNoMask, kMaxRetry)) {
-          stack.emplace_back(node);
-          continue;
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if constexpr (!kUseOptCCForLeaf) {
+        if (!found || deleted) return std::nullopt;
+        node->CopyPayloadTo(pos, tls_pay);
+        return tls_pay;
+      } else {
+        if (found && !deleted) {
+          node->CopyPayloadTo(pos, tls_pay);
+          if (guard.VerifyVersion(kNoMask, kMaxRetry)) return tls_pay;
+        } else if (guard.VerifyVersion(kNoMask, kMaxRetry)) {
+          return std::nullopt;
         }
+        stack.emplace_back(node);
       }
-      return payload;
     }
   }
 
@@ -265,25 +270,59 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @return kSuccess.
-   * @note This function always overwrites a payload and can be optimized for
-   * that purpose; the procedure can omit the key uniqueness check.
+   * @note This function is the alias of `Upsert`.
    */
-  auto
+  void
   Write(  //
       const Key &key,
       const Payload &payload,
+      const size_t key_len = sizeof(Key))
+  {
+    Upsert(key, payload, key_len);
+  }
+
+  /**
+   * @brief Upsert (update or insert) a given key/payload pair.
+   *
+   * @param key A target key.
+   * @param payload A target payload.
+   * @param key_len The length of a target key.
+   * @retval The previous payload if exist (i.e., the function acts as update).
+   * @retval std::nullopt otherwise (i.e., the function acts as insert).
+   */
+  auto
+  Upsert(  //
+      const Key &key,
+      const Payload &payload,
       const size_t key_len = sizeof(Key))  //
-      -> ReturnCode
+      -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
     std::vector<INode *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, x_guard] = SearchNode<LXGuard>(stack, key);
-      const auto rc = node->Write(x_guard, key, key_len, payload, tls_pay, merger_);
-      if (rc == kCompleted) return kSuccess;
+      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+
+      LXGuard x_guard;
+      if constexpr (kUseOptCCForLeaf) {
+        x_guard = guard.TryLockX(kInsDelMask);
+        if (!x_guard) continue;  // another thread may insert the key
+      } else {
+        x_guard = guard.UpgradeToX();
+      }
+      if (found && !deleted) {
+        node->Update(pos, payload, tls_pay, merger_);
+        return tls_pay;
+      }
+      const auto rc = node->Insert(pos, found, key, key_len, &payload, sizeof(Payload));
+      if (rc == kCompleted) {
+        if constexpr (kUseOptCCForLeaf) {
+          VerIncrement<kInsDelMask>(x_guard);
+        }
+        return std::nullopt;
+      }
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
       AddDownLink(stack, sep_key, sep_key_len, node, r_node);
@@ -297,15 +336,15 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @retval kSuccess if a given record is inserted.
-   * @retval kKeyExist if a target key has been already inserted.
+   * @retval The current payload if exist (i.e., failed).
+   * @retval std::nullopt otherwise (i.e., succeeded).
    */
   auto
   Insert(  //
       const Key &key,
       const Payload &payload,
       const size_t key_len = sizeof(Key))  //
-      -> ReturnCode
+      -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
@@ -315,10 +354,11 @@ class BTreeSL
       auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
+        node->CopyPayloadTo(pos, tls_pay);
         if constexpr (kUseOptCCForLeaf) {
           if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
-        return kKeyExist;
+        return tls_pay;
       }
 
       LXGuard x_guard;
@@ -328,8 +368,13 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Insert(x_guard, pos, found, key, key_len, &payload, sizeof(Payload));
-      if (rc == kCompleted) return kSuccess;
+      const auto rc = node->Insert(pos, found, key, key_len, &payload, sizeof(Payload));
+      if (rc == kCompleted) {
+        if constexpr (kUseOptCCForLeaf) {
+          VerIncrement<kInsDelMask>(x_guard);
+        }
+        return std::nullopt;
+      }
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
       AddDownLink(stack, sep_key, sep_key_len, node, r_node);
@@ -343,15 +388,15 @@ class BTreeSL
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
-   * @retval kSuccess if a given record is updated.
-   * @retval kKeyNotExist if a target key is not in this tree.
+   * @retval The previous payload if exist (i.e., succeeded).
+   * @retval std::nullopt otherwise (i.e., failed).
    */
   auto
   Update(  //
       const Key &key,
       const Payload &payload,
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
-      -> ReturnCode
+      -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
@@ -364,7 +409,7 @@ class BTreeSL
         if constexpr (kUseOptCCForLeaf) {
           if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
-        return kKeyNotExist;
+        return std::nullopt;
       }
 
       LXGuard x_guard;
@@ -375,7 +420,7 @@ class BTreeSL
         x_guard = guard.UpgradeToX();
       }
       node->Update(pos, payload, tls_pay, merger_);
-      return kSuccess;
+      return tls_pay;
     }
   }
 
@@ -384,14 +429,14 @@ class BTreeSL
    *
    * @param key A target key.
    * @param key_len The length of a target key.
-   * @retval kSuccess if a given record is deleted.
-   * @retval kKeyNotExist if a target key is not in this tree.
+   * @retval The deleted payload if exist (i.e., succeeded).
+   * @retval std::nullopt otherwise (i.e., failed).
    */
   auto
   Delete(  //
       const Key &key,
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
-      -> ReturnCode
+      -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
@@ -404,7 +449,7 @@ class BTreeSL
         if constexpr (kUseOptCCForLeaf) {
           if (!guard.VerifyVersion(kInsDelMask)) continue;
         }
-        return kKeyNotExist;
+        return std::nullopt;
       }
 
       LXGuard x_guard;
@@ -414,11 +459,14 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Delete(x_guard, pos);
+      const auto rc = node->Delete(pos, tls_pay);
+      if constexpr (kUseOptCCForLeaf) {
+        VerIncrement<kInsDelMask>(x_guard);
+      }
       if (rc == kNeedMerge) {
         TryMerge(stack, node, x_guard.DowngradeToSIX());
       }
-      return kSuccess;
+      return tls_pay;
     }
   }
 
@@ -432,16 +480,14 @@ class BTreeSL
    * @tparam Entry A container for a key/payload pair.
    * @param entries All entries for bulkload.
    * @param thread_num The number of threads used for bulkload.
-   * @return kSuccess.
    */
   template <class Entry>
-  auto
+  void
   Bulkload(  //
       const std::vector<Entry> &entries,
-      const size_t thread_num = 1)  //
-      -> ReturnCode
+      const size_t thread_num = 1)
   {
-    if (entries.empty()) return kSuccess;
+    if (entries.empty()) return;
 
     std::vector<NodeEntry> nodes{};
     auto &&iter = entries.cbegin();
@@ -497,8 +543,6 @@ class BTreeSL
     // set a new root
     auto *old_root = root_.exchange(new_root, kRelease);
     gc_->template AddGarbage<Page>(old_root);
-
-    return ReturnCode::kSuccess;
   }
 
   /*##########################################################################*
@@ -668,8 +712,7 @@ class BTreeSL
           child = node->SearchChild(key);
           if (guard.VerifyVersion(kInsDelMask)) break;
         }
-        stack.emplace_back(node);
-        node = child;
+        stack.emplace_back(std::exchange(node, child));
       }
     out:;  // the current node has been removed or too old, so retry
     }
@@ -694,13 +737,12 @@ class BTreeSL
         return {leaf, leaf->template GetGuard<LReadGuard>()};
       }
 
-      INode *child{};
+      INode *child;
       auto &&guard = node->template GetGuard<IOptGuard>();
       do {
-        child = node->GetChild(0);
+        node->CopyPayloadTo(0, child);
       } while (!guard.VerifyVersion(kInsDelMask));
-      stack.emplace_back(node);
-      node = child;
+      stack.emplace_back(std::exchange(node, child));
     }
   }
 
@@ -800,8 +842,11 @@ class BTreeSL
       const auto [found, _, pos] = node->CheckUniqueness(key);  // `found` must be false
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may insert the key
-      const auto rc = node->Insert(x_guard, pos, found, key, key_len, &r_child, kPtrSize);
-      if (rc == kCompleted) break;
+      const auto rc = node->Insert(pos, found, key, key_len, &r_child, kPtrSize);
+      if (rc == kCompleted) {
+        VerIncrement<kInsDelMask>(x_guard);
+        break;
+      }
 
       const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
       AddDownLink(stack, sep_key, sep_key_len, node, r_node, level + 1);
@@ -860,8 +905,8 @@ class BTreeSL
       SIXGuard l_guard,
       const size_t level = 1)
   {
-    auto &&[r_child, r_guard] = l_child->GetMergeableSib();
-    if (!r_child) {
+    auto &&r_guard = l_child->GetMergeableSib();
+    if (!r_guard) {
       if constexpr (std::is_same_v<NodeT, INode>) {
         TryRemoveRoot(l_child, std::move(l_guard));
       }
@@ -879,7 +924,9 @@ class BTreeSL
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may modify a node
 
-      const auto rc = node->Delete(x_guard, pos);
+      NodeT *r_child;
+      const auto rc = node->Delete(pos, r_child);
+      VerIncrement<kInsDelMask>(x_guard);
       if (rc == kCompleted) {
         static_cast<void>(std::move(x_guard));
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
@@ -909,10 +956,10 @@ class BTreeSL
   {
     auto *root = root_.load(kRelaxed);
     if (node == root && !node->GetSibNode() && node->GetRecNum() == 1) {
-      auto *new_root = node->GetChild(0);
-      if (root_.compare_exchange_strong(root, new_root, kRelease, kRelaxed)) {
-        node->Remove(std::move(guard), new_root);
-        gc_->template AddGarbage<Page>(root);
+      node->CopyPayloadTo(0, root);
+      if (root_.compare_exchange_strong(node, root, kRelease, kRelaxed)) {
+        node->Remove(std::move(guard), root);
+        gc_->template AddGarbage<Page>(node);
       }
     }
   }

@@ -232,45 +232,31 @@ class Node
   }
 
   /**
-   * @retval 1st: A sibling node if it can be merged.
-   * @retval 1st: nullptr otherwise.
-   * @retval 2nd: The corresponding SIX guard of a returned node.
+   * @return The SIX guard of a right sibling node.
    */
   auto
   GetMergeableSib()  //
-      -> std::pair<Node *, SIXGuard>
+      -> SIXGuard
   {
+    SIXGuard six_guard{};
     if (sib_node_) {
       if constexpr (kUseOptCC) {
         auto &&guard = sib_node_->GetGuard<OptGuard>();
         while (true) {
           const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
           if (merged_usage >= kMaxMergedUsage) break;
-          auto &&six_guard = guard.TryLockSIX();
-          if (six_guard) return {sib_node_, std::move(six_guard)};
+          six_guard = guard.TryLockSIX();
+          if (six_guard) break;
         }
       } else {
-        auto &&six_guard = sib_node_->GetGuard<SIXGuard>();
+        six_guard = sib_node_->GetGuard<SIXGuard>();
         const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-        if (merged_usage < kMaxMergedUsage) return {sib_node_, std::move(six_guard)};
+        if (merged_usage >= kMaxMergedUsage) {
+          six_guard = SIXGuard{};
+        }
       }
     }
-    return {nullptr, SIXGuard{}};
-  }
-
-  /**
-   * @param pos A target record position.
-   * @return A child node.
-   */
-  [[nodiscard]] auto
-  GetChild(                    //
-      const size_t pos) const  //
-      -> Node *
-  {
-    Node *child;
-    const auto meta = meta_arr_[pos];
-    std::memcpy(&child, ShiftAddr(this, meta.offset + meta.key_len), kPtrSize);
-    return child;
+    return six_guard;
   }
 
   /**
@@ -388,26 +374,16 @@ class Node
    *##########################################################################*/
 
   /**
-   * @brief Read the payload associated with a given key.
-   *
-   * @tparam Payload A class of stored payloads.
-   * @param key A search key.
-   * @retval A found payload if exist.
-   * @retval std::nullopt otherwise.
+   * @param[in] pos A target record position.
+   * @param[out] out_pay An instance for storing an output payload.
    */
   template <class Payload>
-  [[nodiscard]] auto
-  Read(                      //
-      const Key &key) const  //
-      -> std::optional<Payload>
+  void
+  CopyPayloadTo(  //
+      const size_t pos,
+      Payload &out_pay) const
   {
-    const auto [found, pos] = SearchRecord(key);
-    const auto meta = meta_arr_[pos];
-    if (!found || meta.deleted) return std::nullopt;
-
-    Payload payload;
-    std::memcpy(&payload, ShiftAddr(this, meta.GetPayOff()), sizeof(Payload));
-    return payload;
+    std::memcpy(&out_pay, ShiftAddr(this, meta_arr_[pos].GetPayOff()), sizeof(Payload));
   }
 
   /**
@@ -461,79 +437,8 @@ class Node
    *##########################################################################*/
 
   /**
-   * @brief Write a given kay/payload pair.
-   *
-   * @param[in] x_guard A lock guard to set version.
-   * @param[in] key A target key to be written.
-   * @param[in] key_len The length of a target key.
-   * @param[in] payload A target payload to be written.
-   * @param[out] out_pay An instance for storing an output payload.
-   * @param[in] merger A function for merging payloads.
-   * @retval kCompleted if a record is written.
-   * @retval kNeedSplit if this node should be split before inserting a record.
-   */
-  template <class Payload>
-  auto
-  Write(  //
-      Lock::XGuard &x_guard,
-      const Key &key,
-      const size_t key_len,
-      const Payload &payload,
-      Payload &out_pay,
-      Payload (*merger)(const Payload &, const Payload &))  //
-      -> NodeRC
-  {
-    const auto rec_len = key_len + sizeof(Payload);
-    const auto total_len = rec_len + kMetaSize;
-    if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
-      CleanUp();
-      if constexpr (kUseOptimisticCC) {
-        VerIncrement<kInsDelMask>(x_guard);
-      }
-    }
-
-    const auto [found, pos] = SearchRecord(key);
-    auto &meta = meta_arr_[pos];
-    if (found) {  // reuse the found record
-      auto *pay_addr = ShiftAddr(this, meta.GetPayOff());
-      if (meta.deleted) {
-        meta.deleted = 0;
-        usage_ += total_len;
-        out_pay = payload;
-        if constexpr (kUseOptimisticCC) {
-          VerIncrement<kInsDelMask>(x_guard);
-        }
-      } else if (merger) {
-        Payload cur_pay;
-        std::memcpy(&cur_pay, pay_addr, sizeof(Payload));
-        out_pay = merger(cur_pay, payload);
-      } else {
-        out_pay = payload;
-      }
-      std::memcpy(pay_addr, &out_pay, sizeof(Payload));
-    } else {
-      // insert a new record
-      offset_ -= rec_len;
-      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset_ + key_len), &payload, sizeof(Payload));
-      std::memmove(ShiftAddr(&meta, kMetaSize), &meta, kMetaSize * (rec_num_ - pos));
-      meta = Metadata{offset_, key_len, rec_len};
-      ++rec_num_;
-      usage_ += total_len;
-      out_pay = payload;
-      if constexpr (kUseOptimisticCC) {
-        VerIncrement<kInsDelMask>(x_guard);
-      }
-    }
-
-    return kCompleted;
-  }
-
-  /**
    * @brief Insert a given kay/payload pair.
    *
-   * @param x_guard A lock guard to set version.
    * @param pos A position where a new record is inserted.
    * @param found A flag for indicating the same (deleted) key is found.
    * @param key A target key to be written.
@@ -545,7 +450,6 @@ class Node
    */
   auto
   Insert(  //
-      Lock::XGuard &x_guard,
       size_t pos,
       bool found,
       const Key &key,
@@ -556,19 +460,17 @@ class Node
   {
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
-    if (usage_ + total_len > kPageSize) return kNeedSplit;
-    if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
-      CleanUp();
-      std::tie(found, pos) = SearchRecord(key);
-    }
-
-    // insert a new record
-    auto &meta = meta_arr_[pos];
-    usage_ += total_len;
     if (found) {  // reuse the deleted record
+      auto &meta = meta_arr_[pos];
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = 0;
-    } else {
+    } else {  // insert a new record
+      if (usage_ + total_len > kPageSize) return kNeedSplit;
+      if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
+        CleanUp();
+        pos = SearchRecord(key).second;
+      }
+      auto &meta = meta_arr_[pos];
       offset_ -= rec_len;
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
       std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
@@ -576,10 +478,7 @@ class Node
       meta = Metadata{offset_, key_len, rec_len};
       ++rec_num_;
     }
-
-    if constexpr (kUseOptimisticCC) {
-      VerIncrement<kInsDelMask>(x_guard);
-    }
+    usage_ += total_len;
     return kCompleted;
   }
 
@@ -600,41 +499,38 @@ class Node
       Payload (*merger)(const Payload &, const Payload &))
   {
     auto *pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
+    std::memcpy(&out_pay, pay_addr, sizeof(Payload));
     if (merger) {
-      Payload cur_pay;
-      std::memcpy(&cur_pay, pay_addr, sizeof(Payload));
-      out_pay = merger(cur_pay, payload);
+      const auto &merged = merger(out_pay, payload);
+      std::memcpy(pay_addr, &merged, sizeof(Payload));
     } else {
-      out_pay = payload;
+      std::memcpy(pay_addr, &payload, sizeof(Payload));
     }
-    std::memcpy(pay_addr, &out_pay, sizeof(Payload));
   }
 
   /**
    * @brief Delete a record using a given position.
    *
-   * @param x_guard A lock guard to set version.
-   * @param pos A position where a target record is.
+   * @param[in] pos A position where a target record is.
+   * @param[out] out_pay An instance for storing an output payload.
    * @retval kNeedMerge if this node should be merged.
    * @retval kCompleted otherwise.
    */
+  template <class Payload>
   auto
   Delete(  //
-      Lock::XGuard &x_guard,
-      const size_t pos)  //
+      const size_t pos,
+      Payload &out_pay)  //
       -> NodeRC
   {
     auto &meta = meta_arr_[pos];
+    std::memcpy(&out_pay, ShiftAddr(this, meta.GetPayOff()), sizeof(Payload));
     usage_ -= meta.rec_len + kMetaSize;
     if (level_ > 0) {
       std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1));
       --rec_num_;
     } else {
       meta.deleted = 1;
-    }
-
-    if constexpr (kUseOptimisticCC) {
-      VerIncrement<kInsDelMask>(x_guard);
     }
     return (usage_ < kMinNodeUsage) ? kNeedMerge : kCompleted;
   }
@@ -775,8 +671,8 @@ class Node
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
       // go down to the lower level
-      l_node = l_node->GetChild(l_node->rec_num_ - 1);
-      r_node = r_node->GetChild(0);
+      l_node->CopyPayloadTo(l_node->rec_num_ - 1, l_node);
+      r_node->CopyPayloadTo(0, r_node);
     }
   }
 
@@ -795,7 +691,7 @@ class Node
 
       auto &meta = node->meta_arr_[0];
       meta = Metadata{meta.GetPayOff(), 0, kWordSize};
-      node = node->GetChild(0);
+      node->CopyPayloadTo(0, node);
     }
   }
 
