@@ -17,7 +17,8 @@
 #ifndef B_TREE_DBGROUP_B_TREE_B_TREE_HPP_
 #define B_TREE_DBGROUP_B_TREE_B_TREE_HPP_
 
-#include <utility>
+// C++ standard libraries
+#include <functional>
 
 // external libraries
 #include "dbgroup/lock/mcs_lock.hpp"

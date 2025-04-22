@@ -49,13 +49,15 @@ class RecordIterator
   using Key = typename Index::Key_t;
   using Payload = typename Index::Payload_t;
   using Node = typename Index::Node_t;
-  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
   using EpochGuard = ::dbgroup::thread::EpochGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
+
+  constexpr RecordIterator() = default;
 
   /**
    * @brief Construct a new iterator object.
@@ -87,7 +89,7 @@ class RecordIterator
 
   RecordIterator(  //
       RecordIterator &&obj) noexcept
-      : node_{obj.node},
+      : node_{obj.node_},
         guard_{std::move(obj.guard_)},
         pos_{obj.pos_},
         end_pos_{obj.end_pos_},
@@ -106,7 +108,7 @@ class RecordIterator
       RecordIterator &&rhs) noexcept  //
       -> RecordIterator &
   {
-    node_ = rhs.node;
+    node_ = rhs.node_;
     guard_ = std::move(rhs.guard_);
     pos_ = rhs.pos_;
     end_pos_ = rhs.end_pos_;
@@ -117,6 +119,7 @@ class RecordIterator
     gc_guard_ = std::move(rhs.gc_guard_);
     std::memcpy(key_, rhs.key_, component::MaxSize<Key>());
     std::memcpy(payload_, rhs.payload_, component::MaxSize<Payload>());
+    return *this;
   }
 
   // forbit copying
@@ -396,10 +399,10 @@ class RecordIterator
   const Index *index_{};
 
   /// @brief The end key given from a user.
-  const ScanKey end_key_{};
+  ScanKey end_key_{};
 
   /// @brief The guard instance for preventing GC from reclaiming nodes.
-  const EpochGuard gc_guard_{};
+  EpochGuard gc_guard_{};
 };
 
 }  // namespace dbgroup::index::b_tree
