@@ -316,7 +316,7 @@ class BTreeSL
         node->Update(pos, payload, tls_pay, merger_);
         return tls_pay;
       }
-      const auto rc = node->Insert(pos, found, key, key_len, &payload, sizeof(Payload));
+      const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == kCompleted) {
         if constexpr (kUseOptCCForLeaf) {
           VerIncrement<kInsDelMask>(x_guard);
@@ -324,8 +324,7 @@ class BTreeSL
         return std::nullopt;
       }
 
-      const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
-      AddDownLink(stack, sep_key, sep_key_len, node, r_node);
+      Split(stack, node, std::move(x_guard));
       stack.emplace_back(std::bit_cast<INode *>(node));
     }
   }
@@ -368,7 +367,7 @@ class BTreeSL
       } else {
         x_guard = guard.UpgradeToX();
       }
-      const auto rc = node->Insert(pos, found, key, key_len, &payload, sizeof(Payload));
+      const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == kCompleted) {
         if constexpr (kUseOptCCForLeaf) {
           VerIncrement<kInsDelMask>(x_guard);
@@ -376,8 +375,7 @@ class BTreeSL
         return std::nullopt;
       }
 
-      const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
-      AddDownLink(stack, sep_key, sep_key_len, node, r_node);
+      Split(stack, node, std::move(x_guard));
       stack.emplace_back(std::bit_cast<INode *>(node));
     }
   }
@@ -578,12 +576,26 @@ class BTreeSL
   /// @brief A flag for indicating inner nodes.
   static constexpr bool kInnerFlag = true;
 
+  /// @brief The size of payloads.
+  static constexpr size_t kPayLen = sizeof(Payload);
+
   /// @brief The expected capacity of a node when performing bulkload.
-  static constexpr size_t kNodeCapacity = kPageSize / (sizeof(Key) + sizeof(Payload) + kMetaSize);
+  static constexpr size_t kNodeCapacity = kPageSize / (sizeof(Key) + kPayLen + kMetaSize);
 
   /*##########################################################################*
    * Internal utility functions
    *##########################################################################*/
+
+  /**
+   * @return A page for nodes.
+   */
+  [[nodiscard]] auto
+  GetNodePage()  //
+      -> void *
+  {
+    auto *page = gc_->template GetPageIfPossible<Page>();
+    return page ? page : ::dbgroup::memory::Allocate<Page>();
+  }
 
   /**
    * @brief Search a target node horizontally.
@@ -622,50 +634,6 @@ class BTreeSL
   }
 
   /**
-   * @brief Acquire a guard instance for a target node.
-   *
-   * @tparam Guard A desired guard class.
-   * @tparam NodeT A target node class.
-   * @param[in,out] node A target node.
-   * @param[in] key A search key.
-   * @return A guard instance for reading/modifying a target node.
-   */
-  template <class Guard, class NodeT>
-  [[nodiscard]] static auto
-  AcquireGuard(  //
-      NodeT *&node,
-      const Key &key)  //
-      -> Guard
-  {
-    constexpr auto kNeedX = std::is_same_v<Guard, typename NodeT::XGuard>;
-    using TmpGuard = std::conditional_t<kNeedX, typename NodeT::CheckGuard, Guard>;
-
-    auto &&guard = node->template GetGuard<TmpGuard>();
-    while (SearchHorizontally(node, guard, key)) {
-      if constexpr (!std::is_same_v<Guard, typename NodeT::XGuard>) {
-        return guard;
-      } else if constexpr (NodeT::kUseOptCC) {
-        auto &&x_guard = guard.TryLockX(kSMOMask);
-        if (x_guard) return x_guard;
-      } else {
-        return guard.UpgradeToX();
-      }
-    }
-    return Guard{};
-  }
-
-  /**
-   * @return A page for nodes.
-   */
-  [[nodiscard]] auto
-  GetNodePage()  //
-      -> void *
-  {
-    auto *page = gc_->template GetPageIfPossible<Page>();
-    return page ? page : ::dbgroup::memory::Allocate<Page>();
-  }
-
-  /**
    * @brief Search a node that may have a target key.
    *
    * @tparam Guard A desired guard class.
@@ -676,13 +644,13 @@ class BTreeSL
    * @retval 1st: A found node.
    * @retval 2nd: The lock guard of a found node.
    */
-  template <class Guard, bool kIsInner = false>
+  template <class Guard, class NodeT = LNode>
   [[nodiscard]] auto
   SearchNode(  //
       std::vector<INode *> &stack,
       const Key &key,
       const size_t level = 0) const  //
-      -> std::pair<std::conditional_t<kIsInner, INode *, LNode *>, Guard>
+      -> std::pair<NodeT *, Guard>
   {
     INode *node;
     while (true) {
@@ -699,10 +667,10 @@ class BTreeSL
 
       while (true) {
         if (node->GetLevel() == level) {
-          auto *out_node = std::bit_cast<std::conditional_t<kIsInner, INode *, LNode *>>(node);
-          auto &&guard = AcquireGuard<Guard>(out_node, key);
-          if (guard) return {out_node, std::move(guard)};
-          break;
+          auto *out_node = std::bit_cast<NodeT *>(node);
+          auto &&guard = out_node->template GetGuard<Guard>();
+          if (!SearchHorizontally(out_node, guard, key)) break;
+          return {out_node, std::move(guard)};
         }
 
         INode *child{};
@@ -791,54 +759,34 @@ class BTreeSL
    *##########################################################################*/
 
   /**
-   * @brief Split a given node.
+   * @brief Split a given node and insert a new down link.
    *
    * @tparam NodeT A target node class.
    * @param stack A stack of traversed nodes.
-   * @param l_node A split-left node.
+   * @param l_child A split-left node.
    * @param l_guard The guard instance of a split-left node.
-   * @retval 1st: A separator key.
-   * @retval 2nd: The size of a separator key.
-   * @retval 3rd: A split-right node.
+   * @param level A level where a parent node is.
    */
   template <class NodeT>
-  [[nodiscard]] auto
+  void
   Split(  //
-      NodeT *l_node,
-      typename NodeT::XGuard l_guard)  //
-      -> std::tuple<Key, size_t, NodeT *>
+      std::vector<INode *> stack,
+      NodeT *l_child,
+      typename NodeT::XGuard l_guard,
+      const size_t level = 1)
   {
-    auto *r_node = new (GetNodePage()) NodeT{l_node};
+    auto *r_child = new (GetNodePage()) NodeT{l_child};
     if constexpr (NodeT::kUseOptCC) {
       VerIncrement<kSMOMask>(l_guard);
     }
-    auto &&[sep_key, sep_key_len] = l_node->GetSeparatorKey();
-    return {sep_key, sep_key_len, r_node};
-  }
+    l_guard = typename NodeT::XGuard{};
 
-  /**
-   * @brief Add a down link to complete split operations.
-   *
-   * @param key A new key.
-   * @param key_len The length of a new key.
-   * @param l_child A source (left-split) node.
-   * @param r_child A new (right-split) node to be inserted.
-   * @param level A level where a target node is.
-   */
-  void
-  AddDownLink(  //
-      std::vector<INode *> stack,
-      const Key &key,
-      const size_t key_len,
-      const void *l_child,
-      const void *r_child,
-      const size_t level = 1)
-  {
+    const auto &[key, key_len] = l_child->GetSeparatorKey();
     while (true) {
-      if (stack.empty() && TryAddNewRoot(level, key, key_len, l_child, r_child)) break;
+      if (stack.empty() && TryAddRoot(level, key, key_len, l_child, r_child)) break;
 
       // insert a new down link
-      auto &&[node, guard] = SearchNode<IOptGuard, kInnerFlag>(stack, key, level);
+      auto &&[node, guard] = SearchNode<IOptGuard, INode>(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);  // `found` must be false
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may insert the key
@@ -848,11 +796,9 @@ class BTreeSL
         break;
       }
 
-      const auto &[sep_key, sep_key_len, r_node] = Split(node, std::move(x_guard));
-      AddDownLink(stack, sep_key, sep_key_len, node, r_node, level + 1);
+      Split(stack, node, std::move(x_guard), level + 1);
       stack.emplace_back(node);
     }
-
     if constexpr (IsVarLenData<Key>()) {
       ::dbgroup::memory::Release<KeyWOPtr>(key);
     }
@@ -870,7 +816,7 @@ class BTreeSL
    * @retval false otherwise.
    */
   [[nodiscard]] auto
-  TryAddNewRoot(  //
+  TryAddRoot(  //
       const size_t level,
       const Key &key,
       const size_t key_len,
@@ -915,7 +861,7 @@ class BTreeSL
 
     const auto &key = l_child->GetSeparatorKey().first;
     while (true) {
-      auto &&[node, guard] = SearchNode<IOptGuard, kInnerFlag>(stack, key, level);
+      auto &&[node, guard] = SearchNode<IOptGuard, INode>(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);
       if (!found) {
         if (!guard.VerifyVersion(kInsDelMask)) continue;
@@ -928,7 +874,7 @@ class BTreeSL
       const auto rc = node->Delete(pos, r_child);
       VerIncrement<kInsDelMask>(x_guard);
       if (rc == kCompleted) {
-        static_cast<void>(std::move(x_guard));
+        x_guard = IXGuard{};
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
       } else {
         auto &&six_guard = x_guard.DowngradeToSIX();
