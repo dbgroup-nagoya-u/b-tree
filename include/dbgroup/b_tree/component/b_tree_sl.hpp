@@ -180,10 +180,9 @@ class BTreeSL
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     while (true) {
-      auto &&[node, guard] = SearchNode<LReadGuard>(stack, key);
+      auto &&[node, guard] = SearchNode<LReadGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if constexpr (!kUseOptCCForLeaf) {
         if (!found || deleted) return std::nullopt;
@@ -196,7 +195,7 @@ class BTreeSL
         } else if (guard.VerifyVersion(kNoMask, kMaxRetry)) {
           return std::nullopt;
         }
-        stack.emplace_back(node);
+        tls_stack.emplace_back(node);
       }
     }
   }
@@ -222,23 +221,22 @@ class BTreeSL
     Guard guard;
     size_t begin_pos;
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     if constexpr (kUseOptCCForLeaf) {
       thread_local Page tls_page{};  // retain the copy of a target node
       if (begin_key) {
         const auto &[key, _, closed] = *begin_key;
         while (true) {
-          std::tie(node, guard) = SearchNode<Guard>(stack, key);
+          std::tie(node, guard) = SearchNode<Guard>(tls_stack, key);
           std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
           if (guard.VerifyVersion(kNoMask, kMaxRetry)) break;
-          stack.emplace_back(node);
+          tls_stack.emplace_back(node);
         }
         node = std::bit_cast<LNode *>(&tls_page);
         const auto [found, deleted, pos] = node->CheckUniqueness(key);
         begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
       } else {
-        std::tie(node, guard) = SearchLeftmostLeaf(stack);
+        std::tie(node, guard) = SearchLeftmostLeaf(tls_stack);
         do {
           std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
         } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
@@ -248,11 +246,11 @@ class BTreeSL
     } else {
       if (begin_key) {
         const auto &[key, _, closed] = *begin_key;
-        std::tie(node, guard) = SearchNode<Guard>(stack, key);
+        std::tie(node, guard) = SearchNode<Guard>(tls_stack, key);
         const auto [found, deleted, pos] = node->CheckUniqueness(key);
         begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
       } else {
-        std::tie(node, guard) = SearchLeftmostLeaf(stack);
+        std::tie(node, guard) = SearchLeftmostLeaf(tls_stack);
         begin_pos = 0;
       }
     }
@@ -299,10 +297,9 @@ class BTreeSL
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     while (true) {
-      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
 
       LXGuard x_guard;
@@ -324,8 +321,8 @@ class BTreeSL
         return std::nullopt;
       }
 
-      Split(stack, node, std::move(x_guard));
-      stack.emplace_back(std::bit_cast<INode *>(node));
+      Split(tls_stack, node, std::move(x_guard));
+      tls_stack.emplace_back(std::bit_cast<INode *>(node));
     }
   }
 
@@ -347,10 +344,9 @@ class BTreeSL
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     while (true) {
-      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         node->CopyPayloadTo(pos, tls_pay);
@@ -375,8 +371,8 @@ class BTreeSL
         return std::nullopt;
       }
 
-      Split(stack, node, std::move(x_guard));
-      stack.emplace_back(std::bit_cast<INode *>(node));
+      Split(tls_stack, node, std::move(x_guard));
+      tls_stack.emplace_back(std::bit_cast<INode *>(node));
     }
   }
 
@@ -398,10 +394,9 @@ class BTreeSL
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     while (true) {
-      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if constexpr (kUseOptCCForLeaf) {
@@ -438,10 +433,9 @@ class BTreeSL
   {
     [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    std::vector<INode *> stack{};
-    stack.reserve(kInitialHeight);
+    tls_stack.clear();
     while (true) {
-      auto &&[node, guard] = SearchNode<LCheckGuard>(stack, key);
+      auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if constexpr (kUseOptCCForLeaf) {
@@ -462,7 +456,7 @@ class BTreeSL
         VerIncrement<kInsDelMask>(x_guard);
       }
       if (rc == kNeedMerge) {
-        TryMerge(stack, node, x_guard.DowngradeToSIX());
+        TryMerge(tls_stack, node, x_guard.DowngradeToSIX());
       }
       return tls_pay;
     }
@@ -734,11 +728,10 @@ class BTreeSL
       auto *sib_node = node->GetSibNode();
       const auto &key = node->GetSeparatorKey().first;
 
-      std::vector<INode *> stack{};
-      stack.reserve(kInitialHeight);
+      tls_stack.clear();
       do {
-        stack.emplace_back(sib_node);
-        std::tie(sib_node, guard) = SearchNode<Guard>(stack, key);
+        tls_stack.emplace_back(sib_node);
+        std::tie(sib_node, guard) = SearchNode<Guard>(tls_stack, key);
         std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
       } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
 
@@ -989,7 +982,7 @@ class BTreeSL
   /// @brief The expected maximum size after node split.
   static constexpr size_t kMaxSplitSize = kHeaderSize  //
                                           + (kPageSize - kHeaderSize) * 3 / 4
-                                          + (MaxSize<Key>() + MaxSize<Payload>() + kMetaSize) / 2
+                                          + (MaxSize<Key>() + kPayLen + kMetaSize) / 2
                                           + MaxSize<Key>();
 
   static_assert(  //
@@ -1016,6 +1009,9 @@ class BTreeSL
   /*##########################################################################*
    * Thread local class variables
    *##########################################################################*/
+
+  /// @brief A stack for retaining traversed nodes.
+  static thread_local inline std::vector<INode *> tls_stack{kInitialHeight};
 
   /// @brief A temporary payload.
   static thread_local inline Payload tls_pay{};
