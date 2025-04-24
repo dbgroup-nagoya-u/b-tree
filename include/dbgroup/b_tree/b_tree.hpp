@@ -50,7 +50,7 @@ using BTreeOSL = component::BTreeSL<Key,
                                     GC,
                                     ::dbgroup::lock::OptimisticLock,
                                     ::dbgroup::lock::OptimisticLock,
-                                    kUseOptimisticCC>;
+                                    kOCCFlag>;
 
 /**
  * @brief A B<sup>link</sup>-tree with OCC (inner nodes) and pessimistic locks
@@ -71,7 +71,7 @@ using BTreePSL = component::BTreeSL<Key,
                                     GC,
                                     ::dbgroup::lock::OptimisticLock,
                                     ::dbgroup::lock::PessimisticLock,
-                                    !kUseOptimisticCC>;
+                                    kPCCFlag>;
 
 }  // namespace dbgroup::index::b_tree
 

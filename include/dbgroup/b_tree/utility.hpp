@@ -32,14 +32,17 @@ constexpr size_t kDefaultGCTime = 10000;  // 10 ms
 /// @brief The default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
 
-/// @brief A flag for using multi-level SMO.
-constexpr bool kMultiLevelSMO = false;
-
 /// @brief A flag for using single-level SMO.
-constexpr bool kSingleLevelSMO = true;
+constexpr bool kSingleLevelSMOFlag = true;
+
+/// @brief A flag for using multi-level SMO.
+constexpr bool kMultiLevelSMOFlag = false;
 
 /// @brief A flag for using optimistic concurrency controls.
-constexpr bool kUseOptimisticCC = true;
+constexpr bool kOCCFlag = true;
+
+/// @brief A flag for using pessimistic concurrency controls.
+constexpr bool kPCCFlag = false;
 
 /*############################################################################*
  * Tuning parameters for B+trees

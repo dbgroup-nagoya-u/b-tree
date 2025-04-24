@@ -51,12 +51,12 @@ namespace dbgroup::index::b_tree::component
  * @tparam Key A target key class.
  * @tparam Comp A comparator class for keys.
  * @tparam Lock A lock class for concurrency controls.
- * @tparam kUseOptimisticCC A flag for using optimistic concurrency controls.
+ * @tparam kUseOCC A flag for using optimistic concurrency controls.
  */
 template <class Key,  //
           class Comp,
           ::dbgroup::lock::Lockable Lock,
-          bool kUseOptimisticCC>
+          bool kUseOCC>
 class Node
 {
   /*##########################################################################*
@@ -70,19 +70,12 @@ class Node
    * Public types
    *##########################################################################*/
 
-  using OptGuard = OptGuardExtractor<Lock, kUseOptimisticCC>::type;
+  using OptGuard = OptGuardExtractor<Lock, kUseOCC>::type;
   using SGuard = typename Lock::SGuard;
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
-  using ReadGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SGuard>;
-  using CheckGuard = std::conditional_t<kUseOptimisticCC, OptGuard, SIXGuard>;
-
-  /*##########################################################################*
-   * Public constants
-   *##########################################################################*/
-
-  /// @brief A flag for indicating this node uses optimistic CC.
-  static constexpr bool kUseOptCC = kUseOptimisticCC;
+  using ReadGuard = std::conditional_t<kUseOCC, OptGuard, SGuard>;
+  using CheckGuard = std::conditional_t<kUseOCC, OptGuard, SIXGuard>;
 
   /*##########################################################################*
    * Public constructors and assignment operators
@@ -240,7 +233,7 @@ class Node
   {
     SIXGuard six_guard{};
     if (sib_node_) {
-      if constexpr (kUseOptCC) {
+      if constexpr (kUseOCC) {
         auto &&guard = sib_node_->GetGuard<OptGuard>();
         while (true) {
           const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
@@ -352,7 +345,7 @@ class Node
   [[nodiscard]] auto
   GetGuard()
   {
-    if constexpr (kUseOptimisticCC) {
+    if constexpr (kUseOCC) {
       if constexpr (std::is_same_v<Guard, typename Lock::OptGuard>) {
         return lock_.GetVersion();
       } else {
@@ -564,7 +557,7 @@ class Node
       auto &&x_guard = guard.UpgradeToX();
       CopyFromTmpNode();
       sib_node_ = r_node->sib_node_;
-      if constexpr (kUseOptimisticCC) {
+      if constexpr (kUseOCC) {
         VerIncrement<kSMOMask>(x_guard);
       }
     }
@@ -585,7 +578,7 @@ class Node
     auto &&x_guard = guard.UpgradeToX();
     removed_ = true;
     sib_node_ = next;
-    if constexpr (kUseOptimisticCC) {
+    if constexpr (kUseOCC) {
       VerIncrement<kSMOMask>(x_guard);
     }
   }
@@ -903,7 +896,7 @@ class Node
       "The size of a lock class must be smaller than 8 bytes.");
 
   static_assert(  //
-      !kUseOptimisticCC || ::dbgroup::lock::OptimisticallyLockable<Lock>,
+      !kUseOCC || ::dbgroup::lock::OptimisticallyLockable<Lock>,
       "A lock class must have optimistic lock APIs when using Optimistic CC.");
 
   /*##########################################################################*

@@ -46,7 +46,7 @@
 /// @brief A macro for verifying a procedure reads stable data.
 /// @note This macro calls `continue` when version verification failed.
 #define DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard)         \
-  if constexpr (kUseOptCCForLeaf) {                         \
+  if constexpr (kUseOCCForLeaf) {                           \
     if (!(guard).VerifyVersion(kInsDelMask)) {              \
       tls_stack.emplace_back(std::bit_cast<INode *>(node)); \
       continue;                                             \
@@ -56,7 +56,7 @@
 /// @brief A macro for acquiring an exclusive lock.
 /// @note This macro calls `continue` when version verification failed.
 #define DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard) \
-  if constexpr (kUseOptCCForLeaf) {                          \
+  if constexpr (kUseOCCForLeaf) {                            \
     (x_guard) = (guard).TryLockX(kInsDelMask);               \
     if (!(x_guard)) {                                        \
       tls_stack.emplace_back(std::bit_cast<INode *>(node));  \
@@ -68,7 +68,7 @@
 
 /// @brief A macro for incrementing a version for insert/delete operations.
 #define DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard) \
-  if constexpr (kUseOptCCForLeaf) {                \
+  if constexpr (kUseOCCForLeaf) {                  \
     VerIncrement<kInsDelMask>(x_guard);            \
   }
 
@@ -84,7 +84,7 @@ namespace dbgroup::index::b_tree::component
  * @tparam Comp A comparator class for keys.
  * @tparam InnerLock A class for locking inner nodes.
  * @tparam LeafLock A class for locking leaf nodes.
- * @tparam kUseOptCCForLeaf A flag for using optimistic CC in leaf nodes.
+ * @tparam kUseOCCForLeaf A flag for using optimistic CC in leaf nodes.
  */
 template <class Key,
           class Payload,
@@ -92,19 +92,19 @@ template <class Key,
           class GC,
           ::dbgroup::lock::OptimisticallyLockable InnerLock,
           ::dbgroup::lock::Lockable LeafLock,
-          bool kUseOptCCForLeaf>
+          bool kUseOCCForLeaf>
 class BTreeSL
 {
   /*##########################################################################*
    * Type aliases
    *##########################################################################*/
 
-  using INode = Node<Key, Comp, InnerLock, kUseOptimisticCC>;
+  using INode = Node<Key, Comp, InnerLock, kOCCFlag>;
   using IOptGuard = typename INode::ReadGuard;
   using ISIXGuard = typename INode::SIXGuard;
   using IXGuard = typename INode::XGuard;
 
-  using LNode = Node<Key, Comp, LeafLock, kUseOptCCForLeaf>;
+  using LNode = Node<Key, Comp, LeafLock, kUseOCCForLeaf>;
   using LReadGuard = typename LNode::ReadGuard;
   using LCheckGuard = typename LNode::CheckGuard;
   using LOptGuard = typename LNode::OptGuard;
@@ -217,7 +217,7 @@ class BTreeSL
     while (true) {
       auto &&[node, guard] = SearchNode<LReadGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if constexpr (!kUseOptCCForLeaf) {
+      if constexpr (!kUseOCCForLeaf) {
         if (!found || deleted) return std::nullopt;
         node->CopyPayloadTo(pos, tls_pay);
         return tls_pay;
@@ -255,7 +255,7 @@ class BTreeSL
     size_t begin_pos;
 
     tls_stack.clear();
-    if constexpr (kUseOptCCForLeaf) {
+    if constexpr (kUseOCCForLeaf) {
       thread_local Page tls_page{};  // retain the copy of a target node
       if (begin_key) {
         const auto &[key, _, closed] = *begin_key;
@@ -770,7 +770,7 @@ class BTreeSL
       const size_t level = 1)
   {
     auto *r_child = new (GetNodePage()) NodeT{l_child};
-    if constexpr (NodeT::kUseOptCC) {
+    if constexpr (std::is_same_v<NodeT, INode> || kUseOCCForLeaf) {
       VerIncrement<kSMOMask>(l_guard);
     }
     l_guard = typename NodeT::XGuard{};
