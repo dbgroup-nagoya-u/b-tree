@@ -41,6 +41,39 @@
 #include "dbgroup/b_tree/record_iterator.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
+// macros for simplifying OCC-related constexpr.  // NOLINTBEGIN
+
+/// @brief A macro for verifying a procedure reads stable data.
+/// @note This macro calls `continue` when version verification failed.
+#define DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard)         \
+  if constexpr (kUseOptCCForLeaf) {                         \
+    if (!(guard).VerifyVersion(kInsDelMask)) {              \
+      tls_stack.emplace_back(std::bit_cast<INode *>(node)); \
+      continue;                                             \
+    }                                                       \
+  }
+
+/// @brief A macro for acquiring an exclusive lock.
+/// @note This macro calls `continue` when version verification failed.
+#define DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard) \
+  if constexpr (kUseOptCCForLeaf) {                          \
+    (x_guard) = (guard).TryLockX(kInsDelMask);               \
+    if (!(x_guard)) {                                        \
+      tls_stack.emplace_back(std::bit_cast<INode *>(node));  \
+      continue;                                              \
+    }                                                        \
+  } else {                                                   \
+    (x_guard) = (guard).UpgradeToX();                        \
+  }
+
+/// @brief A macro for incrementing a version for insert/delete operations.
+#define DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard) \
+  if constexpr (kUseOptCCForLeaf) {                \
+    VerIncrement<kInsDelMask>(x_guard);            \
+  }
+
+// NOLINTEND
+
 namespace dbgroup::index::b_tree::component
 {
 /**
@@ -303,21 +336,14 @@ class BTreeSL
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
 
       LXGuard x_guard;
-      if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX(kInsDelMask);
-        if (!x_guard) continue;  // another thread may insert the key
-      } else {
-        x_guard = guard.UpgradeToX();
-      }
+      DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       if (found && !deleted) {
         node->Update(pos, payload, tls_pay, merger_);
         return tls_pay;
       }
       const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == kCompleted) {
-        if constexpr (kUseOptCCForLeaf) {
-          VerIncrement<kInsDelMask>(x_guard);
-        }
+        DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
         return std::nullopt;
       }
 
@@ -350,24 +376,15 @@ class BTreeSL
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         node->CopyPayloadTo(pos, tls_pay);
-        if constexpr (kUseOptCCForLeaf) {
-          if (!guard.VerifyVersion(kInsDelMask)) continue;
-        }
+        DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard);
         return tls_pay;
       }
 
       LXGuard x_guard;
-      if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX(kInsDelMask);
-        if (!x_guard) continue;  // another thread may insert the key
-      } else {
-        x_guard = guard.UpgradeToX();
-      }
+      DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == kCompleted) {
-        if constexpr (kUseOptCCForLeaf) {
-          VerIncrement<kInsDelMask>(x_guard);
-        }
+        DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
         return std::nullopt;
       }
 
@@ -399,19 +416,12 @@ class BTreeSL
       auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if constexpr (kUseOptCCForLeaf) {
-          if (!guard.VerifyVersion(kInsDelMask)) continue;
-        }
+        DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard);
         return std::nullopt;
       }
 
       LXGuard x_guard;
-      if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX(kInsDelMask);
-        if (!x_guard) continue;  // another thread may insert the key
-      } else {
-        x_guard = guard.UpgradeToX();
-      }
+      DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       node->Update(pos, payload, tls_pay, merger_);
       return tls_pay;
     }
@@ -438,23 +448,14 @@ class BTreeSL
       auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if constexpr (kUseOptCCForLeaf) {
-          if (!guard.VerifyVersion(kInsDelMask)) continue;
-        }
+        DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard);
         return std::nullopt;
       }
 
       LXGuard x_guard;
-      if constexpr (kUseOptCCForLeaf) {
-        x_guard = guard.TryLockX(kInsDelMask);
-        if (!x_guard) continue;  // another thread may insert the key
-      } else {
-        x_guard = guard.UpgradeToX();
-      }
+      DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       const auto rc = node->Delete(pos, tls_pay);
-      if constexpr (kUseOptCCForLeaf) {
-        VerIncrement<kInsDelMask>(x_guard);
-      }
+      DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
       if (rc == kNeedMerge) {
         TryMerge(tls_stack, node, x_guard.DowngradeToSIX());
       }
