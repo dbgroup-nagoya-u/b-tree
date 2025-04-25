@@ -573,7 +573,7 @@ class Node
   void
   Remove(  //
       SIXGuard guard,
-      Node *next)
+      Node *next = nullptr)
   {
     auto &&x_guard = guard.UpgradeToX();
     removed_ = true;

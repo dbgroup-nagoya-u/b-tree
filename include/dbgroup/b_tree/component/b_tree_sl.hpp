@@ -568,9 +568,6 @@ class BTreeSL
   /// @brief The initial capacity of a node stack.
   static constexpr size_t kInitialHeight = 8;
 
-  /// @brief A flag for indicating inner nodes.
-  static constexpr bool kInnerFlag = true;
-
   /// @brief The size of payloads.
   static constexpr size_t kPayLen = sizeof(Payload);
 
@@ -621,7 +618,7 @@ class BTreeSL
       }
 
       if (!removed && included) return true;
-      if (i++ > 0) return false;  // the traversal path may be too old
+      if (!sib_node || i++ > 0) return false;  // the traversed path may be too old
 
       node = sib_node;
       guard = node->template GetGuard<Guard>();
@@ -759,25 +756,31 @@ class BTreeSL
    * @param stack A stack of traversed nodes.
    * @param l_child A split-left node.
    * @param l_guard The guard instance of a split-left node.
-   * @param level A level where a parent node is.
    */
   template <class NodeT>
   void
   Split(  //
       std::vector<INode *> stack,
       NodeT *l_child,
-      typename NodeT::XGuard l_guard,
-      const size_t level = 1)
+      typename NodeT::XGuard l_guard)
   {
     auto *r_child = new (GetNodePage()) NodeT{l_child};
     if constexpr (std::is_same_v<NodeT, INode> || kUseOCCForLeaf) {
       VerIncrement<kSMOMask>(l_guard);
     }
+    const auto &[key, key_len] = l_child->GetSeparatorKey();
     l_guard = typename NodeT::XGuard{};
 
-    const auto &[key, key_len] = l_child->GetSeparatorKey();
+    const auto level = l_child->GetLevel() + 1;
     while (true) {
-      if (stack.empty() && TryAddRoot(level, key, key_len, l_child, r_child)) break;
+      if (stack.empty()) {  // create a new root
+        auto *old_root = root_.load(kRelaxed);
+        if (old_root == std::bit_cast<INode *>(l_child)) {
+          auto *root = new (GetNodePage()) INode{level, key, key_len, l_child, r_child};
+          if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) break;
+          ::dbgroup::memory::Release<Page>(root);
+        }
+      }
 
       // insert a new down link
       auto &&[node, guard] = SearchNode<IOptGuard, INode>(stack, key, level);
@@ -790,41 +793,12 @@ class BTreeSL
         break;
       }
 
-      Split(stack, node, std::move(x_guard), level + 1);
+      Split(stack, node, std::move(x_guard));
       stack.emplace_back(node);
     }
     if constexpr (IsVarLenData<Key>()) {
       ::dbgroup::memory::Release<KeyWOPtr>(key);
     }
-  }
-
-  /**
-   * @brief Try to install a new root node.
-   *
-   * @param level The level of a new root node.
-   * @param key A separator key.
-   * @param key_len The length of a separator key.
-   * @param l_child A left child.
-   * @param r_child A right child.
-   * @retval true if a new root node has been created.
-   * @retval false otherwise.
-   */
-  [[nodiscard]] auto
-  TryAddRoot(  //
-      const size_t level,
-      const Key &key,
-      const size_t key_len,
-      const void *l_child,
-      const void *r_child)  //
-      -> bool
-  {
-    auto *old_root = root_.load(kRelaxed);
-    if (old_root == l_child) {
-      auto *root = new (GetNodePage()) INode{level, key, key_len, l_child, r_child};
-      if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) return true;
-      ::dbgroup::memory::Release<Page>(root);
-    }
-    return false;
   }
 
   /**
@@ -835,20 +809,26 @@ class BTreeSL
    * @param stack A stack of traversed nodes.
    * @param l_child A left child (to be merged) node.
    * @param l_guard The SIX guard instance of a given child node.
-   * @param level A level where a target node is.
    */
   template <class NodeT, class SIXGuard>
   void
   TryMerge(  //
       std::vector<INode *> &stack,
       NodeT *l_child,
-      SIXGuard l_guard,
-      const size_t level = 1)
+      SIXGuard l_guard)
   {
+    const auto level = l_child->GetLevel() + 1;
     auto &&r_guard = l_child->GetMergeableSib();
-    if (!r_guard) {
+    if (!r_guard) {  // remove a root node if possible
       if constexpr (std::is_same_v<NodeT, INode>) {
-        TryRemoveRoot(l_child, std::move(l_guard));
+        auto *root = root_.load(kRelaxed);
+        if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
+          l_child->CopyPayloadTo(0, root);  // `root` has become a new root
+          if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
+            l_child->Remove(std::move(l_guard));
+            gc_->template AddGarbage<Page>(l_child);
+          }
+        }
       }
       return;
     }
@@ -873,34 +853,13 @@ class BTreeSL
       } else {
         auto &&six_guard = x_guard.DowngradeToSIX();
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
-        TryMerge(stack, node, std::move(six_guard), level);
+        TryMerge(stack, node, std::move(six_guard));
       }
       gc_->template AddGarbage<Page>(r_child);
       break;
     }
     if constexpr (IsVarLenData<Key>()) {
       ::dbgroup::memory::Release<KeyWOPtr>(key);
-    }
-  }
-
-  /**
-   * @brief Try to remove the top level of this tree.
-   *
-   * @param node A target inner node.
-   * @param guard The SIX guard instance of a given node.
-   */
-  void
-  TryRemoveRoot(  //
-      INode *node,
-      ISIXGuard guard)
-  {
-    auto *root = root_.load(kRelaxed);
-    if (node == root && !node->GetSibNode() && node->GetRecNum() == 1) {
-      node->CopyPayloadTo(0, root);
-      if (root_.compare_exchange_strong(node, root, kRelease, kRelaxed)) {
-        node->Remove(std::move(guard), root);
-        gc_->template AddGarbage<Page>(node);
-      }
     }
   }
 
