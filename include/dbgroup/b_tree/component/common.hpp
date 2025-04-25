@@ -54,18 +54,6 @@ constexpr size_t kMinNodeUsage = (kPageSize / 8) - kHeaderSize;
 /// @brief The maximum usage for preventing merge.
 constexpr size_t kMaxMergedUsage = (kPageSize * 3 / 4) - kHeaderSize;
 
-/// @brief The maximum number of retires for reading leaf nodes.
-constexpr size_t kMaxRetry = 3;
-
-/// @brief A bit mask for using all bits.
-constexpr uint32_t kNoMask = ~0U;
-
-/// @brief A bit mask for extracting insert/delete versions.
-constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
-
-/// @brief A bit mask for extracting SMO versions.
-constexpr uint32_t kSMOMask = 0xFF00'0000U;
-
 /*############################################################################*
  * Internal types
  *############################################################################*/

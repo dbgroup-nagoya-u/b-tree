@@ -32,11 +32,17 @@ constexpr size_t kDefaultGCTime = 10000;  // 10 ms
 /// @brief The default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
 
-/// @brief A flag for using single-level SMO.
-constexpr bool kSingleLevelSMOFlag = true;
+/// @brief The maximum number of retires for reading leaf nodes.
+constexpr size_t kMaxRetry = 3;
 
-/// @brief A flag for using multi-level SMO.
-constexpr bool kMultiLevelSMOFlag = false;
+/// @brief A bit mask for using all bits.
+constexpr uint32_t kNoMask = ~0U;
+
+/// @brief A bit mask for extracting insert/delete versions.
+constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
+
+/// @brief A bit mask for extracting SMO versions.
+constexpr uint32_t kSMOMask = 0xFF00'0000U;
 
 /// @brief A flag for using optimistic concurrency controls.
 constexpr bool kOCCFlag = true;

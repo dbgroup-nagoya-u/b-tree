@@ -223,7 +223,7 @@ class RecordIterator
       -> bool
   {
     if (!verifier_) return true;
-    return (*verifier_).Verify(component::kNoMask);
+    return (*verifier_).Verify(kNoMask);
   }
 
   /**
@@ -237,7 +237,7 @@ class RecordIterator
       -> bool
   {
     if (!verifier_) return true;
-    return (*verifier_).Verify(component::kInsDelMask);
+    return (*verifier_).Verify(kInsDelMask);
   }
 
  private:
