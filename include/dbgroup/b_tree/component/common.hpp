@@ -48,6 +48,9 @@ constexpr size_t kHeaderSize = 32;
 /// @brief The alignment size for internal pages.
 constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
 
+/// @brief The maximum usage for invoking split.
+constexpr size_t kMaxNodeUsage = kPageSize - kHeaderSize;
+
 /// @brief The minimum usage for invoking merge.
 constexpr size_t kMinNodeUsage = (kPageSize / 8) - kHeaderSize;
 

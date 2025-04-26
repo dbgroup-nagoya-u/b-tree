@@ -112,7 +112,7 @@ class Node
       const void *r_child)  //
       : rec_num_{2},
         offset_{static_cast<uint16_t>(kPageSize - (2 * kPtrSize + key_len))},
-        usage_{static_cast<uint16_t>(kHeaderSize + 2 * (kMetaSize + kPtrSize) + key_len)},
+        usage_{static_cast<uint16_t>(2 * (kMetaSize + kPtrSize) + key_len)},
         level_{static_cast<uint8_t>(level)}
   {
     constexpr size_t kLChildOffset = kPageSize - kPtrSize;
@@ -458,7 +458,7 @@ class Node
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = 0;
     } else {  // insert a new record
-      if (usage_ + total_len > kPageSize) return kNeedSplit;
+      if (usage_ + total_len > kMaxNodeUsage) return kNeedSplit;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
         CleanUp();
         pos = SearchRecord(key).second;
@@ -909,8 +909,8 @@ class Node
   /// @brief The total byte length of a record block.
   uint16_t offset_{};
 
-  /// @brief The total usage of this node.
-  uint16_t usage_{kHeaderSize};
+  /// @brief The total usage of this node (without a header).
+  uint16_t usage_{};
 
   /// @brief The length of a highest key.
   uint16_t hk_len_{};
