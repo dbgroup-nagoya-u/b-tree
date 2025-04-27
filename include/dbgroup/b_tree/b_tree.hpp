@@ -86,6 +86,7 @@ namespace dbgroup::index::b_tree
  * @tparam Key A class of stored keys.
  * @tparam Payload A class of stored payloads.
  * @tparam Comp A comparator class for keys.
+ * @tparam GC A garbage collector for reusing node pages.
  * @tparam InnerLock A class for locking inner nodes.
  * @tparam LeafLock A class for locking leaf nodes.
  * @tparam kUseOCCForLeaf A flag for using optimistic CC in leaf nodes.

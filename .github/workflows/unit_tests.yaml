@@ -1,29 +1,26 @@
-name: Ubuntu-20.04
+name: Unit Tests
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
 
 env:
   BUILD_TYPE: Release
-  THREAD_NUM: 2
 
 jobs:
   unit_test:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 20
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 10
     strategy:
       matrix:
         page-size: [1024, 2048, 4096, 8192]
-        cc-policy: ["PML", "PSL", "OML", "OSL"]
-    steps:
 
-    - name: Clone Repository
+    steps:
+    - name: Clone Main Repository
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
 
     - name: Create Build Environment
       shell: bash
@@ -32,12 +29,16 @@ jobs:
     - name: Configure CMake
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: cmake ${GITHUB_WORKSPACE} -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DB_TREE_PAGE_SIZE=${{matrix.page-size}} -DB_TREE_BUILD_TESTS=ON -DB_TREE_TEST_BUILD_${{matrix.cc-policy}}=ON -DDBGROUP_TEST_THREAD_NUM=${THREAD_NUM}
+      run: >
+        cmake ${GITHUB_WORKSPACE}
+        -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+        -DB_TREE_PAGE_SIZE=${{matrix.page-size}}
+        -DB_TREE_BUILD_TESTS=ON
 
     - name: Build
       shell: bash
       working-directory: ${{github.workspace}}/build
-      run: cmake --build . --parallel ${THREAD_NUM} --config ${BUILD_TYPE}
+      run: cmake --build . --parallel --config ${BUILD_TYPE}
 
     - name: Test
       shell: bash
