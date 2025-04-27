@@ -45,9 +45,6 @@ constexpr size_t kPtrSize = kWordSize;
 /// @brief The length of node header.
 constexpr size_t kHeaderSize = 32;
 
-/// @brief The alignment size for internal pages.
-constexpr size_t kPageAlign = kPageSize < kVMPageSize ? kPageSize : kVMPageSize;
-
 /// @brief The maximum usage for invoking split.
 constexpr size_t kMaxNodeUsage = kPageSize - kHeaderSize;
 

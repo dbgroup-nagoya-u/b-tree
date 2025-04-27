@@ -141,7 +141,7 @@ class Node
         sib_node_{l_node->sib_node_}
   {
     auto *tmp = new (&_tls_page) Node{};
-    tmp->offset_ = kPageSize - MaxSize<Key>();
+    tmp->offset_ = kPageSize - kMaxKeySize;
 
     // copy split-left records to a temporary region
     const double sep_ratio = l_node->leftmost_ && sib_node_     ? 0.25  // NOLINTBEGIN
@@ -287,7 +287,7 @@ class Node
     Key h_key;
     const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
-      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
+      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       h_key = std::bit_cast<Key>(&tls_key);
       std::memcpy(h_key, src_addr, hk_len_);
     } else {
@@ -331,9 +331,8 @@ class Node
     auto [found, pos] = SearchRecord(key);
     pos -= static_cast<int64_t>(!found);
 
-    Node *child;
-    const auto meta = meta_arr_[pos];
-    std::memcpy(&child, ShiftAddr(this, meta.offset + meta.key_len), kPtrSize);
+    Node *child{};
+    CopyPayloadTo(pos, &child);
     return child;
   }
 
@@ -369,14 +368,22 @@ class Node
   /**
    * @param[in] pos A target record position.
    * @param[out] out_pay An instance for storing an output payload.
+   * @param[in] pay_len The length of a target payload.
+   * @note We need `pay_len` because OCC may read corrupted record metadata.
    */
-  template <class Payload>
   void
   CopyPayloadTo(  //
       const size_t pos,
-      Payload &out_pay) const
+      void *out_pay,
+      const size_t pay_len = kPtrSize) const
   {
-    std::memcpy(&out_pay, ShiftAddr(this, meta_arr_[pos].GetPayOff()), sizeof(Payload));
+    const auto offset = meta_arr_[pos].GetPayOff();
+    if constexpr (kUseOCC) {
+      if (offset + pay_len > kPageSize) [[unlikely]] {
+        return;  // read corrupted data due to OCC
+      }
+    }
+    std::memcpy(out_pay, ShiftAddr(this, offset), pay_len);
   }
 
   /**
@@ -509,15 +516,14 @@ class Node
    * @retval kNeedMerge if this node should be merged.
    * @retval kCompleted otherwise.
    */
-  template <class Payload>
   auto
   Delete(  //
       const size_t pos,
-      Payload &out_pay)  //
+      void *out_pay)  //
       -> NodeRC
   {
     auto &meta = meta_arr_[pos];
-    std::memcpy(&out_pay, ShiftAddr(this, meta.GetPayOff()), sizeof(Payload));
+    std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
     usage_ -= meta.rec_len + kMetaSize;
     if (level_ > 0) {
       std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1));
@@ -602,9 +608,9 @@ class Node
   {
     constexpr size_t kLeafCapacity = kPageSize * 3 / 4;
     constexpr size_t kInnerCapacity =
-        kPageSize - (MaxSize<Key>() > kPageSize / 8 ? MaxSize<Key>() : kPageSize / 8);
+        kPageSize - (kMaxKeySize > kPageSize / 8 ? kMaxKeySize : kPageSize / 8);
 
-    offset_ = kPageSize - MaxSize<Key>();
+    offset_ = kPageSize - kMaxKeySize;
     const size_t max_usage = level_ > 0 ? kInnerCapacity : kLeafCapacity;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
@@ -664,8 +670,8 @@ class Node
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
       // go down to the lower level
-      l_node->CopyPayloadTo(l_node->rec_num_ - 1, l_node);
-      r_node->CopyPayloadTo(0, r_node);
+      l_node->CopyPayloadTo(l_node->rec_num_ - 1, &l_node);
+      r_node->CopyPayloadTo(0, &r_node);
     }
   }
 
@@ -684,7 +690,7 @@ class Node
 
       auto &meta = node->meta_arr_[0];
       meta = Metadata{meta.GetPayOff(), 0, kWordSize};
-      node->CopyPayloadTo(0, node);
+      node->CopyPayloadTo(0, &node);
     }
   }
 
@@ -712,7 +718,7 @@ class Node
       Key h_key;
       const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
       if constexpr (IsVarLenData<Key>()) {
-        alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
+        alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
         h_key = std::bit_cast<Key>(&tls_key);
         std::memcpy(h_key, src_addr, hk_len_);
       } else {
@@ -746,31 +752,12 @@ class Node
   /// @brief A flag for indicating whether the current SMO is splitting.
   static constexpr bool kSplit = true;
 
+  /// @brief The maximum size of keys.
+  static constexpr size_t kMaxKeySize = MaxSize<Key>();
+
   /*##########################################################################*
    * Internal getter for header information
    *##########################################################################*/
-
-  /**
-   * @param pos The position of a target record.
-   * @return A key in a target record.
-   */
-  [[nodiscard]] auto
-  GetKey(                      //
-      const size_t pos) const  //
-      -> Key
-  {
-    Key key;
-    const auto meta = meta_arr_[pos];
-    const auto *src_addr = ShiftAddr(this, meta.offset);
-    if constexpr (IsVarLenData<Key>()) {
-      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxVarDataSize];
-      key = std::bit_cast<Key>(&tls_key);
-      std::memcpy(key, src_addr, meta.key_len);
-    } else {
-      std::memcpy(&key, src_addr, sizeof(Key));
-    }
-    return key;
-  }
 
   /**
    * @brief Get the position of a search key using binary search.
@@ -787,12 +774,31 @@ class Node
       const Key &key) const  //
       -> std::pair<bool, size_t>
   {
+    Key index_key;
+
     auto found = false;
     auto pos = static_cast<int64_t>(level_ > 0);
     int64_t end_pos = rec_num_ - 1;
     while (pos <= end_pos) {
       const int64_t cur_pos = (pos + end_pos) / 2;
-      const auto &index_key = GetKey(cur_pos);
+      const auto meta = meta_arr_[cur_pos];
+      const auto offset = meta.offset;
+      const auto key_len = meta.key_len;
+      if constexpr (kUseOCC) {
+        if (offset + key_len > kPageSize || key_len > kMaxKeySize) [[unlikely]] {
+          break;  // read corrupted data due to OCC
+        }
+      }
+
+      const auto *src_addr = ShiftAddr(this, offset);
+      if constexpr (IsVarLenData<Key>()) {
+        alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
+        index_key = std::bit_cast<Key>(&tls_key);
+        std::memcpy(index_key, src_addr, key_len);
+      } else {
+        std::memcpy(&index_key, src_addr, sizeof(Key));
+      }
+
       if (kLess(key, index_key)) {
         end_pos = cur_pos - 1;
       } else if (kLess(index_key, key)) {

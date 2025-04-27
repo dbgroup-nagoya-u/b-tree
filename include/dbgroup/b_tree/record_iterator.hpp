@@ -94,13 +94,13 @@ class RecordIterator
         pos_{obj.pos_},
         end_pos_{obj.end_pos_},
         is_end_{obj.is_end_},
+        payload_{obj.payload_},
         verifier_{std::move(obj.verifier_)},
         index_{obj.index_},
         end_key_{obj.end_key_},
         gc_guard_{std::move(obj.gc_guard_)}
   {
-    std::memcpy(key_, obj.key_, component::MaxSize<Key>());
-    std::memcpy(payload_, obj.payload_, component::MaxSize<Payload>());
+    std::memcpy(key_, obj.key_, kMaxKeySize);
   }
 
   auto
@@ -113,12 +113,12 @@ class RecordIterator
     pos_ = rhs.pos_;
     end_pos_ = rhs.end_pos_;
     is_end_ = rhs.is_end_;
+    payload_ = rhs.payload_;
     verifier_ = std::move(rhs.verifier_);
     index_ = rhs.index_;
     end_key_ = rhs.end_key_;
     gc_guard_ = std::move(rhs.gc_guard_);
-    std::memcpy(key_, rhs.key_, component::MaxSize<Key>());
-    std::memcpy(payload_, rhs.payload_, component::MaxSize<Payload>());
+    std::memcpy(key_, rhs.key_, kMaxKeySize);
     return *this;
   }
 
@@ -154,7 +154,7 @@ class RecordIterator
   operator*() const  //
       -> std::pair<Key, Payload>
   {
-    return {GetKey(), GetPayload()};
+    return {GetKey(), payload_};
   }
 
   /**
@@ -194,12 +194,7 @@ class RecordIterator
   GetPayload() const  //
       -> Payload
   {
-    auto *addr = std::bit_cast<void *>(&payload_[0]);
-    if constexpr (IsVarLenData<Payload>()) {
-      return std::bit_cast<Payload>(addr);
-    } else {
-      return *std::bit_cast<Payload *>(addr);
-    }
+    return payload_;
   }
 
   /**
@@ -247,9 +242,6 @@ class RecordIterator
 
   /// @brief A type for allocating variable-length keys.
   using KeyWOPtr = std::remove_pointer_t<Key>;
-
-  /// @brief A type for allocating variable-length payloads.
-  using PayWOPtr = std::remove_pointer_t<Payload>;
 
   /**
    * @brief A class for verifying scan results.
@@ -337,6 +329,13 @@ class RecordIterator
   };
 
   /*##########################################################################*
+   * Internal constants
+   *##########################################################################*/
+
+  /// @brief The maximum size of keys.
+  static constexpr size_t kMaxKeySize = component::MaxSize<Key>();
+
+  /*##########################################################################*
    * Internal utilities
    *##########################################################################*/
 
@@ -349,7 +348,7 @@ class RecordIterator
   {
     while (true) {
       if (pos_ < end_pos_) {
-        if (node_->CopyRecordTo(pos_, key_, payload_)) return;
+        if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
         ++pos_;
         continue;
       }
@@ -387,10 +386,10 @@ class RecordIterator
   bool is_end_{};
 
   /// @brief The key of the current record.
-  alignas(alignof(KeyWOPtr)) std::byte key_[component::MaxSize<Key>()]{};
+  alignas(alignof(KeyWOPtr)) std::byte key_[kMaxKeySize]{};
 
   /// @brief The payload of the current record.
-  alignas(alignof(PayWOPtr)) std::byte payload_[component::MaxSize<Payload>()]{};
+  Payload payload_{};
 
   /// @brief A verifier for snapshot read or phantom avoidance.
   std::optional<ScanVerifier> verifier_{};

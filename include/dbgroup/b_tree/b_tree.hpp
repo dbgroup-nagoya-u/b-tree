@@ -189,8 +189,8 @@ class BTree
     while (!stack.empty()) {
       auto &[node, pos] = stack.back();
       if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
-        INode *child;
-        node->CopyPayloadTo(pos++, child);
+        INode *child{};
+        node->CopyPayloadTo(pos++, &child);
         stack.emplace_back(child, 0);
         continue;
       }
@@ -225,11 +225,11 @@ class BTree
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if constexpr (!kUseOCCForLeaf) {
         if (!found || deleted) return std::nullopt;
-        node->CopyPayloadTo(pos, tls_pay);
+        node->CopyPayloadTo(pos, &tls_pay, kPayLen);
         return tls_pay;
       } else {
         if (found && !deleted) {
-          node->CopyPayloadTo(pos, tls_pay);
+          node->CopyPayloadTo(pos, &tls_pay, kPayLen);
           if (guard.VerifyVersion(kNoMask, kMaxRetry)) return tls_pay;
         } else if (guard.VerifyVersion(kNoMask, kMaxRetry)) {
           return std::nullopt;
@@ -381,7 +381,7 @@ class BTree
       auto &&[node, guard] = SearchNode<LCheckGuard>(tls_stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        node->CopyPayloadTo(pos, tls_pay);
+        node->CopyPayloadTo(pos, &tls_pay, kPayLen);
         DBGROUP_B_TREE_VERIFY_LEAF_VER(node, guard);
         return tls_pay;
       }
@@ -460,7 +460,7 @@ class BTree
 
       LXGuard x_guard;
       DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
-      const auto rc = node->Delete(pos, tls_pay);
+      const auto rc = node->Delete(pos, &tls_pay);
       DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
       if (rc == RC::kNeedMerge) {
         TryMerge(tls_stack, node, x_guard.DowngradeToSIX());
@@ -703,10 +703,10 @@ class BTree
         return {leaf, leaf->template GetGuard<LReadGuard>()};
       }
 
-      INode *child;
+      INode *child{};
       auto &&guard = node->template GetGuard<IOptGuard>();
       do {
-        node->CopyPayloadTo(0, child);
+        node->CopyPayloadTo(0, &child);
       } while (!guard.VerifyVersion(kInsDelMask));
       stack.emplace_back(std::exchange(node, child));
     }
@@ -829,7 +829,7 @@ class BTree
       if constexpr (std::is_same_v<NodeT, INode>) {
         auto *root = root_.load(kRelaxed);
         if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
-          l_child->CopyPayloadTo(0, root);  // `root` has become a new root
+          l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
           if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
             l_child->Remove(std::move(l_guard));
             gc_->template AddGarbage<Page>(l_child);
@@ -850,8 +850,8 @@ class BTree
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may modify a node
 
-      NodeT *r_child;
-      const auto rc = node->Delete(pos, r_child);
+      NodeT *r_child{};
+      const auto rc = node->Delete(pos, &r_child);
       component::VerIncrement<kInsDelMask>(x_guard);
       if (rc == RC::kCompleted) {
         x_guard = IXGuard{};
@@ -945,11 +945,14 @@ class BTree
       IsTriviallyCopyable<Payload>(),
       "A payload type must be trivially copyable (i.e., copyable with std::memcpy).");
 
+  /// @brief The maximum size of keys.
+  static constexpr size_t kMaxKeySize = component::MaxSize<Key>();
+
   /// @brief The expected maximum size after node split.
   static constexpr size_t kMaxSplitSize = component::kHeaderSize  //
-                                          + (kPageSize - component::kHeaderSize) * 3 / 4
-                                          + (component::MaxSize<Key>() + kPayLen + kWordSize) / 2
-                                          + component::MaxSize<Key>();
+                                          + (kPageSize - component::kHeaderSize) * 0.75
+                                          + (kMaxKeySize + kPayLen + kWordSize) * 0.5  //
+                                          + kMaxKeySize;
 
   static_assert(  //
       kMaxSplitSize <= kPageSize,
