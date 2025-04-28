@@ -7,7 +7,7 @@ buildType:
       long: Include debugging information without optimizations
       buildType: Debug
       settings:
-        CMAKE_CXX_CLANG_TIDY: ""
+        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
@@ -18,7 +18,7 @@ buildType:
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
-        CMAKE_CXX_CLANG_TIDY: ""
+        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
@@ -29,7 +29,7 @@ buildType:
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
-        CMAKE_CXX_CLANG_TIDY: ""
+        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0

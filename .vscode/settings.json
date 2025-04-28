@@ -107,7 +107,8 @@
     "VARLEN",
     "Viktor",
     "Warray",
-    "Wextra"
+    "Wextra",
+    "Wzero"
   ],
   //
   "files.associations": {

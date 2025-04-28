@@ -7,7 +7,7 @@ include(FetchContent)
 FetchContent_Declare(
   index_fixtures
   GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/index-fixtures.git"
-  GIT_TAG "8efe82507c8189d1d801bd00c027c33447126ec5"
+  GIT_TAG "df8bbf8cc7471f198e786139258f68d6fde8a2f5"
 )
 FetchContent_MakeAvailable(index_fixtures)
 
