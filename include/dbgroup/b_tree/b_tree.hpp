@@ -1025,7 +1025,7 @@ using BTreePSL = BTree<Key,
                        Comp,
                        GC,
                        ::dbgroup::lock::OptimisticLock,
-                       ::dbgroup::lock::PessimisticLock,
+                       ::dbgroup::lock::MCSLock,
                        kPCCFlag>;
 
 }  // namespace dbgroup::index::b_tree
