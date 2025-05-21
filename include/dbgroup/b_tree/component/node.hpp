@@ -40,9 +40,11 @@
 #include "dbgroup/b_tree/component/metadata.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
+// NOLINTBEGIN
 // we intentionally use a zero-length array for record metadata
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #pragma GCC diagnostic ignored "-Wzero-length-bounds"
+// NOLINTEND
 
 namespace dbgroup::index::b_tree::component
 {
