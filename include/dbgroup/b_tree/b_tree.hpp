@@ -624,11 +624,19 @@ class BTree
         if (!guard.VerifyVersion(kSMOMask)) continue;
       }
 
-      if (!removed && included) return true;
-      if (!sib_node || i++ > 0) return false;  // the traversed path may be too old
+      if constexpr (std::is_same_v<Guard, typename NodeT::SIXGuard>) {
+        return !removed && included;  // go back to the parent node instead of using side links
+        /// @note If you use side links with pessimistic locks, you need to care
+        /// about the side links of removed nodes. Since these links are right-
+        /// to-left links, you need to unlock the current (i.e., removed) node
+        /// before acquiring the lock of a sibling node.
+      } else {
+        if (!removed && included) return true;
+        if (!sib_node || i++ > 0) return false;  // the traversed path may be too old
 
-      node = sib_node;
-      guard = node->template GetGuard<Guard>();
+        node = sib_node;
+        guard = node->template GetGuard<Guard>();
+      }
     }
   }
 
