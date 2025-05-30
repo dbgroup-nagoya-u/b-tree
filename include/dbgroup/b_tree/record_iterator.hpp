@@ -49,6 +49,7 @@ class RecordIterator
   using Key = typename Index::Key_t;
   using Payload = typename Index::Payload_t;
   using Node = typename Index::Node_t;
+  using VerGuard = typename Node::VerGuard;
   using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
   using EpochGuard = ::dbgroup::thread::EpochGuard;
 
@@ -294,7 +295,7 @@ class RecordIterator
     Add(  //
         Guard guard)
     {
-      guards_.emplace_back(std::move(guard));
+      guards_.emplace_back(VerGuard{std::move(guard)});
     }
 
     /**
@@ -310,11 +311,9 @@ class RecordIterator
         -> bool
     {
       auto verified = true;
-      if constexpr (std::is_same_v<Guard, typename Node::OptGuard>) {
-        for (auto &guard : guards_) {
-          verified = guard.ImmediateVerify(mask);
-          if (!verified) break;
-        }
+      for (auto &guard : guards_) {
+        verified = guard.ImmediateVerify(mask);
+        if (!verified) break;
       }
       return verified;
     }
@@ -325,7 +324,7 @@ class RecordIterator
      *########################################################################*/
 
     /// @brief Guard instances for verification.
-    std::deque<Guard> guards_{};
+    std::deque<VerGuard> guards_{};
   };
 
   /*##########################################################################*

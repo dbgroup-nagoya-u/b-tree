@@ -70,12 +70,6 @@
     (x_guard) = (guard).UpgradeToX();                        \
   }
 
-/// @brief A macro for incrementing a version for insert/delete operations.
-#define DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard) \
-  if constexpr (kUseOCCForLeaf) {                  \
-    component::VerIncrement<kInsDelMask>(x_guard); \
-  }
-
 // NOLINTEND
 
 namespace dbgroup::index::b_tree
@@ -107,20 +101,20 @@ class BTree
   using RC = component::NodeRC;
 
   using INode = component::Node<Key, Comp, InnerLock, kOCCFlag>;
-  using IOptGuard = typename INode::ReadGuard;
+  using IVerGuard = typename INode::ReadGuard;
   using ISIXGuard = typename INode::SIXGuard;
   using IXGuard = typename INode::XGuard;
 
   using LNode = component::Node<Key, Comp, LeafLock, kUseOCCForLeaf>;
   using LReadGuard = typename LNode::ReadGuard;
   using LCheckGuard = typename LNode::CheckGuard;
-  using LOptGuard = typename LNode::OptGuard;
+  using LVerGuard = typename LNode::VerGuard;
   using LSGuard = typename LNode::SGuard;
   using LXGuard = typename LNode::XGuard;
 
   using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
   using SIterator = RecordIterator<BTree, LSGuard>;
-  using OptIterator = RecordIterator<BTree, LOptGuard>;
+  using OptIterator = RecordIterator<BTree, LVerGuard>;
   friend SIterator;    // call sibling scan from iterators
   friend OptIterator;  // call sibling scan from iterators
 
@@ -350,7 +344,7 @@ class BTree
       }
       const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == RC::kCompleted) {
-        DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
+        component::VerIncrement<kInsDelMask>(x_guard);
         return std::nullopt;
       }
 
@@ -391,7 +385,7 @@ class BTree
       DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
       if (rc == RC::kCompleted) {
-        DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
+        component::VerIncrement<kInsDelMask>(x_guard);
         return std::nullopt;
       }
 
@@ -462,7 +456,7 @@ class BTree
       LXGuard x_guard;
       DBGROUP_B_TREE_TRY_LOCK_LEAF_X(node, guard, x_guard);
       const auto rc = node->Delete(pos, &tls_pay);
-      DBGROUP_B_TREE_INCREMENT_LEAF_VER(x_guard);
+      component::VerIncrement<kInsDelMask>(x_guard);
       if (rc == RC::kNeedMerge) {
         TryMerge(tls_stack, node, x_guard.DowngradeToSIX());
       }
@@ -620,7 +614,7 @@ class BTree
       auto *sib_node = node->GetSibNode();
       const auto removed = node->Removed();
       const auto included = node->Include(key);
-      if constexpr (std::is_same_v<Guard, typename NodeT::OptGuard>) {
+      if constexpr (std::is_same_v<Guard, typename NodeT::VerGuard>) {
         if (!guard.VerifyVersion(kSMOMask)) continue;
       }
 
@@ -681,7 +675,7 @@ class BTree
         }
 
         INode *child{};
-        auto &&guard = node->template GetGuard<IOptGuard>();
+        auto &&guard = node->template GetGuard<IVerGuard>();
         while (true) {
           if (!SearchHorizontally(node, guard, key)) goto out;
           child = node->SearchChild(key);
@@ -713,7 +707,7 @@ class BTree
       }
 
       INode *child{};
-      auto &&guard = node->template GetGuard<IOptGuard>();
+      auto &&guard = node->template GetGuard<IVerGuard>();
       do {
         node->CopyPayloadTo(0, &child);
       } while (!guard.VerifyVersion(kInsDelMask));
@@ -737,7 +731,7 @@ class BTree
       -> size_t
   {
     size_t begin_pos{};
-    if constexpr (std::is_same_v<Guard, LOptGuard>) {
+    if constexpr (std::is_same_v<Guard, LVerGuard>) {
       auto *sib_node = node->GetSibNode();
       const auto &key = node->GetSeparatorKey().first;
 
@@ -780,9 +774,7 @@ class BTree
       typename NodeT::XGuard l_guard)
   {
     auto *r_child = new (GetNodePage()) NodeT{l_child};
-    if constexpr (std::is_same_v<NodeT, INode> || kUseOCCForLeaf) {
-      component::VerIncrement<kSMOMask>(l_guard);
-    }
+    component::VerIncrement<kSMOMask>(l_guard);
     const auto &[key, key_len] = l_child->GetSeparatorKey();
     l_guard = typename NodeT::XGuard{};
 
@@ -798,7 +790,7 @@ class BTree
       }
 
       // insert a new down link
-      auto &&[node, guard] = SearchNode<IOptGuard, INode>(stack, key, level);
+      auto &&[node, guard] = SearchNode<IVerGuard, INode>(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);  // `found` must be false
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may insert the key
@@ -850,7 +842,7 @@ class BTree
 
     const auto &key = l_child->GetSeparatorKey().first;
     while (true) {
-      auto &&[node, guard] = SearchNode<IOptGuard, INode>(stack, key, level);
+      auto &&[node, guard] = SearchNode<IVerGuard, INode>(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);
       if (!found) {
         if (!guard.VerifyVersion(kInsDelMask)) continue;

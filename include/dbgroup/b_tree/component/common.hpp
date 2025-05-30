@@ -103,19 +103,6 @@ struct SIXGuardExtractor<T, false> {
   using type = void;
 };
 
-template <class T, bool kHasGuard>
-struct OptGuardExtractor;
-
-template <typename T>
-struct OptGuardExtractor<T, true> {
-  using type = typename T::OptGuard;
-};
-
-template <class T>
-struct OptGuardExtractor<T, false> {
-  using type = void;
-};
-
 /*############################################################################*
  * Global utility functions
  *############################################################################*/

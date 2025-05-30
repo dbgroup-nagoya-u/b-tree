@@ -73,12 +73,12 @@ class Node
    * Public types
    *##########################################################################*/
 
-  using OptGuard = OptGuardExtractor<Lock, kUseOCC>::type;
+  using VerGuard = typename Lock::VerGuard;
   using SGuard = typename Lock::SGuard;
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
-  using ReadGuard = std::conditional_t<kUseOCC, OptGuard, SGuard>;
-  using CheckGuard = std::conditional_t<kUseOCC, OptGuard, SIXGuard>;
+  using ReadGuard = std::conditional_t<kUseOCC, VerGuard, SGuard>;
+  using CheckGuard = std::conditional_t<kUseOCC, VerGuard, SIXGuard>;
 
   /*##########################################################################*
    * Public constructors and assignment operators
@@ -237,7 +237,7 @@ class Node
     SIXGuard six_guard{};
     if (sib_node_) {
       if constexpr (kUseOCC) {
-        auto &&guard = sib_node_->GetGuard<OptGuard>();
+        auto &&guard = sib_node_->GetGuard<VerGuard>();
         while (true) {
           const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
           if (merged_usage >= kMaxMergedUsage) break;
@@ -348,7 +348,7 @@ class Node
   GetGuard()
   {
     if constexpr (kUseOCC) {
-      if constexpr (std::is_same_v<Guard, typename Lock::OptGuard>) {
+      if constexpr (std::is_same_v<Guard, typename Lock::VerGuard>) {
         return lock_.GetVersion();
       } else {
         return lock_.LockX();
@@ -566,9 +566,7 @@ class Node
       auto &&x_guard = guard.UpgradeToX();
       CopyFromTmpNode();
       sib_node_ = r_node->sib_node_;
-      if constexpr (kUseOCC) {
-        VerIncrement<kSMOMask>(x_guard);
-      }
+      VerIncrement<kSMOMask>(x_guard);
     }
     r_node->Remove(std::move(r_guard), this);
   }
