@@ -27,13 +27,10 @@ namespace dbgroup::index::b_tree
  *############################################################################*/
 
 /// @brief The default time interval for garbage collection [us].
-constexpr size_t kDefaultGCTime = 10000;  // 10 ms
+constexpr size_t kDefaultGCTime = 100;  // 100 ms
 
 /// @brief The default number of worker threads for garbage collection.
 constexpr size_t kDefaultGCThreadNum = 1;
-
-/// @brief The maximum number of retires for reading leaf nodes.
-constexpr size_t kMaxRetry = 3;
 
 /// @brief A bit mask for using all bits.
 constexpr uint32_t kNoMask = ~0U;
@@ -43,12 +40,6 @@ constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
 
 /// @brief A bit mask for extracting SMO versions.
 constexpr uint32_t kSMOMask = 0xFF00'0000U;
-
-/// @brief A flag for using optimistic concurrency controls.
-constexpr bool kOCCFlag = true;
-
-/// @brief A flag for using pessimistic concurrency controls.
-constexpr bool kPCCFlag = false;
 
 /*############################################################################*
  * Tuning parameters for B+trees

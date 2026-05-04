@@ -64,17 +64,10 @@ class Node
    * Type aliases
    *##########################################################################*/
 
-  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
+  using SIXGuard = typename Lock::SIXGuard;
 
  public:
-  /*##########################################################################*
-   * Public types
-   *##########################################################################*/
-
-  using OptGuard = typename Lock::OptGuard;
-  using SIXGuard = typename Lock::SIXGuard;
-  using XGuard = typename Lock::XGuard;
-
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
@@ -231,7 +224,7 @@ class Node
   {
     SIXGuard six_guard{};
     if (sib_node_) {
-      auto &&guard = sib_node_->GetGuard<OptGuard>();
+      auto &&guard = sib_node_->GetGuard();
       while (true) {
         const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
         if (merged_usage >= kMaxMergedUsage) break;
@@ -330,20 +323,34 @@ class Node
    * @tparam Guard A desired guard type.
    * @return A guard instance for this node.
    */
-  template <class Guard>
   [[nodiscard]] auto
-  GetGuard()
+  GetGuard()  //
+      -> Lock::OptGuard
   {
-    if constexpr (std::is_same_v<Guard, typename Lock::OptGuard>) {
-      return lock_.GetVersion();
-    } else {
-      return lock_.LockX();
-    }
+    return lock_.GetVersion();
   }
 
   /*##########################################################################*
    * Read APIs
    *##########################################################################*/
+
+  /**
+   * @param pos A target record position.
+   * @return The payload in the target position.
+   */
+  template <class Payload>
+  [[nodiscard]] auto
+  GetPayload(                  //
+      const size_t pos) const  //
+      -> Payload
+  {
+    Payload out_pay{};
+    const auto offset = meta_arr_[pos].GetPayOff();
+    if (offset + sizeof(Payload) <= kPageSize) [[likely]] {
+      std::memcpy(&out_pay, ShiftAddr(this, offset), sizeof(Payload));
+    }
+    return out_pay;
+  }
 
   /**
    * @param[in] pos A target record position.
@@ -463,19 +470,20 @@ class Node
   /**
    * @brief Update a record using a given kay/payload pair.
    *
-   * @param[in] pos A position where a target record is.
-   * @param[in] payload A target payload to be written.
-   * @param[out] out_pay An instance for storing an output payload.
-   * @param[in] merger A function for merging payloads.
+   * @param pos A position where a target record is.
+   * @param payload A target payload to be written.
+   * @param merger A function for merging payloads.
+   * @return The payload before updating.
    */
   template <class Payload>
-  void
+  auto
   Update(  //
       size_t pos,
       const Payload &payload,
-      Payload &out_pay,
-      Payload (*merger)(const Payload &, const Payload &))
+      Payload (*merger)(const Payload &, const Payload &))  //
+      -> Payload
   {
+    Payload out_pay{};
     auto *pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
     std::memcpy(&out_pay, pay_addr, sizeof(Payload));
     if (merger) {
@@ -484,6 +492,7 @@ class Node
     } else {
       std::memcpy(pay_addr, &payload, sizeof(Payload));
     }
+    return out_pay;
   }
 
   /**

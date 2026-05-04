@@ -60,13 +60,16 @@ namespace dbgroup::index::b_tree
 template <class Key,
           class Payload,
           class Comp = std::less<Key>,
-          class GC = ::dbgroup::memory::EpochBasedGC<Page>,
+          class GC = ::dbgroup::memory::EpochBasedGC<>,
           ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock>
 class BTree
 {
   /*##########################################################################*
    * Type aliases
    *##########################################################################*/
+
+  /// @brief A type for allocating variable-length data.
+  using KeyWOPtr = std::remove_pointer_t<Key>;
 
   using GCGuard = dbgroup::thread::EpochGuard;
   using OptGuard = typename Lock::OptGuard;
@@ -77,7 +80,7 @@ class BTree
 
   using Node = component::Node<Key, Comp, Lock>;
 
-  using ScanKey = std::optional<std::tuple<const Key &, size_t, bool>>;
+  using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
@@ -91,136 +94,6 @@ class BTree
    * Public types
    *##########################################################################*/
 
-  using Key_t = Key;
-  using Payload_t = Payload;
-
-  /**
-   * @brief A class for verifying consistency of records.
-   *
-   * @note The APIs of this class are not thread-safe.
-   */
-  class RecordVerifier
-  {
-   public:
-    /*########################################################################*
-     * Public constructors and assignment operators
-     *########################################################################*/
-
-    constexpr RecordVerifier() = default;
-
-    RecordVerifier(  //
-        const uint32_t mask,
-        GCGuard gc_guard)
-        : mask_{mask}, gc_guard_{std::move(gc_guard)}
-    {
-    }
-
-    RecordVerifier(  //
-        RecordVerifier &&obj) noexcept
-        : gc_guard_{obj.gc_guard_}, guards_{std::move(obj.guards_)}
-    {
-    }
-
-    auto
-    operator=(                          //
-        RecordVerifier &&rhs) noexcept  //
-        -> RecordVerifier &
-    {
-      gc_guard_ = std::move(rhs.gc_guard_);
-      guards_ = std::move(rhs.guards_);
-      return *this;
-    }
-
-    // forbit copying
-    RecordVerifier(const RecordVerifier &) = delete;
-    auto operator=(const RecordVerifier &) -> RecordVerifier & = delete;
-
-    /*########################################################################*
-     * Public destructors
-     *########################################################################*/
-
-    ~RecordVerifier() = default;
-
-    /*########################################################################*
-     * Public APIs
-     *########################################################################*/
-
-    [[nodiscard]] constexpr auto
-    Failed()  //
-        -> bool
-    {
-      return !verified_;
-    }
-
-    /**
-     * @brief Perform verification based on registered guards.
-     *
-     * @retval true if this does not find changes using a given bitmask.
-     * @retval false otherwise.
-     * @note The result may show false positives; this function can return true
-     * even if there are no phantoms or modifications in the read range.
-     */
-    [[nodiscard]] auto
-    Verify()  //
-        -> bool
-    {
-      for (auto &guard : guards_) {
-        if (!verified_) break;
-        verified_ = guard.ImmediateVerify(mask_);
-      }
-      return verified_;
-    }
-
-    /**
-     * @brief Add a guard instance to this verifier.
-     *
-     * @param node A node to be verified.
-     * @param guard A guard instance to be added.
-     */
-    auto
-    Add(  //
-        Node *node,
-        const OptGuard &guard)  //
-        -> bool
-    {
-      auto &&iter = guards_.find(node);
-      if (iter == guards_.end()) {
-        guards_.emplace(guard);
-      } else {
-        const auto prev_ver = iter->second.GetVersion();
-        verified_ = ((prev_ver ^ guard.GetVersion()) & mask_) == 0;
-      }
-      return verified_;
-    }
-
-    void
-    Overwrite(  //
-        Node *node,
-        const XGuard guard)
-    {
-      auto &&iter = guards_.find(node);
-      assert(iter != guards_.end());
-      *iter = OptGuard{guard};
-    }
-
-   private:
-    /*########################################################################*
-     * Internal member variables
-     *########################################################################*/
-
-    /// @brief A bitmask for indicating target bits.
-    uint32_t mask_{};
-
-    /// @brief A flag for indicating the current verification state.
-    bool verified_{true};
-
-    /// @brief A guard instance for preventing GC from reclaiming nodes.
-    GCGuard gc_guard_{};
-
-    /// @brief Guard instances for verification.
-    std::unordered_map<Node *, OptGuard> guards_{};
-  };
-
   /**
    * @brief A class for iterating through scan results.
    *
@@ -228,12 +101,6 @@ class BTree
    */
   class Iterator
   {
-    /*########################################################################*
-     * Type aliases
-     *########################################################################*/
-
-    using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
-
    public:
     /*########################################################################*
      * Public constructors and assignment operators
@@ -277,7 +144,6 @@ class BTree
           end_pos_{obj.end_pos_},
           is_end_{obj.is_end_},
           payload_{obj.payload_},
-          verifier_{std::move(obj.verifier_)},
           index_{obj.index_},
           end_key_{obj.end_key_},
           gc_guard_{std::move(obj.gc_guard_)}
@@ -296,7 +162,6 @@ class BTree
       end_pos_ = rhs.end_pos_;
       is_end_ = rhs.is_end_;
       payload_ = rhs.payload_;
-      verifier_ = std::move(rhs.verifier_);
       index_ = rhs.index_;
       end_key_ = rhs.end_key_;
       gc_guard_ = std::move(rhs.gc_guard_);
@@ -379,24 +244,7 @@ class BTree
       return payload_;
     }
 
-    /**
-     * @brief Construct a verifier for snapshot reads or phantom avoidance.
-     *
-     */
-    constexpr void
-    PrepareVerifier()
-    {
-      verifier_ = std::make_optional<RecordVerifier>();
-    }
-
    private:
-    /*########################################################################*
-     * Internal types
-     *########################################################################*/
-
-    /// @brief A type for allocating variable-length keys.
-    using KeyWOPtr = std::remove_pointer_t<Key>;
-
     /*########################################################################*
      * Internal constants
      *########################################################################*/
@@ -427,9 +275,6 @@ class BTree
           return;
         }
 
-        if (verifier_) {
-          (*verifier_).Add(node_, std::move(guard_));
-        }
         pos_ = index_->SiblingScan(node_, guard_);
         std::tie(is_end_, end_pos_) = node_->SearchEndPosition(end_key_);
       }
@@ -459,9 +304,6 @@ class BTree
 
     /// @brief The payload of the current record.
     Payload payload_{};
-
-    /// @brief A verifier for snapshot read or phantom avoidance.
-    std::optional<RecordVerifier> verifier_{};
 
     /// @brief A source index structure.
     const BTree *index_{};
@@ -548,27 +390,24 @@ class BTree
   auto
   Read(  //
       const Key &key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      RecordVerifier *verifier = nullptr)  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::optional<Payload> out_pay{};
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(tls_stack, key);
-      if (verifier && !verifier->Add(node, guard)) return std::nullopt;
+      auto &&[node, guard] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        node->CopyPayloadTo(pos, &tls_pay, kPayLen);
-        if (guard.VerifyVersion(kNoMask, kMaxRetry)) return tls_pay;
-      } else if (guard.VerifyVersion(kNoMask, kMaxRetry)) {
-        return std::nullopt;
+        out_pay = node->template GetPayload<Payload>(pos);
+      } else {
+        out_pay = std::nullopt;
       }
-      tls_stack.emplace_back(node);
+      if (guard.VerifyVersion(kNoMask)) return out_pay;
+      stack.emplace_back(node);
     }
   }
 
@@ -583,37 +422,32 @@ class BTree
   auto
   Scan(  //
       const ScanKey &begin_key = std::nullopt,
-      const ScanKey &end_key = std::nullopt,
-      RecordVerifier *verifier = nullptr)
+      const ScanKey &end_key = std::nullopt)
   {
     Node *node;
     OptGuard guard;
     size_t begin_pos;
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    auto &&gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     thread_local Page tls_page{};  // retain the copy of a target node
     if (begin_key) {
       const auto &[key, _, closed] = *begin_key;
       while (true) {
-        std::tie(node, guard) = SearchNode(tls_stack, key);
-        if (verifier && !verifier->Add(node, guard)) return Iterator{};
+        std::tie(node, guard) = SearchNode(stack, key);
         std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-        if (guard.VerifyVersion(kNoMask, kMaxRetry)) break;
-        tls_stack.emplace_back(node);
+        if (guard.VerifyVersion(kNoMask)) break;
+        stack.emplace_back(node);
       }
       node = std::bit_cast<Node *>(&tls_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
     } else {
-      std::tie(node, guard) = SearchLeftmostLeaf(tls_stack);
+      std::tie(node, guard) = SearchLeftmostLeaf(stack);
       do {
-        if (verifier && !verifier->Add(node, guard)) return Iterator{};
         std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-      } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
+      } while (!guard.VerifyVersion(kNoMask));
       node = std::bit_cast<Node *>(&tls_page);
       begin_pos = 0;
     }
@@ -657,36 +491,33 @@ class BTree
   Upsert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      RecordVerifier *verifier = nullptr)  //
+      const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::optional<Payload> out_pay{};
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(tls_stack, key);
-      if (verifier && !verifier->Add(node, guard)) return std::nullopt;
+      auto &&[node, guard] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-
-      auto &&x_guard = (guard).TryLockX(kInsDelMask);
+      auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (x_guard) {
         if (found && !deleted) {
-          node->Update(pos, payload, tls_pay, merger_);
-          return tls_pay;
+          out_pay = node->Update(pos, payload, merger_);
+          break;
         }
         const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
         if (rc == RC::kCompleted) {
-          component::VerIncrement<kInsDelMask>(x_guard);
-          return std::nullopt;
+          VerIncrement<kInsDelMask>(x_guard);
+          break;
         }
-        Split(tls_stack, node, std::move(x_guard));
+        Split(stack, node, std::move(x_guard));
       }
-      tls_stack.emplace_back(std::bit_cast<Node *>(node));
+      stack.emplace_back(std::bit_cast<Node *>(node));
     }
+    return out_pay;
   }
 
   /**
@@ -702,38 +533,35 @@ class BTree
   Insert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key),
-      RecordVerifier *verifier = nullptr)  //
+      const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::optional<Payload> out_pay{};
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(tls_stack, key);
-      if (verifier && !verifier->Add(node, guard)) return std::nullopt;
+      auto &&[node, guard] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        node->CopyPayloadTo(pos, &tls_pay, kPayLen);
-        if (guard.VerifyVersion(kInsDelMask)) return tls_pay;
-        tls_stack.emplace_back(std::bit_cast<Node *>(node));
-        continue;
-      }
-
-      auto &&x_guard = (guard).TryLockX(kInsDelMask);
-      if (x_guard) {
-        const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
-        if (rc == RC::kCompleted) {
-          component::VerIncrement<kInsDelMask>(x_guard);
-          return std::nullopt;
+        out_pay = node->template GetPayload<Payload>(pos);
+        if (guard.VerifyVersion(kInsDelMask)) break;
+      } else {
+        auto &&x_guard = guard.TryLockX(kInsDelMask);
+        if (x_guard) {
+          const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
+          if (rc == RC::kCompleted) {
+            VerIncrement<kInsDelMask>(x_guard);
+            out_pay = std::nullopt;
+            break;
+          }
+          Split(stack, node, std::move(x_guard));
         }
-        Split(tls_stack, node, std::move(x_guard));
       }
-      tls_stack.emplace_back(std::bit_cast<Node *>(node));
+      stack.emplace_back(std::bit_cast<Node *>(node));
     }
+    return out_pay;
   }
 
   /**
@@ -749,33 +577,29 @@ class BTree
   Update(  //
       const Key &key,
       const Payload &payload,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      RecordVerifier *verifier = nullptr)  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::optional<Payload> out_pay{};
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(tls_stack, key);
-      if (verifier && !verifier->Add(node, guard)) return std::nullopt;
+      auto &&[node, guard] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (guard.VerifyVersion(kInsDelMask)) return std::nullopt;
-        tls_stack.emplace_back(std::bit_cast<Node *>(node));
-        continue;
+        if (guard.VerifyVersion(kInsDelMask)) break;
+      } else {
+        auto &&x_guard = guard.TryLockX(kInsDelMask);
+        if (x_guard) {
+          out_pay = node->Update(pos, payload, merger_);
+          break;
+        }
       }
-
-      auto &&x_guard = (guard).TryLockX(kInsDelMask);
-      if (x_guard) {
-        node->Update(pos, payload, tls_pay, merger_);
-        return tls_pay;
-      }
-      tls_stack.emplace_back(std::bit_cast<Node *>(node));
+      stack.emplace_back(std::bit_cast<Node *>(node));
     }
+    return out_pay;
   }
 
   /**
@@ -789,37 +613,35 @@ class BTree
   auto
   Delete(  //
       const Key &key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      RecordVerifier *verifier = nullptr)  //
+      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    GCGuard gc_guard{};
-    if (!verifier) {
-      gc_guard = gc_->CreateEpochGuard();
-    }
+    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
 
-    tls_stack.clear();
+    std::optional<Payload> out_pay{};
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(tls_stack, key);
-      if (verifier && !verifier->Add(node, guard)) return std::nullopt;
+      auto &&[node, guard] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (guard.VerifyVersion(kInsDelMask)) return std::nullopt;
-        tls_stack.emplace_back(std::bit_cast<Node *>(node));
-        continue;
-      }
-
-      auto &&x_guard = (guard).TryLockX(kInsDelMask);
-      if (x_guard) {
-        const auto rc = node->Delete(pos, &tls_pay);
-        component::VerIncrement<kInsDelMask>(x_guard);
-        if (rc == RC::kNeedMerge) {
-          TryMerge(tls_stack, node, x_guard.DowngradeToSIX());
+        if (guard.VerifyVersion(kInsDelMask)) break;
+      } else {
+        auto &&x_guard = guard.TryLockX(kInsDelMask);
+        if (x_guard) {
+          Payload tmp_pay{};
+          const auto rc = node->Delete(pos, &tmp_pay);
+          out_pay = tmp_pay;
+          VerIncrement<kInsDelMask>(x_guard);
+          if (rc == RC::kNeedMerge) {
+            TryMerge(stack, node, x_guard.DowngradeToSIX());
+          }
+          break;
         }
-        return tls_pay;
       }
-      tls_stack.emplace_back(std::bit_cast<Node *>(node));
+      stack.emplace_back(std::bit_cast<Node *>(node));
     }
+    return out_pay;
   }
 
   /*##########################################################################*
@@ -894,7 +716,7 @@ class BTree
 
     // set a new root
     auto *old_root = root_.exchange(new_root, kRelease);
-    gc_->template AddGarbage<Page>(old_root);
+    gc_->AddGarbage(old_root, kPageSize);
   }
 
   /*##########################################################################*
@@ -912,31 +734,7 @@ class BTree
     merger_ = merger;
   }
 
-  /**
-   * @return A verifier for avoiding phantom reads.
-   */
-  auto
-  GetPhantomVerifier()  //
-      -> RecordVerifier
-  {
-    return RecordVerifier(kInsDelMask, gc_->CreateEpochGuard());
-  }
-
-  auto
-  GetSnapshotVerifier()  //
-      -> RecordVerifier
-  {
-    return RecordVerifier(kNoMask, gc_->CreateEpochGuard());
-  }
-
  private:
-  /*##########################################################################*
-   * Internal types
-   *##########################################################################*/
-
-  /// @brief A type for allocating variable-length data.
-  using KeyWOPtr = std::remove_pointer_t<Key>;
-
   /*##########################################################################*
    * Internal constants
    *##########################################################################*/
@@ -961,26 +759,23 @@ class BTree
   GetNodePage()  //
       -> void *
   {
-    auto *page = gc_->template GetPageIfPossible<Page>();
+    auto *page = gc_->GetPageIfPossible(kPageSize);
     return page ? page : ::dbgroup::memory::Allocate<Page>();
   }
 
   /**
    * @brief Search a target node horizontally.
    *
-   * @tparam Guard A guard class for reading a target node.
-   * @tparam NodeT A target node class.
    * @param[in,out] node A target node.
    * @param[in,out] guard The guard instance of a target node.
    * @param[in] key A search key.
    * @retval true if a container node has been found.
    * @retval false otherwise.
    */
-  template <class Guard, class NodeT>
   [[nodiscard]] static auto
   SearchHorizontally(  //
-      NodeT *&node,
-      Guard &guard,
+      Node *&node,
+      OptGuard &guard,
       const Key &key)  //
       -> bool
   {
@@ -995,7 +790,7 @@ class BTree
       if (!sib_node || i++ > 0) return false;  // the traversed path may be too old
 
       node = sib_node;
-      guard = node->template GetGuard<Guard>();
+      guard = node->GetGuard();
     }
   }
 
@@ -1030,7 +825,7 @@ class BTree
 
       while (true) {
         Node *child{};
-        auto &&guard = node->template GetGuard<OptGuard>();
+        auto &&guard = node->GetGuard();
         while (true) {
           if (!SearchHorizontally(node, guard, key)) goto out;
           if (node->GetLevel() == level) return {node, std::move(guard)};
@@ -1060,11 +855,11 @@ class BTree
     while (true) {
       if (node->GetLevel() == 0) {
         auto *leaf = std::bit_cast<Node *>(node);
-        return {leaf, leaf->template GetGuard<OptGuard>()};
+        return {leaf, leaf->GetGuard()};
       }
 
       Node *child{};
-      auto &&guard = node->template GetGuard<OptGuard>();
+      auto &&guard = node->GetGuard();
       do {
         node->CopyPayloadTo(0, &child);
       } while (!guard.VerifyVersion(kInsDelMask));
@@ -1089,12 +884,13 @@ class BTree
     auto *sib_node = node->GetSibNode();
     const auto &key = node->GetSeparatorKey().first;
 
-    tls_stack.clear();
+    std::vector<Node *> stack{};
+    stack.reserve(kInitialHeight);
     do {
-      tls_stack.emplace_back(sib_node);
-      std::tie(sib_node, guard) = SearchNode(tls_stack, key);
+      stack.emplace_back(sib_node);
+      std::tie(sib_node, guard) = SearchNode(stack, key);
       std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
-    } while (!guard.VerifyVersion(kNoMask, kMaxRetry));
+    } while (!guard.VerifyVersion(kNoMask));
 
     auto [found, deleted, pos] = node->CheckUniqueness(key);
     begin_pos = pos + static_cast<size_t>(!found || deleted);
@@ -1111,22 +907,20 @@ class BTree
   /**
    * @brief Split a given node and insert a new down link.
    *
-   * @tparam NodeT A target node class.
    * @param stack A stack of traversed nodes.
    * @param l_child A split-left node.
    * @param l_guard The guard instance of a split-left node.
    */
-  template <class NodeT>
   void
   Split(  //
       std::vector<Node *> stack,
-      NodeT *l_child,
-      typename NodeT::XGuard l_guard)
+      Node *l_child,
+      XGuard l_guard)
   {
-    auto *r_child = new (GetNodePage()) NodeT{l_child};
-    component::VerIncrement<kSMOMask>(l_guard);
+    auto *r_child = new (GetNodePage()) Node{l_child};
+    VerIncrement<kSMOMask>(l_guard);
     const auto &[key, key_len] = l_child->GetSeparatorKey();
-    l_guard = typename NodeT::XGuard{};
+    l_guard = XGuard{};
 
     const auto level = l_child->GetLevel() + 1;
     while (true) {
@@ -1146,7 +940,7 @@ class BTree
       if (!x_guard) continue;  // another thread may insert the key
       const auto rc = node->Insert(pos, found, key, key_len, &r_child, kWordSize);
       if (rc == RC::kCompleted) {
-        component::VerIncrement<kInsDelMask>(x_guard);
+        VerIncrement<kInsDelMask>(x_guard);
         break;
       }
 
@@ -1161,30 +955,25 @@ class BTree
   /**
    * @brief Try to remove a down link and merge a given node.
    *
-   * @tparam NodeT A target node class.
-   * @tparam SIXGuard A class for representing SIX-lock guards.
    * @param stack A stack of traversed nodes.
    * @param l_child A left child (to be merged) node.
    * @param l_guard The SIX guard instance of a given child node.
    */
-  template <class NodeT, class SIXGuard>
   void
   TryMerge(  //
       std::vector<Node *> &stack,
-      NodeT *l_child,
+      Node *l_child,
       SIXGuard l_guard)
   {
     const auto level = l_child->GetLevel() + 1;
     auto &&r_guard = l_child->GetMergeableSib();
     if (!r_guard) {  // remove a root node if possible
-      if constexpr (std::is_same_v<NodeT, Node>) {
-        auto *root = root_.load(kRelaxed);
-        if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
-          l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
-          if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
-            l_child->Remove(std::move(l_guard));
-            gc_->template AddGarbage<Page>(l_child);
-          }
+      auto *root = root_.load(kRelaxed);
+      if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
+        l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
+        if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
+          l_child->Remove(std::move(l_guard));
+          gc_->AddGarbage(l_child, kPageSize);
         }
       }
       return;
@@ -1201,9 +990,9 @@ class BTree
       auto &&x_guard = guard.TryLockX(kInsDelMask);
       if (!x_guard) continue;  // another thread may modify a node
 
-      NodeT *r_child{};
+      Node *r_child{};
       const auto rc = node->Delete(pos, &r_child);
-      component::VerIncrement<kInsDelMask>(x_guard);
+      VerIncrement<kInsDelMask>(x_guard);
       if (rc == RC::kCompleted) {
         x_guard = XGuard{};
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
@@ -1212,7 +1001,7 @@ class BTree
         l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
         TryMerge(stack, node, std::move(six_guard));
       }
-      gc_->template AddGarbage<Page>(r_child);
+      gc_->AddGarbage(r_child, kPageSize);
       break;
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -1309,10 +1098,6 @@ class BTree
       kMaxSplitSize <= kPageSize,
       "The page size is too small to store given key/payload pairs.");
 
-  static_assert(  //
-      GC::template HasTarget<Page>(),
-      "Garbage collector must reuse node pages.");
-
   /*##########################################################################*
    * Internal member variables
    *##########################################################################*/
@@ -1325,16 +1110,6 @@ class BTree
 
   /// @brief A function for merging payloads.
   Payload (*merger_)(const Payload &, const Payload &){};
-
-  /*##########################################################################*
-   * Thread local class variables
-   *##########################################################################*/
-
-  /// @brief A stack for retaining traversed nodes.
-  static thread_local inline std::vector<Node *> tls_stack{kInitialHeight};
-
-  /// @brief A temporary payload.
-  static thread_local inline Payload tls_pay{};
 };
 
 }  // namespace dbgroup::index::b_tree

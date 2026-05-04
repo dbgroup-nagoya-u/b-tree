@@ -74,36 +74,6 @@ enum NodeRC {
 };
 
 /*############################################################################*
- * Utility types for extracting guard classes
- *############################################################################*/
-
-template <class T, bool kHasGuard>
-struct SGuardExtractor;
-
-template <typename T>
-struct SGuardExtractor<T, true> {
-  using type = typename T::SGuard;
-};
-
-template <class T>
-struct SGuardExtractor<T, false> {
-  using type = void;
-};
-
-template <class T, bool kHasGuard>
-struct SIXGuardExtractor;
-
-template <typename T>
-struct SIXGuardExtractor<T, true> {
-  using type = typename T::SIXGuard;
-};
-
-template <class T>
-struct SIXGuardExtractor<T, false> {
-  using type = void;
-};
-
-/*############################################################################*
  * Global utility functions
  *############################################################################*/
 
@@ -117,22 +87,6 @@ MaxSize() noexcept  //
     -> size_t
 {
   return IsVarLenData<T>() ? kMaxVarDataSize : sizeof(T);
-}
-
-/**
- * @brief Increment a version value using a given bitmask.
- *
- * @tparam kMask A bitmask for extracting a target version.
- * @tparam XGuard A class for representing an exclusive-lock guard.
- * @param x_guard An exclusive-lock guard.
- */
-template <uint32_t kMask, class XGuard>
-constexpr void
-VerIncrement(  //
-    XGuard &x_guard) noexcept
-{
-  constexpr uint32_t kUnit = ~kMask + 1U;
-  x_guard.SetVersion((x_guard.GetVersion() & kMask) + kUnit);
 }
 
 }  // namespace dbgroup::index::b_tree::component
