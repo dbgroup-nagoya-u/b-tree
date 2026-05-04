@@ -54,12 +54,10 @@ namespace dbgroup::index::b_tree::component
  * @tparam Key A target key class.
  * @tparam Comp A comparator class for keys.
  * @tparam Lock A lock class for concurrency controls.
- * @tparam kUseOCC A flag for using optimistic concurrency controls.
  */
 template <class Key,  //
           class Comp,
-          ::dbgroup::lock::Lockable Lock,
-          bool kUseOCC>
+          ::dbgroup::lock::OptimisticallyLockable Lock>
 class Node
 {
   /*##########################################################################*
@@ -73,12 +71,9 @@ class Node
    * Public types
    *##########################################################################*/
 
-  using VerGuard = typename Lock::VerGuard;
-  using SGuard = typename Lock::SGuard;
+  using OptGuard = typename Lock::OptGuard;
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
-  using ReadGuard = std::conditional_t<kUseOCC, VerGuard, SGuard>;
-  using CheckGuard = std::conditional_t<kUseOCC, VerGuard, SIXGuard>;
 
   /*##########################################################################*
    * Public constructors and assignment operators
@@ -236,20 +231,12 @@ class Node
   {
     SIXGuard six_guard{};
     if (sib_node_) {
-      if constexpr (kUseOCC) {
-        auto &&guard = sib_node_->GetGuard<VerGuard>();
-        while (true) {
-          const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-          if (merged_usage >= kMaxMergedUsage) break;
-          six_guard = guard.TryLockSIX();
-          if (six_guard) break;
-        }
-      } else {
-        six_guard = sib_node_->GetGuard<SIXGuard>();
+      auto &&guard = sib_node_->GetGuard<OptGuard>();
+      while (true) {
         const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-        if (merged_usage >= kMaxMergedUsage) {
-          six_guard = SIXGuard{};
-        }
+        if (merged_usage >= kMaxMergedUsage) break;
+        six_guard = guard.TryLockSIX();
+        if (six_guard) break;
       }
     }
     return six_guard;
@@ -347,20 +334,10 @@ class Node
   [[nodiscard]] auto
   GetGuard()
   {
-    if constexpr (kUseOCC) {
-      if constexpr (std::is_same_v<Guard, typename Lock::VerGuard>) {
-        return lock_.GetVersion();
-      } else {
-        return lock_.LockX();
-      }
+    if constexpr (std::is_same_v<Guard, typename Lock::OptGuard>) {
+      return lock_.GetVersion();
     } else {
-      if constexpr (std::is_same_v<Guard, typename Lock::SGuard>) {
-        return lock_.LockS();
-      } else if constexpr (std::is_same_v<Guard, typename Lock::SIXGuard>) {
-        return lock_.LockSIX();
-      } else {
-        return lock_.LockX();
-      }
+      return lock_.LockX();
     }
   }
 
@@ -381,10 +358,8 @@ class Node
       const size_t pay_len = kPtrSize) const
   {
     const auto offset = meta_arr_[pos].GetPayOff();
-    if constexpr (kUseOCC) {
-      if (offset + pay_len > kPageSize) [[unlikely]] {
-        return;  // read corrupted data due to OCC
-      }
+    if (offset + pay_len > kPageSize) [[unlikely]] {
+      return;  // read corrupted data due to OCC
     }
     std::memcpy(out_pay, ShiftAddr(this, offset), pay_len);
   }
@@ -585,9 +560,7 @@ class Node
     auto &&x_guard = guard.UpgradeToX();
     removed_ = true;
     sib_node_ = next;
-    if constexpr (kUseOCC) {
-      VerIncrement<kSMOMask>(x_guard);
-    }
+    VerIncrement<kSMOMask>(x_guard);
   }
 
   /*##########################################################################*
@@ -785,10 +758,8 @@ class Node
       const auto meta = meta_arr_[cur_pos];
       const auto offset = meta.offset;
       const auto key_len = meta.key_len;
-      if constexpr (kUseOCC) {
-        if (offset + key_len > kPageSize || key_len > kMaxKeySize) [[unlikely]] {
-          break;  // read corrupted data due to OCC
-        }
+      if (offset + key_len > kPageSize || key_len > kMaxKeySize) [[unlikely]] {
+        break;  // read corrupted data due to OCC
       }
 
       const auto *src_addr = ShiftAddr(this, offset);
@@ -901,10 +872,6 @@ class Node
   static_assert(  //
       sizeof(Lock) <= kWordSize,
       "The size of a lock class must be smaller than 8 bytes.");
-
-  static_assert(  //
-      !kUseOCC || ::dbgroup::lock::OptimisticallyLockable<Lock>,
-      "A lock class must have optimistic lock APIs when using Optimistic CC.");
 
   /*##########################################################################*
    * Internal member variables

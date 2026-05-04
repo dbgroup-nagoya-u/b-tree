@@ -27,7 +27,7 @@ namespace dbgroup::index::test
  *############################################################################*/
 
 template <class K, class V, class C>
-using Index = ::dbgroup::index::b_tree::BTreeOSL<K, V, C>;
+using Index = ::dbgroup::index::b_tree::BTree<K, V, C>;
 
 using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys

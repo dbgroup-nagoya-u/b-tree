@@ -68,7 +68,7 @@ constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
  * @brief A struct for representing internal pages.
  *
  */
-using Page = ::dbgroup::memory::PageTarget<kPageSize>;
+using Page = ::dbgroup::memory::Page<kPageSize>;
 
 }  // namespace dbgroup::index::b_tree
 

@@ -42,7 +42,5 @@ function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
 endfunction()
 
 # add unit tests to build targets
-ADD_DBGROUP_TEST("b_tree_psl_test")
-ADD_DBGROUP_TEST("b_tree_osl_test")
-ADD_DBGROUP_TEST("b_tree_psl_multi_thread_test")
-ADD_DBGROUP_TEST("b_tree_osl_multi_thread_test")
+ADD_DBGROUP_TEST("b_tree_test")
+ADD_DBGROUP_TEST("b_tree_multi_thread_test")
