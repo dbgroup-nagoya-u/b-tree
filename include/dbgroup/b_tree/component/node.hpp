@@ -78,7 +78,7 @@ class Node
    * @param level The level where this node is.
    */
   constexpr explicit Node(  //
-      const size_t level = 0)
+      const size_t level = 0) noexcept
       : level_{static_cast<uint8_t>(level)}
   {
     static_assert(                    //
@@ -100,7 +100,7 @@ class Node
       const Key &key,
       const size_t key_len,
       const void *l_child,
-      const void *r_child)  //
+      const void *r_child) noexcept  //
       : rec_num_{2},
         offset_{static_cast<uint16_t>(kPageSize - (2 * kPtrSize + key_len))},
         usage_{static_cast<uint16_t>(2 * (kMetaSize + kPtrSize) + key_len)},
@@ -179,7 +179,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  GetLevel() const  //
+  GetLevel() const noexcept  //
       -> size_t
   {
     return level_;
@@ -190,7 +190,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  GetRecNum() const  //
+  GetRecNum() const noexcept  //
       -> size_t
   {
     return rec_num_;
@@ -202,7 +202,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  Removed() const  //
+  Removed() const noexcept  //
       -> bool
   {
     return removed_;
@@ -213,7 +213,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  GetSibNode() const  //
+  GetSibNode() const noexcept  //
       -> Node *
   {
     return sib_node_;
@@ -267,8 +267,8 @@ class Node
    */
   [[nodiscard]]
   auto
-  Include(                   //
-      const Key &key) const  //
+  Include(                            //
+      const Key &key) const noexcept  //
       -> bool
   {
     if (hk_len_ == 0) return true;
@@ -299,8 +299,8 @@ class Node
    */
   [[nodiscard]]
   auto
-  CheckUniqueness(           //
-      const Key &key) const  //
+  CheckUniqueness(                    //
+      const Key &key) const noexcept  //
       -> std::tuple<bool, bool, size_t>
   {
     const auto [found, pos] = SearchRecord(key);
@@ -315,8 +315,8 @@ class Node
    */
   [[nodiscard]]
   auto
-  SearchChild(               //
-      const Key &key) const  //
+  SearchChild(                        //
+      const Key &key) const noexcept  //
       -> Node *
   {
     auto [found, pos] = SearchRecord(key);
@@ -350,8 +350,8 @@ class Node
   template <class Payload>
   [[nodiscard]]
   auto
-  GetPayload(                  //
-      const size_t pos) const  //
+  GetPayload(                           //
+      const size_t pos) const noexcept  //
       -> Payload
   {
     Payload out_pay{};
@@ -372,7 +372,7 @@ class Node
   CopyPayloadTo(  //
       const size_t pos,
       void *out_pay,
-      const size_t pay_len = kPtrSize) const
+      const size_t pay_len = kPtrSize) const noexcept
   {
     const auto offset = meta_arr_[pos].GetPayOff();
     if (offset + pay_len > kPageSize) [[unlikely]] {
@@ -395,7 +395,7 @@ class Node
   CopyRecordTo(  //
       const size_t pos,
       void *key,
-      void *payload) const  //
+      void *payload) const noexcept  //
       -> bool
   {
     const auto meta = meta_arr_[pos];
@@ -415,8 +415,8 @@ class Node
    */
   [[nodiscard]]
   auto
-  SearchEndPosition(                 //
-      const ScanKey &end_key) const  //
+  SearchEndPosition(                          //
+      const ScanKey &end_key) const noexcept  //
       -> std::pair<bool, size_t>
   {
     const auto is_end = !sib_node_ || (end_key && Include(std::get<0>(*end_key)));
@@ -452,7 +452,7 @@ class Node
       const Key &key,
       const size_t key_len,
       const void *payload,
-      const size_t pay_len)  //
+      const size_t pay_len) noexcept  //
       -> NodeRC
   {
     const auto rec_len = key_len + pay_len;
@@ -492,7 +492,7 @@ class Node
   Update(  //
       size_t pos,
       const Payload &payload,
-      Payload (*merger)(const Payload &, const Payload &))  //
+      Payload (*merger)(const Payload &, const Payload &)) noexcept  //
       -> Payload
   {
     Payload out_pay{};
@@ -518,7 +518,7 @@ class Node
   auto
   Delete(  //
       const size_t pos,
-      void *out_pay)  //
+      void *out_pay) noexcept  //
       -> NodeRC
   {
     auto &meta = meta_arr_[pos];
@@ -599,7 +599,7 @@ class Node
   void
   Bulkload(  //
       BulkIter &iter,
-      const BulkIter &iter_end)
+      const BulkIter &iter_end) noexcept
   {
     constexpr size_t kLeafCapacity = kPageSize * 3 / 4;
     constexpr size_t kInnerCapacity =
@@ -633,7 +633,7 @@ class Node
   LinkSiblingNode(  //
       Node *sib_node,
       const Key &key,
-      const size_t key_len)
+      const size_t key_len) noexcept
   {
     sib_node_ = sib_node;
     hk_len_ = key_len;
@@ -650,7 +650,7 @@ class Node
   static void
   LinkVerticalBorderNodes(  //
       Node *l_node,
-      Node *r_node)
+      Node *r_node) noexcept
   {
     if (l_node == nullptr) return;
 
@@ -677,7 +677,7 @@ class Node
    */
   static void
   RemoveLeftmostKeys(  //
-      Node *node)
+      Node *node) noexcept
   {
     while (true) {
       node->leftmost_ = true;
@@ -767,8 +767,8 @@ class Node
    */
   [[nodiscard]]
   auto
-  SearchRecord(              //
-      const Key &key) const  //
+  SearchRecord(                       //
+      const Key &key) const noexcept  //
       -> std::pair<bool, size_t>
   {
     Key index_key;
@@ -828,7 +828,7 @@ class Node
    *
    */
   void
-  CopyFromTmpNode()
+  CopyFromTmpNode() noexcept
   {
     const auto *tmp = std::bit_cast<Node *>(&_tls_page);
     rec_num_ = tmp->rec_num_;
@@ -848,7 +848,7 @@ class Node
   void
   CopyHighKey(  //
       const void *src,
-      const size_t key_len)
+      const size_t key_len) noexcept
   {
     std::memcpy(ShiftAddr(this, kPageSize - key_len), src, key_len);
     usage_ += key_len;
@@ -869,7 +869,7 @@ class Node
       const Node *src,
       size_t &pos,
       const size_t end_pos,
-      [[maybe_unused]] const size_t sep_size = kPageSize)
+      [[maybe_unused]] const size_t sep_size = kPageSize) noexcept
   {
     for (; pos < end_pos; ++pos) {
       const auto meta = src->meta_arr_[pos];

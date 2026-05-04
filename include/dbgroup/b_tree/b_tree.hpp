@@ -186,7 +186,7 @@ class BTree
      */
     [[nodiscard]]
     constexpr explicit
-    operator bool() const
+    operator bool() const noexcept
     {
       return node_;
     }
@@ -197,7 +197,7 @@ class BTree
      */
     [[nodiscard]]
     constexpr auto
-    operator*() const  //
+    operator*() const noexcept  //
         -> std::pair<Key, Payload>
     {
       return {GetKey(), payload_};
@@ -223,7 +223,7 @@ class BTree
      */
     [[nodiscard]]
     constexpr auto
-    GetKey() const  //
+    GetKey() const noexcept  //
         -> Key
     {
       auto *addr = std::bit_cast<void *>(&key_[0]);
@@ -239,7 +239,7 @@ class BTree
      */
     [[nodiscard]]
     constexpr auto
-    GetPayload() const  //
+    GetPayload() const noexcept  //
         -> Payload
     {
       return payload_;
