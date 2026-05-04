@@ -18,7 +18,7 @@
 #include "dbgroup/b_tree/b_tree.hpp"
 
 // external sources
-#include "dbgroup/index_fixtures/index_fixture.hpp"
+#include <dbgroup/index_fixtures/index_fixture.hpp>
 
 namespace dbgroup::index::test
 {
@@ -43,6 +43,6 @@ TYPED_TEST_SUITE(IndexFixture, TestTargets);
  * Unit test definitions
  *############################################################################*/
 
-#include "dbgroup/index_fixtures/index_fixture_test_definitions.hpp"
+#include <dbgroup/index_fixtures/index_fixture_test_definitions.hpp>
 
 }  // namespace dbgroup::index::test

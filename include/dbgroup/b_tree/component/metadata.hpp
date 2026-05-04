@@ -22,7 +22,7 @@
 #include <cstdint>
 
 // external libraries
-#include "dbgroup/constants.hpp"
+#include <dbgroup/constants.hpp>
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
@@ -82,7 +82,8 @@ struct Metadata {
   /**
    * @return The offset to a payload in bytes.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   GetPayOff() const noexcept  //
       -> size_t
   {
@@ -92,7 +93,8 @@ struct Metadata {
   /**
    * @return The size of a payload in bytes.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   GetPayLen() const noexcept  //
       -> size_t
   {

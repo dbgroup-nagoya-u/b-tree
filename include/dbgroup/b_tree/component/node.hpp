@@ -30,10 +30,10 @@
 #include <utility>
 
 // external sources
-#include "dbgroup/constants.hpp"
-#include "dbgroup/index/utility.hpp"
-#include "dbgroup/lock/utility.hpp"
-#include "dbgroup/memory/utility.hpp"
+#include <dbgroup/constants.hpp>
+#include <dbgroup/index/utility.hpp>
+#include <dbgroup/lock/utility.hpp>
+#include <dbgroup/memory/utility.hpp>
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
@@ -177,7 +177,8 @@ class Node
    * @return The level where this node is.
    * @note This parameter is immutable (readable without locks).
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   GetLevel() const  //
       -> size_t
   {
@@ -187,7 +188,8 @@ class Node
   /**
    * @return The number of records in this node.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   GetRecNum() const  //
       -> size_t
   {
@@ -198,7 +200,8 @@ class Node
    * @retval true if this node has been removed.
    * @retval false otherwise.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   Removed() const  //
       -> bool
   {
@@ -208,7 +211,8 @@ class Node
   /**
    * @return A sibling node.
    */
-  [[nodiscard]] constexpr auto
+  [[nodiscard]]
+  constexpr auto
   GetSibNode() const  //
       -> Node *
   {
@@ -222,24 +226,25 @@ class Node
   GetMergeableSib()  //
       -> SIXGuard
   {
-    SIXGuard six_guard{};
+    SIXGuard six_grd{};
     if (sib_node_) {
-      auto &&guard = sib_node_->GetGuard();
+      auto &&grd = sib_node_->GetGuard();
       while (true) {
         const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
         if (merged_usage >= kMaxMergedUsage) break;
-        six_guard = guard.TryLockSIX();
-        if (six_guard) break;
+        six_grd = grd.TryLockSIX();
+        if (six_grd) break;
       }
     }
-    return six_guard;
+    return six_grd;
   }
 
   /**
    * @retval 1st: A separator key.
    * @retval 2nd: The length of a separator key.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   GetSeparatorKey() const  //
       -> std::pair<Key, size_t>
   {
@@ -260,7 +265,8 @@ class Node
    * @retval true if this node can include a given key.
    * @retval false otherwise.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   Include(                   //
       const Key &key) const  //
       -> bool
@@ -291,7 +297,8 @@ class Node
    * @note If no specified key is in this node, this returns the minimum
    * position greater than the specified key.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   CheckUniqueness(           //
       const Key &key) const  //
       -> std::tuple<bool, bool, size_t>
@@ -306,7 +313,8 @@ class Node
    * @param key A search key.
    * @return A child node.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SearchChild(               //
       const Key &key) const  //
       -> Node *
@@ -323,7 +331,8 @@ class Node
    * @tparam Guard A desired guard type.
    * @return A guard instance for this node.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   GetGuard()  //
       -> Lock::OptGuard
   {
@@ -339,7 +348,8 @@ class Node
    * @return The payload in the target position.
    */
   template <class Payload>
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   GetPayload(                  //
       const size_t pos) const  //
       -> Payload
@@ -380,7 +390,8 @@ class Node
    * @retval true if a target record is active (not deleted).
    * @retval false otherwise.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   CopyRecordTo(  //
       const size_t pos,
       void *key,
@@ -402,7 +413,8 @@ class Node
    * @retval 1st: true if this node includes the end key.
    * @retval 2nd: The end position of this scan operation.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SearchEndPosition(                 //
       const ScanKey &end_key) const  //
       -> std::pair<bool, size_t>
@@ -528,15 +540,15 @@ class Node
   /**
    * @brief Merge a given node into this node.
    *
-   * @param guard The SIX-lock guard of this node.
+   * @param grd The SIX-lock guard of this node.
    * @param r_node A right-merged (to be removed) node.
-   * @param r_guard The SIX-lock guard of a right node.
+   * @param r_grd The SIX-lock guard of a right node.
    */
   void
   Merge(  //
-      SIXGuard guard,
+      SIXGuard grd,
       Node *r_node,
-      SIXGuard r_guard)
+      SIXGuard r_grd)
   {
     auto *tmp = new (&_tls_page) Node{};
     tmp->offset_ = kPageSize - r_node->hk_len_;
@@ -547,29 +559,29 @@ class Node
     pos = 0;
     tmp->CopyRecords(r_node, pos, r_node->rec_num_);
     {
-      auto &&x_guard = guard.UpgradeToX();
+      auto &&x_grd = grd.UpgradeToX();
       CopyFromTmpNode();
       sib_node_ = r_node->sib_node_;
-      VerIncrement<kSMOMask>(x_guard);
+      VerIncrement<kSMOMask>(x_grd);
     }
-    r_node->Remove(std::move(r_guard), this);
+    r_node->Remove(std::move(r_grd), this);
   }
 
   /**
    * @brief Set a remove flag to this node.
    *
-   * @param guard The SIX-lock guard of this node.
+   * @param grd The SIX-lock guard of this node.
    * @param next A side link for traversing to the next target node.
    */
   void
   Remove(  //
-      SIXGuard guard,
+      SIXGuard grd,
       Node *next = nullptr)
   {
-    auto &&x_guard = guard.UpgradeToX();
+    auto &&x_grd = grd.UpgradeToX();
     removed_ = true;
     sib_node_ = next;
-    VerIncrement<kSMOMask>(x_guard);
+    VerIncrement<kSMOMask>(x_grd);
   }
 
   /*##########################################################################*
@@ -684,7 +696,8 @@ class Node
   /**
    * @return The explanation of this instance.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   ToStr() const  //
       -> std::string
   {
@@ -752,7 +765,8 @@ class Node
    * @note If no specified key is in this node, this returns the minimum
    * position greater than the specified key.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SearchRecord(              //
       const Key &key) const  //
       -> std::pair<bool, size_t>

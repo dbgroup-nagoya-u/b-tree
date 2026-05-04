@@ -23,11 +23,6 @@ function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
   target_compile_features(${DBGROUP_TEST_TARGET} PRIVATE
     "cxx_std_20"
   )
-  target_compile_definitions(${DBGROUP_TEST_TARGET} PRIVATE
-    DBGROUP_TEST_THREAD_NUM=${DBGROUP_TEST_THREAD_NUM}
-    DBGROUP_TEST_RANDOM_SEED=${DBGROUP_TEST_RANDOM_SEED}
-    DBGROUP_TEST_EXEC_NUM=${DBGROUP_TEST_EXEC_NUM}
-  )
   target_compile_options(${DBGROUP_TEST_TARGET} PRIVATE
     $<$<STREQUAL:"${CMAKE_BUILD_TYPE}","Release">:-march=native>
     $<$<STREQUAL:"${CMAKE_BUILD_TYPE}","Debug">:-g3>

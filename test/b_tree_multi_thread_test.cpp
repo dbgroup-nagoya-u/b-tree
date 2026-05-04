@@ -18,7 +18,7 @@
 #include "dbgroup/b_tree/b_tree.hpp"
 
 // external sources
-#include "dbgroup/index_fixtures/index_fixture_multi_thread.hpp"
+#include <dbgroup/index_fixtures/index_fixture_multi_thread.hpp>
 
 namespace dbgroup::index::test
 {
@@ -43,6 +43,6 @@ TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
  * Unit test definitions
  *############################################################################*/
 
-#include "dbgroup/index_fixtures/index_fixture_multi_thread_test_definitions.hpp"
+#include <dbgroup/index_fixtures/index_fixture_multi_thread_test_definitions.hpp>
 
 }  // namespace dbgroup::index::test

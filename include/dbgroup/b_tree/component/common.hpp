@@ -23,9 +23,9 @@
 #include <cstring>
 
 // external libraries
-#include "dbgroup/constants.hpp"
-#include "dbgroup/index/utility.hpp"
-#include "dbgroup/memory/utility.hpp"
+#include <dbgroup/constants.hpp>
+#include <dbgroup/index/utility.hpp>
+#include <dbgroup/memory/utility.hpp>
 
 // local sources
 #include "dbgroup/b_tree/utility.hpp"

@@ -31,15 +31,15 @@
 #include <vector>
 
 // external libraries
-#include "dbgroup/constants.hpp"
-#include "dbgroup/index/utility.hpp"
-#include "dbgroup/lock/mcs_lock.hpp"
-#include "dbgroup/lock/optimistic_lock.hpp"
-#include "dbgroup/lock/pessimistic_lock.hpp"
-#include "dbgroup/lock/utility.hpp"
-#include "dbgroup/memory/epoch_based_gc.hpp"
-#include "dbgroup/memory/utility.hpp"
-#include "dbgroup/thread/epoch_guard.hpp"
+#include <dbgroup/constants.hpp>
+#include <dbgroup/index/utility.hpp>
+#include <dbgroup/lock/mcs_lock.hpp>
+#include <dbgroup/lock/optimistic_lock.hpp>
+#include <dbgroup/lock/pessimistic_lock.hpp>
+#include <dbgroup/lock/utility.hpp>
+#include <dbgroup/memory/epoch_based_gc.hpp>
+#include <dbgroup/memory/utility.hpp>
+#include <dbgroup/thread/epoch_guard.hpp>
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
@@ -65,11 +65,11 @@ template <class Key,
 class BTree
 {
   /*##########################################################################*
-   * Type aliases
+   * Internal types
    *##########################################################################*/
 
-  /// @brief A type for allocating variable-length data.
   using KeyWOPtr = std::remove_pointer_t<Key>;
+  using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
   using GCGuard = dbgroup::thread::EpochGuard;
   using OptGuard = typename Lock::OptGuard;
@@ -77,10 +77,7 @@ class BTree
   using XGuard = typename Lock::XGuard;
 
   using RC = component::NodeRC;
-
   using Node = component::Node<Key, Comp, Lock>;
-
-  using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
@@ -113,24 +110,24 @@ class BTree
      *
      * @param index A source index structure.
      * @param node The current scanning node.
-     * @param guard A guard instance for locking the current node.
+     * @param grd A guard instance for locking the current node.
      * @param begin_pos The begin position for scanning.
      * @param end_key  The end key given from a user.
-     * @param gc_guard  The guard instance for preventing GC from reclaiming nodes.
+     * @param gc_grd  The guard instance for preventing GC from reclaiming nodes.
      */
     Iterator(  //
         BTree *index,
         Node *node,
-        OptGuard guard,
+        OptGuard grd,
         const size_t begin_pos,
         const ScanKey &end_key,
-        GCGuard gc_guard)
+        GCGuard gc_grd)
         : node_{node},
-          guard_{std::move(guard)},
+          grd_{std::move(grd)},
           pos_{begin_pos},
           index_{index},
           end_key_{end_key},
-          gc_guard_{std::move(gc_guard)}
+          gc_grd_{std::move(gc_grd)}
     {
       std::tie(is_end_, end_pos_) = node_->SearchEndPosition(end_key_);
       FetchRecord();
@@ -139,14 +136,14 @@ class BTree
     Iterator(  //
         Iterator &&obj) noexcept
         : node_{obj.node_},
-          guard_{std::move(obj.guard_)},
+          grd_{std::move(obj.grd_)},
           pos_{obj.pos_},
           end_pos_{obj.end_pos_},
           is_end_{obj.is_end_},
           payload_{obj.payload_},
           index_{obj.index_},
           end_key_{obj.end_key_},
-          gc_guard_{std::move(obj.gc_guard_)}
+          gc_grd_{std::move(obj.gc_grd_)}
     {
       std::memcpy(key_, obj.key_, kMaxKeySize);
     }
@@ -157,14 +154,14 @@ class BTree
         -> Iterator &
     {
       node_ = rhs.node_;
-      guard_ = std::move(rhs.guard_);
+      grd_ = std::move(rhs.grd_);
       pos_ = rhs.pos_;
       end_pos_ = rhs.end_pos_;
       is_end_ = rhs.is_end_;
       payload_ = rhs.payload_;
       index_ = rhs.index_;
       end_key_ = rhs.end_key_;
-      gc_guard_ = std::move(rhs.gc_guard_);
+      gc_grd_ = std::move(rhs.gc_grd_);
       std::memcpy(key_, rhs.key_, kMaxKeySize);
       return *this;
     }
@@ -187,7 +184,8 @@ class BTree
      * @retval true if this iterator indicates a live record.
      * @retval false otherwise.
      */
-    [[nodiscard]] constexpr explicit
+    [[nodiscard]]
+    constexpr explicit
     operator bool() const
     {
       return node_;
@@ -197,7 +195,8 @@ class BTree
      * @retval 1st: A key indicated by the iterator.
      * @retval 2nd: A payload indicated by the iterator.
      */
-    [[nodiscard]] constexpr auto
+    [[nodiscard]]
+    constexpr auto
     operator*() const  //
         -> std::pair<Key, Payload>
     {
@@ -222,7 +221,8 @@ class BTree
     /**
      * @return A key indicated by the iterator.
      */
-    [[nodiscard]] constexpr auto
+    [[nodiscard]]
+    constexpr auto
     GetKey() const  //
         -> Key
     {
@@ -237,7 +237,8 @@ class BTree
     /**
      * @return A payload indicated by the iterator.
      */
-    [[nodiscard]] constexpr auto
+    [[nodiscard]]
+    constexpr auto
     GetPayload() const  //
         -> Payload
     {
@@ -275,7 +276,7 @@ class BTree
           return;
         }
 
-        pos_ = index_->SiblingScan(node_, guard_);
+        pos_ = index_->SiblingScan(node_, grd_);
         std::tie(is_end_, end_pos_) = node_->SearchEndPosition(end_key_);
       }
     }
@@ -288,7 +289,7 @@ class BTree
     Node *node_{};
 
     /// @brief A guard instance for locking the current node.
-    OptGuard guard_{};
+    OptGuard grd_{};
 
     /// @brief The position of the current record.
     size_t pos_{};
@@ -312,7 +313,7 @@ class BTree
     ScanKey end_key_{};
 
     /// @brief The guard instance for preventing GC from reclaiming nodes.
-    GCGuard gc_guard_{};
+    GCGuard gc_grd_{};
   };
 
   /*##########################################################################*
@@ -393,20 +394,20 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key);
+      auto &&[node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
       } else {
         out_pay = std::nullopt;
       }
-      if (guard.VerifyVersion(kNoMask)) return out_pay;
+      if (grd.VerifyVersion(kNoMask)) return out_pay;
       stack.emplace_back(node);
     }
   }
@@ -414,7 +415,6 @@ class BTree
   /**
    * @brief Perform a range scan with given keys.
    *
-   * @tparam kUseOCCIfPossible A flag for using OCC when verifying records.
    * @param begin_key A pair of a begin key and its openness (true=closed).
    * @param end_key A pair of an end key and its openness (true=closed).
    * @return An iterator for accessing scanned records.
@@ -425,9 +425,9 @@ class BTree
       const ScanKey &end_key = std::nullopt)
   {
     Node *node;
-    OptGuard guard;
+    OptGuard grd;
     size_t begin_pos;
-    auto &&gc_guard = gc_->CreateEpochGuard();
+    auto &&gc_grd = gc_->CreateEpochGuard();
 
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
@@ -435,24 +435,24 @@ class BTree
     if (begin_key) {
       const auto &[key, _, closed] = *begin_key;
       while (true) {
-        std::tie(node, guard) = SearchNode(stack, key);
+        std::tie(node, grd) = SearchNode(stack, key);
         std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-        if (guard.VerifyVersion(kNoMask)) break;
+        if (grd.VerifyVersion(kNoMask)) break;
         stack.emplace_back(node);
       }
       node = std::bit_cast<Node *>(&tls_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
     } else {
-      std::tie(node, guard) = SearchLeftmostLeaf(stack);
+      std::tie(node, grd) = SearchLeftmostLeaf(stack);
       do {
         std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
-      } while (!guard.VerifyVersion(kNoMask));
+      } while (!grd.VerifyVersion(kNoMask));
       node = std::bit_cast<Node *>(&tls_page);
       begin_pos = 0;
     }
 
-    return Iterator{this, node, std::move(guard), begin_pos, end_key, std::move(gc_guard)};
+    return Iterator{this, node, std::move(grd), begin_pos, end_key, std::move(gc_grd)};
   }
 
   /*##########################################################################*
@@ -494,26 +494,26 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key);
+      auto &&[node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      auto &&x_guard = guard.TryLockX(kInsDelMask);
-      if (x_guard) {
+      auto &&x_grd = grd.TryLockX(kInsDelMask);
+      if (x_grd) {
         if (found && !deleted) {
           out_pay = node->Update(pos, payload, merger_);
           break;
         }
         const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
         if (rc == RC::kCompleted) {
-          VerIncrement<kInsDelMask>(x_guard);
+          VerIncrement<kInsDelMask>(x_grd);
           break;
         }
-        Split(stack, node, std::move(x_guard));
+        Split(stack, node, std::move(x_grd));
       }
       stack.emplace_back(std::bit_cast<Node *>(node));
     }
@@ -536,27 +536,27 @@ class BTree
       const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key);
+      auto &&[node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
-        if (guard.VerifyVersion(kInsDelMask)) break;
+        if (grd.VerifyVersion(kInsDelMask)) break;
       } else {
-        auto &&x_guard = guard.TryLockX(kInsDelMask);
-        if (x_guard) {
+        auto &&x_grd = grd.TryLockX(kInsDelMask);
+        if (x_grd) {
           const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
           if (rc == RC::kCompleted) {
-            VerIncrement<kInsDelMask>(x_guard);
+            VerIncrement<kInsDelMask>(x_grd);
             out_pay = std::nullopt;
             break;
           }
-          Split(stack, node, std::move(x_guard));
+          Split(stack, node, std::move(x_grd));
         }
       }
       stack.emplace_back(std::bit_cast<Node *>(node));
@@ -580,19 +580,19 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key);
+      auto &&[node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (guard.VerifyVersion(kInsDelMask)) break;
+        if (grd.VerifyVersion(kInsDelMask)) break;
       } else {
-        auto &&x_guard = guard.TryLockX(kInsDelMask);
-        if (x_guard) {
+        auto &&x_grd = grd.TryLockX(kInsDelMask);
+        if (x_grd) {
           out_pay = node->Update(pos, payload, merger_);
           break;
         }
@@ -616,25 +616,25 @@ class BTree
       [[maybe_unused]] const size_t key_len = sizeof(Key))  //
       -> std::optional<Payload>
   {
-    [[maybe_unused]] const auto &gc_guard = gc_->CreateEpochGuard();
+    [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key);
+      auto &&[node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (guard.VerifyVersion(kInsDelMask)) break;
+        if (grd.VerifyVersion(kInsDelMask)) break;
       } else {
-        auto &&x_guard = guard.TryLockX(kInsDelMask);
-        if (x_guard) {
+        auto &&x_grd = grd.TryLockX(kInsDelMask);
+        if (x_grd) {
           Payload tmp_pay{};
           const auto rc = node->Delete(pos, &tmp_pay);
           out_pay = tmp_pay;
-          VerIncrement<kInsDelMask>(x_guard);
+          VerIncrement<kInsDelMask>(x_grd);
           if (rc == RC::kNeedMerge) {
-            TryMerge(stack, node, x_guard.DowngradeToSIX());
+            TryMerge(stack, node, x_grd.DowngradeToSIX());
           }
           break;
         }
@@ -755,7 +755,8 @@ class BTree
   /**
    * @return A page for nodes.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   GetNodePage()  //
       -> void *
   {
@@ -767,15 +768,16 @@ class BTree
    * @brief Search a target node horizontally.
    *
    * @param[in,out] node A target node.
-   * @param[in,out] guard The guard instance of a target node.
+   * @param[in,out] grd The guard instance of a target node.
    * @param[in] key A search key.
    * @retval true if a container node has been found.
    * @retval false otherwise.
    */
-  [[nodiscard]] static auto
+  [[nodiscard]]
+  static auto
   SearchHorizontally(  //
       Node *&node,
-      OptGuard &guard,
+      OptGuard &grd,
       const Key &key)  //
       -> bool
   {
@@ -784,13 +786,13 @@ class BTree
       auto *sib_node = node->GetSibNode();
       const auto removed = node->Removed();
       const auto included = node->Include(key);
-      if (!guard.VerifyVersion(kSMOMask)) continue;
+      if (!grd.VerifyVersion(kSMOMask)) continue;
 
       if (!removed && included) return true;
       if (!sib_node || i++ > 0) return false;  // the traversed path may be too old
 
       node = sib_node;
-      guard = node->GetGuard();
+      grd = node->GetGuard();
     }
   }
 
@@ -803,7 +805,8 @@ class BTree
    * @retval 1st: A found node.
    * @retval 2nd: The lock guard of a found node.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SearchNode(  //
       std::vector<Node *> &stack,
       const Key &key,
@@ -825,13 +828,13 @@ class BTree
 
       while (true) {
         Node *child{};
-        auto &&guard = node->GetGuard();
+        auto &&grd = node->GetGuard();
         while (true) {
-          if (!SearchHorizontally(node, guard, key)) goto out;
-          if (node->GetLevel() == level) return {node, std::move(guard)};
+          if (!SearchHorizontally(node, grd, key)) goto out;
+          if (node->GetLevel() == level) return {node, std::move(grd)};
 
           child = node->SearchChild(key);
-          if (guard.VerifyVersion(kInsDelMask)) break;
+          if (grd.VerifyVersion(kInsDelMask)) break;
         }
         stack.emplace_back(std::exchange(node, child));
       }
@@ -846,7 +849,8 @@ class BTree
    * @retval 1st: The leftmost node.
    * @retval 2nd: The lock guard of the leftmost node.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SearchLeftmostLeaf(                    //
       std::vector<Node *> &stack) const  //
       -> std::pair<Node *, OptGuard>
@@ -859,10 +863,10 @@ class BTree
       }
 
       Node *child{};
-      auto &&guard = node->GetGuard();
+      auto &&grd = node->GetGuard();
       do {
         node->CopyPayloadTo(0, &child);
-      } while (!guard.VerifyVersion(kInsDelMask));
+      } while (!grd.VerifyVersion(kInsDelMask));
       stack.emplace_back(std::exchange(node, child));
     }
   }
@@ -871,13 +875,14 @@ class BTree
    * @brief Go to the next node for scanning.
    *
    * @param[in,out] node A target node.
-   * @param[in,out] guard The guard instance of a target node.
+   * @param[in,out] grd The guard instance of a target node.
    * @return The begin position for scanning.
    */
-  [[nodiscard]] auto
+  [[nodiscard]]
+  auto
   SiblingScan(  //
       Node *&node,
-      OptGuard &guard) const  //
+      OptGuard &grd) const  //
       -> size_t
   {
     size_t begin_pos{};
@@ -888,9 +893,9 @@ class BTree
     stack.reserve(kInitialHeight);
     do {
       stack.emplace_back(sib_node);
-      std::tie(sib_node, guard) = SearchNode(stack, key);
+      std::tie(sib_node, grd) = SearchNode(stack, key);
       std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
-    } while (!guard.VerifyVersion(kNoMask));
+    } while (!grd.VerifyVersion(kNoMask));
 
     auto [found, deleted, pos] = node->CheckUniqueness(key);
     begin_pos = pos + static_cast<size_t>(!found || deleted);
@@ -909,18 +914,18 @@ class BTree
    *
    * @param stack A stack of traversed nodes.
    * @param l_child A split-left node.
-   * @param l_guard The guard instance of a split-left node.
+   * @param l_grd The guard instance of a split-left node.
    */
   void
   Split(  //
       std::vector<Node *> stack,
       Node *l_child,
-      XGuard l_guard)
+      XGuard l_grd)
   {
     auto *r_child = new (GetNodePage()) Node{l_child};
-    VerIncrement<kSMOMask>(l_guard);
+    VerIncrement<kSMOMask>(l_grd);
     const auto &[key, key_len] = l_child->GetSeparatorKey();
-    l_guard = XGuard{};
+    l_grd = XGuard{};
 
     const auto level = l_child->GetLevel() + 1;
     while (true) {
@@ -934,17 +939,17 @@ class BTree
       }
 
       // insert a new down link
-      auto &&[node, guard] = SearchNode(stack, key, level);
+      auto &&[node, grd] = SearchNode(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);  // `found` must be false
-      auto &&x_guard = guard.TryLockX(kInsDelMask);
-      if (!x_guard) continue;  // another thread may insert the key
+      auto &&x_grd = grd.TryLockX(kInsDelMask);
+      if (!x_grd) continue;  // another thread may insert the key
       const auto rc = node->Insert(pos, found, key, key_len, &r_child, kWordSize);
       if (rc == RC::kCompleted) {
-        VerIncrement<kInsDelMask>(x_guard);
+        VerIncrement<kInsDelMask>(x_grd);
         break;
       }
 
-      Split(stack, node, std::move(x_guard));
+      Split(stack, node, std::move(x_grd));
       stack.emplace_back(node);
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -957,22 +962,22 @@ class BTree
    *
    * @param stack A stack of traversed nodes.
    * @param l_child A left child (to be merged) node.
-   * @param l_guard The SIX guard instance of a given child node.
+   * @param l_grd The SIX guard instance of a given child node.
    */
   void
   TryMerge(  //
       std::vector<Node *> &stack,
       Node *l_child,
-      SIXGuard l_guard)
+      SIXGuard l_grd)
   {
     const auto level = l_child->GetLevel() + 1;
-    auto &&r_guard = l_child->GetMergeableSib();
-    if (!r_guard) {  // remove a root node if possible
+    auto &&r_grd = l_child->GetMergeableSib();
+    if (!r_grd) {  // remove a root node if possible
       auto *root = root_.load(kRelaxed);
       if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
         l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
         if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
-          l_child->Remove(std::move(l_guard));
+          l_child->Remove(std::move(l_grd));
           gc_->AddGarbage(l_child, kPageSize);
         }
       }
@@ -981,25 +986,25 @@ class BTree
 
     const auto &key = l_child->GetSeparatorKey().first;
     while (true) {
-      auto &&[node, guard] = SearchNode(stack, key, level);
+      auto &&[node, grd] = SearchNode(stack, key, level);
       const auto [found, _, pos] = node->CheckUniqueness(key);
       if (!found) {
-        if (!guard.VerifyVersion(kInsDelMask)) continue;
+        if (!grd.VerifyVersion(kInsDelMask)) continue;
         break;  // a downlink has not been inserted yet or is leftmost in a node
       }
-      auto &&x_guard = guard.TryLockX(kInsDelMask);
-      if (!x_guard) continue;  // another thread may modify a node
+      auto &&x_grd = grd.TryLockX(kInsDelMask);
+      if (!x_grd) continue;  // another thread may modify a node
 
       Node *r_child{};
       const auto rc = node->Delete(pos, &r_child);
-      VerIncrement<kInsDelMask>(x_guard);
+      VerIncrement<kInsDelMask>(x_grd);
       if (rc == RC::kCompleted) {
-        x_guard = XGuard{};
-        l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
+        x_grd = XGuard{};
+        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
       } else {
-        auto &&six_guard = x_guard.DowngradeToSIX();
-        l_child->Merge(std::move(l_guard), r_child, std::move(r_guard));
-        TryMerge(stack, node, std::move(six_guard));
+        auto &&six_grd = x_grd.DowngradeToSIX();
+        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
+        TryMerge(stack, node, std::move(six_grd));
       }
       gc_->AddGarbage(r_child, kPageSize);
       break;
