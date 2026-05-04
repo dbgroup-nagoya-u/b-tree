@@ -135,7 +135,7 @@ class BTree
 
     Iterator(  //
         Iterator &&obj) noexcept
-        : node_{obj.node_},
+        : node_{std::exchange(obj.node_, nullptr)},
           grd_{std::move(obj.grd_)},
           pos_{obj.pos_},
           end_pos_{obj.end_pos_},
@@ -153,7 +153,7 @@ class BTree
         Iterator &&rhs) noexcept  //
         -> Iterator &
     {
-      node_ = rhs.node_;
+      node_ = std::exchange(rhs.node_, nullptr);
       grd_ = std::move(rhs.grd_);
       pos_ = rhs.pos_;
       end_pos_ = rhs.end_pos_;
@@ -174,7 +174,12 @@ class BTree
      * Public destructors
      *########################################################################*/
 
-    ~Iterator() = default;
+    ~Iterator()
+    {
+      if (index_ && node_) {
+        index_->FreePage(node_);
+      }
+    }
 
     /*########################################################################*
      * Public operators for iterators
@@ -272,6 +277,7 @@ class BTree
         }
 
         if (is_end_) {
+          index_->FreePage(node_);
           node_ = nullptr;
           return;
         }
@@ -323,25 +329,32 @@ class BTree
   /**
    * @brief Construct a new tree.
    *
+   * @param page_size The page size for each node.
    * @param gc_interval_micro GC internal [us] (default: 10ms).
    * @param gc_thread_num the number of GC threads (default: 1).
    */
   explicit BTree(  //
+      const size_t page_size = k1Ki,
       const size_t gc_interval_micro = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
-      : gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
+      : page_size_{static_cast<uint16_t>(page_size)},
+        gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
   {
+    VerifyPageSize();
   }
 
   /**
    * @brief Construct a new tree.
    *
    * @param gc A shared garbage collector for reusing internal pages.
+   * @param page_size The page size for each node.
    */
   explicit BTree(  //
-      const std::shared_ptr<GC> &gc)
-      : gc_{gc}
+      const std::shared_ptr<GC> &gc,
+      const size_t page_size = k1Ki)
+      : page_size_{static_cast<uint16_t>(page_size)}, gc_{gc}
   {
+    VerifyPageSize();
   }
 
   BTree(const BTree &) = delete;
@@ -371,7 +384,7 @@ class BTree
         stack.emplace_back(child, 0);
         continue;
       }
-      ::dbgroup::memory::Release<Page>(node);
+      FreePage(node);
       stack.pop_back();
     }
   }
@@ -431,24 +444,24 @@ class BTree
 
     std::vector<Node *> stack{};
     stack.reserve(kInitialHeight);
-    thread_local Page tls_page{};  // retain the copy of a target node
+    auto *tmp_page = AllocPage();
     if (begin_key) {
       const auto &[key, _, closed] = *begin_key;
       while (true) {
         std::tie(node, grd) = SearchNode(stack, key);
-        std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
+        std::memcpy(tmp_page, node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
         stack.emplace_back(node);
       }
-      node = std::bit_cast<Node *>(&tls_page);
+      node = std::bit_cast<Node *>(tmp_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos + static_cast<size_t>(!found || deleted || !closed);
     } else {
       std::tie(node, grd) = SearchLeftmostLeaf(stack);
       do {
-        std::memcpy(static_cast<void *>(&tls_page), node, kPageSize);
+        std::memcpy(tmp_page, node, page_size_);
       } while (!grd.VerifyVersion(kNoMask));
-      node = std::bit_cast<Node *>(&tls_page);
+      node = std::bit_cast<Node *>(tmp_page);
       begin_pos = 0;
     }
 
@@ -695,7 +708,7 @@ class BTree
       }
 
       // align the height of partial trees and link their rightmost/leftmost nodes
-      nodes.reserve(2 * kNodeCapacity * thread_num);
+      nodes.reserve(2 * (page_size_ / kRecLen) * thread_num);
       Node *prev_node = nullptr;
       for (auto &&[p_level, p_nodes] : trees) {
         while (p_level < level) {
@@ -716,7 +729,7 @@ class BTree
 
     // set a new root
     auto *old_root = root_.exchange(new_root, kRelease);
-    gc_->AddGarbage(old_root, kPageSize);
+    gc_->AddGarbage(old_root, page_size_);
   }
 
   /*##########################################################################*
@@ -745,23 +758,36 @@ class BTree
   /// @brief The size of payloads.
   static constexpr size_t kPayLen = sizeof(Payload);
 
-  /// @brief The expected capacity of a node when performing bulkload.
-  static constexpr size_t kNodeCapacity = kPageSize / (sizeof(Key) + kPayLen + kWordSize);
+  /// @brief The expected size of records.
+  static constexpr size_t kRecLen = (sizeof(Key) + kPayLen + kWordSize);
 
   /*##########################################################################*
    * Internal utility functions
    *##########################################################################*/
 
   /**
-   * @return A page for nodes.
+   * @return A page for a new node.
    */
   [[nodiscard]]
   auto
-  GetNodePage()  //
+  AllocPage()  //
       -> void *
   {
-    auto *page = gc_->GetPageIfPossible(kPageSize);
-    return page ? page : ::dbgroup::memory::Allocate<Page>();
+    auto *page = gc_->GetPageIfPossible(page_size_);
+    if (!page) {
+      page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
+    }
+    return page;
+  }
+
+  /**
+   * @param page A page for a node.
+   */
+  void
+  FreePage(  //
+      void *page) const
+  {
+    ::operator delete(page, static_cast<std::align_val_t>(align_val_));
   }
 
   /**
@@ -894,7 +920,7 @@ class BTree
     do {
       stack.emplace_back(sib_node);
       std::tie(sib_node, grd) = SearchNode(stack, key);
-      std::memcpy(static_cast<void *>(node), sib_node, kPageSize);
+      std::memcpy(static_cast<void *>(node), sib_node, page_size_);
     } while (!grd.VerifyVersion(kNoMask));
 
     auto [found, deleted, pos] = node->CheckUniqueness(key);
@@ -922,7 +948,7 @@ class BTree
       Node *l_child,
       XGuard l_grd)
   {
-    auto *r_child = new (GetNodePage()) Node{l_child};
+    auto *r_child = new (AllocPage()) Node{l_child};
     VerIncrement<kSMOMask>(l_grd);
     const auto &[key, key_len] = l_child->GetSeparatorKey();
     l_grd = XGuard{};
@@ -932,9 +958,9 @@ class BTree
       if (stack.empty()) {  // create a new root
         auto *old_root = root_.load(kRelaxed);
         if (old_root == std::bit_cast<Node *>(l_child)) {
-          auto *root = new (GetNodePage()) Node{level, key, key_len, l_child, r_child};
+          auto *root = new (AllocPage()) Node{level, key, key_len, l_child, r_child};
           if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) break;
-          ::dbgroup::memory::Release<Page>(root);
+          FreePage(root);
         }
       }
 
@@ -978,7 +1004,7 @@ class BTree
         l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
         if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
           l_child->Remove(std::move(l_grd));
-          gc_->AddGarbage(l_child, kPageSize);
+          gc_->AddGarbage(l_child, page_size_);
         }
       }
       return;
@@ -1006,7 +1032,7 @@ class BTree
         l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
         TryMerge(stack, node, std::move(six_grd));
       }
-      gc_->AddGarbage(r_child, kPageSize);
+      gc_->AddGarbage(r_child, page_size_);
       break;
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -1038,7 +1064,7 @@ class BTree
     auto &&nodes = ConstructSingleLevel<Entry>(iter, n, level++);
     while (true) {
       n = nodes.size();
-      if (n < 2 * kNodeCapacity) break;
+      if (n < 2 * (page_size_ / kRecLen)) break;
       nodes = ConstructSingleLevel<NodeEntry>(nodes.cbegin(), n, level++);
     }
     return {level, std::move(nodes)};
@@ -1062,11 +1088,11 @@ class BTree
       -> std::vector<NodeEntry>
   {
     std::vector<NodeEntry> nodes{};
-    nodes.reserve((n / kNodeCapacity) + 1);
+    nodes.reserve((n / (page_size_ / kRecLen)) + 1);
     const auto &iter_end = std::next(iter, n);
     for (Node *prev_node = nullptr; iter < iter_end;) {
       const auto &[key, key_len] = ParseKey(*iter);
-      auto *node = new (GetNodePage()) Node{level};
+      auto *node = new (AllocPage()) Node{page_size_, align_val_, level};
       nodes.emplace_back(key, node, key_len);
       if (prev_node) {
         prev_node->LinkSiblingNode(node, key, key_len);
@@ -1090,28 +1116,37 @@ class BTree
       IsTriviallyCopyable<Payload>(),
       "A payload type must be trivially copyable (i.e., copyable with std::memcpy).");
 
-  /// @brief The maximum size of keys.
-  static constexpr size_t kMaxKeySize = component::MaxSize<Key>();
-
-  /// @brief The expected maximum size after node split.
-  static constexpr size_t kMaxSplitSize = component::kHeaderSize  //
-                                          + (kPageSize - component::kHeaderSize) * 0.75
-                                          + (kMaxKeySize + kPayLen + kWordSize) * 0.5  //
-                                          + kMaxKeySize;
-
-  static_assert(  //
-      kMaxSplitSize <= kPageSize,
-      "The page size is too small to store given key/payload pairs.");
+  void
+  VerifyPageSize()
+  {
+    constexpr size_t kMaxKeySize = component::MaxSize<Key>();
+    const size_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
+                                  + (page_size_ - component::kHeaderSize) * 0.75
+                                  + (kMaxKeySize + kPayLen + kWordSize) * 0.5
+                                  + kMaxKeySize;  // NOLINTEND
+    if (max_split_size > page_size_) {
+      throw std::runtime_error{"The page size is too small to store records."};
+    }
+    if (page_size_ < k512 || k64Ki < page_size_ || std::popcount(page_size_) > 1) {
+      throw std::runtime_error{"The page size must be 512, 1024, 2048, ..., or 65536."};
+    }
+  }
 
   /*##########################################################################*
    * Internal member variables
    *##########################################################################*/
 
+  /// @brief The page size for each node.
+  const uint16_t page_size_{};
+
+  /// @brief The alignment size for each node.
+  const uint16_t align_val_{static_cast<uint16_t>(GetAlignValOnVirtualPages(page_size_))};
+
   /// @brief A garbage collector.
   std::shared_ptr<GC> gc_{};
 
   /// @brief The root node of this tree.
-  std::atomic<Node *> root_{new (GetNodePage()) Node{}};
+  std::atomic<Node *> root_{new (AllocPage()) Node{page_size_, align_val_}};
 
   /// @brief A function for merging payloads.
   Payload (*merger_)(const Payload &, const Payload &){};

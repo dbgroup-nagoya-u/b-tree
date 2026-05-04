@@ -45,15 +45,6 @@ constexpr size_t kPtrSize = kWordSize;
 /// @brief The length of node header.
 constexpr size_t kHeaderSize = 32;
 
-/// @brief The maximum usage for invoking split.
-constexpr size_t kMaxNodeUsage = kPageSize - kHeaderSize;
-
-/// @brief The minimum usage for invoking merge.
-constexpr size_t kMinNodeUsage = (kPageSize / 8) - kHeaderSize;
-
-/// @brief The maximum usage for preventing merge.
-constexpr size_t kMaxMergedUsage = (kPageSize * 3 / 4) - kHeaderSize;
-
 /*############################################################################*
  * Internal types
  *############################################################################*/

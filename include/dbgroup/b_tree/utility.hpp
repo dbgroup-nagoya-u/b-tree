@@ -45,21 +45,8 @@ constexpr uint32_t kSMOMask = 0xFF00'0000U;
  * Tuning parameters for B+trees
  *############################################################################*/
 
-/// @brief The default page size of each node.
-constexpr size_t kPageSize = (B_TREE_PAGE_SIZE);
-
 /// @brief The maximum size of variable-length data.
 constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
-
-/*############################################################################*
- * Global types
- *############################################################################*/
-
-/**
- * @brief A struct for representing internal pages.
- *
- */
-using Page = ::dbgroup::memory::Page<kPageSize>;
 
 }  // namespace dbgroup::index::b_tree
 

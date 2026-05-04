@@ -22,12 +22,6 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   #----------------------------------------------------------------------------#
 
   set(
-    B_TREE_PAGE_SIZE
-    "1024" CACHE STRING
-    "Page size in bytes."
-  )
-
-  set(
     B_TREE_MAX_VARLEN_DATA_SIZE
     "32" CACHE STRING
     "The expected maximum size of a variable-length data."
@@ -66,7 +60,6 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
     "cxx_std_20"
   )
   target_compile_definitions(${PROJECT_NAME} INTERFACE
-    B_TREE_PAGE_SIZE=${B_TREE_PAGE_SIZE}
     B_TREE_MAX_VARLEN_DATA_SIZE=${B_TREE_MAX_VARLEN_DATA_SIZE}
   )
   target_include_directories(${PROJECT_NAME} INTERFACE

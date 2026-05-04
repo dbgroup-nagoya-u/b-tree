@@ -7,8 +7,8 @@ buildType:
       long: Include debugging information without optimizations
       buildType: Debug
       settings:
-        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
+        DBGROUP_TEST_PAGE_SIZE: 1024
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -20,8 +20,8 @@ buildType:
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
-        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
+        DBGROUP_TEST_PAGE_SIZE: 1024
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
@@ -33,11 +33,11 @@ buildType:
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
-        B_TREE_PAGE_SIZE: 1024
         B_TREE_BUILD_TESTS: ON
+        DBGROUP_TEST_PAGE_SIZE: 1024
         DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
-        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: ON
         DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST: ON
         DBGROUP_TEST_DISABLE_RECORD_MERGING: OFF

@@ -75,11 +75,15 @@ class Node
   /**
    * @brief Construct an empty node.
    *
+   * @param page_size The page size for each node.
+   * @param align_val The alignment size for each node.
    * @param level The level where this node is.
    */
   constexpr explicit Node(  //
+      const uint16_t page_size,
+      const uint16_t align_val,
       const size_t level = 0) noexcept
-      : level_{static_cast<uint8_t>(level)}
+      : page_size_{page_size}, align_val_{align_val}, level_{static_cast<uint8_t>(level)}
   {
     static_assert(                    //
         sizeof(Node) <= kHeaderSize,  //
@@ -99,21 +103,23 @@ class Node
       const size_t level,
       const Key &key,
       const size_t key_len,
-      const void *l_child,
-      const void *r_child) noexcept  //
-      : rec_num_{2},
-        offset_{static_cast<uint16_t>(kPageSize - (2 * kPtrSize + key_len))},
+      const Node *l_child,
+      const Node *r_child) noexcept  //
+      : page_size_{l_child->page_size_},
+        align_val_{l_child->align_val_},
+        rec_num_{2},
+        offset_{static_cast<uint16_t>(page_size_ - (2 * kPtrSize + key_len))},
         usage_{static_cast<uint16_t>(2 * (kMetaSize + kPtrSize) + key_len)},
         level_{static_cast<uint8_t>(level)}
   {
-    constexpr size_t kLChildOffset = kPageSize - kPtrSize;
-    constexpr size_t kRChildOffset = kPageSize - 2 * kPtrSize;
+    const size_t l_offset = page_size_ - kPtrSize;
+    const size_t r_offset = page_size_ - 2 * kPtrSize;
 
-    std::memcpy(ShiftAddr(this, kLChildOffset), &l_child, kPtrSize);
-    meta_arr_[0] = Metadata{kLChildOffset, 0, kPtrSize};
+    std::memcpy(ShiftAddr(this, l_offset), &l_child, kPtrSize);
+    meta_arr_[0] = Metadata{l_offset, 0, kPtrSize};
 
-    const auto offset = kRChildOffset - key_len;
-    std::memcpy(ShiftAddr(this, kRChildOffset), &r_child, kPtrSize);
+    const auto offset = r_offset - key_len;
+    std::memcpy(ShiftAddr(this, r_offset), &r_child, kPtrSize);
     std::memcpy(ShiftAddr(this, offset), GetSrcAddr(key), key_len);
     meta_arr_[1] = Metadata{offset, key_len, key_len + kPtrSize};
   }
@@ -126,13 +132,15 @@ class Node
    */
   explicit Node(  //
       Node *l_node)
-      : offset_{static_cast<uint16_t>(kPageSize - l_node->hk_len_)},
+      : page_size_{l_node->page_size_},
+        align_val_{l_node->align_val_},
+        offset_{static_cast<uint16_t>(page_size_ - l_node->hk_len_)},
         level_{l_node->level_},
         leftmost_{false},
         sib_node_{l_node->sib_node_}
   {
-    auto *tmp = new (&_tls_page) Node{};
-    tmp->offset_ = kPageSize - kMaxKeySize;
+    auto *tmp = AllocNode();
+    tmp->offset_ = page_size_ - kMaxKeySize;
 
     // copy split-left records to a temporary region
     const double sep_ratio = l_node->leftmost_ && sib_node_     ? 0.25  // NOLINTBEGIN
@@ -149,8 +157,10 @@ class Node
     CopyRecords(l_node, pos, l_node->rec_num_);
 
     // copy the split-left records to the left node
-    l_node->CopyFromTmpNode();
+    l_node->CopyFrom(tmp);
     l_node->sib_node_ = this;
+
+    FreeNode(tmp);
   }
 
   Node(const Node &) = delete;
@@ -231,7 +241,7 @@ class Node
       auto &&grd = sib_node_->GetGuard();
       while (true) {
         const size_t merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-        if (merged_usage >= kMaxMergedUsage) break;
+        if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
         six_grd = grd.TryLockSIX();
         if (six_grd) break;
       }
@@ -248,7 +258,7 @@ class Node
   GetSeparatorKey() const  //
       -> std::pair<Key, size_t>
   {
-    const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
+    const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       auto *key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
       std::memcpy(key, src_addr, hk_len_);
@@ -274,7 +284,7 @@ class Node
     if (hk_len_ == 0) return true;
 
     Key h_key;
-    const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
+    const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       h_key = std::bit_cast<Key>(&tls_key);
@@ -356,7 +366,7 @@ class Node
   {
     Payload out_pay{};
     const auto offset = meta_arr_[pos].GetPayOff();
-    if (offset + sizeof(Payload) <= kPageSize) [[likely]] {
+    if (offset + sizeof(Payload) <= page_size_) [[likely]] {
       std::memcpy(&out_pay, ShiftAddr(this, offset), sizeof(Payload));
     }
     return out_pay;
@@ -375,7 +385,7 @@ class Node
       const size_t pay_len = kPtrSize) const noexcept
   {
     const auto offset = meta_arr_[pos].GetPayOff();
-    if (offset + pay_len > kPageSize) [[unlikely]] {
+    if (offset + pay_len > page_size_) [[unlikely]] {
       return;  // read corrupted data due to OCC
     }
     std::memcpy(out_pay, ShiftAddr(this, offset), pay_len);
@@ -462,7 +472,7 @@ class Node
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = 0;
     } else {  // insert a new record
-      if (usage_ + total_len > kMaxNodeUsage) return kNeedSplit;
+      if (kHeaderSize + usage_ + total_len > page_size_) return kNeedSplit;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
         CleanUp();
         pos = SearchRecord(key).second;
@@ -530,7 +540,7 @@ class Node
     } else {
       meta.deleted = 1;
     }
-    return (usage_ < kMinNodeUsage) ? kNeedMerge : kCompleted;
+    return (kHeaderSize + usage_ < page_size_ / k8) ? kNeedMerge : kCompleted;
   }
 
   /*##########################################################################*
@@ -550,8 +560,8 @@ class Node
       Node *r_node,
       SIXGuard r_grd)
   {
-    auto *tmp = new (&_tls_page) Node{};
-    tmp->offset_ = kPageSize - r_node->hk_len_;
+    auto *tmp = AllocNode();
+    tmp->offset_ = page_size_ - r_node->hk_len_;
 
     size_t pos = 0;
     tmp->CopyHighKey(ShiftAddr(r_node, tmp->offset_), r_node->hk_len_);
@@ -560,11 +570,13 @@ class Node
     tmp->CopyRecords(r_node, pos, r_node->rec_num_);
     {
       auto &&x_grd = grd.UpgradeToX();
-      CopyFromTmpNode();
+      CopyFrom(tmp);
       sib_node_ = r_node->sib_node_;
       VerIncrement<kSMOMask>(x_grd);
     }
     r_node->Remove(std::move(r_grd), this);
+
+    FreeNode(tmp);
   }
 
   /**
@@ -601,12 +613,12 @@ class Node
       BulkIter &iter,
       const BulkIter &iter_end) noexcept
   {
-    constexpr size_t kLeafCapacity = kPageSize * 3 / 4;
-    constexpr size_t kInnerCapacity =
-        kPageSize - (kMaxKeySize > kPageSize / 8 ? kMaxKeySize : kPageSize / 8);
+    const size_t leaf_cap = page_size_ * 3 / 4;
+    const size_t inner_cap =
+        page_size_ - (kMaxKeySize > page_size_ / 8 ? kMaxKeySize : page_size_ / 8);
 
-    offset_ = kPageSize - kMaxKeySize;
-    const size_t max_usage = level_ > 0 ? kInnerCapacity : kLeafCapacity;
+    offset_ = page_size_ - kMaxKeySize;
+    const size_t max_usage = level_ > 0 ? inner_cap : leaf_cap;
     for (; iter < iter_end; ++iter) {
       const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
       const auto rec_len = key_len + pay_len;
@@ -638,7 +650,7 @@ class Node
     sib_node_ = sib_node;
     hk_len_ = key_len;
     usage_ += key_len;
-    std::memcpy(ShiftAddr(this, kPageSize - key_len), GetSrcAddr(key), key_len);
+    std::memcpy(ShiftAddr(this, page_size_ - key_len), GetSrcAddr(key), key_len);
   }
 
   /**
@@ -661,7 +673,8 @@ class Node
       l_node->sib_node_ = r_node;
       l_node->hk_len_ = key_len;
       l_node->usage_ += key_len;
-      std::memcpy(ShiftAddr(l_node, kPageSize - key_len), ShiftAddr(r_node, meta.offset), key_len);
+      auto *hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
+      std::memcpy(hk_addr, ShiftAddr(r_node, meta.offset), key_len);
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
       // go down to the lower level
@@ -712,7 +725,7 @@ class Node
        << "  leftmost : " << leftmost_ << "\n";
     if (hk_len_ > 0) {
       Key h_key;
-      const auto *src_addr = ShiftAddr(this, kPageSize - hk_len_);
+      const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
       if constexpr (IsVarLenData<Key>()) {
         alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
         h_key = std::bit_cast<Key>(&tls_key);
@@ -752,8 +765,30 @@ class Node
   static constexpr size_t kMaxKeySize = MaxSize<Key>();
 
   /*##########################################################################*
-   * Internal getter for header information
+   * Internal APIs
    *##########################################################################*/
+
+  /**
+   * @return A temporary node
+   */
+  [[nodiscard]]
+  auto
+  AllocNode()  //
+      -> Node *
+  {
+    auto *page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
+    return new (page) Node{page_size_, align_val_};
+  }
+
+  /**
+   * @param page A page for a temporary node.
+   */
+  void
+  FreeNode(  //
+      void *page)
+  {
+    ::operator delete(page, static_cast<std::align_val_t>(align_val_));
+  }
 
   /**
    * @brief Get the position of a search key using binary search.
@@ -781,7 +816,7 @@ class Node
       const auto meta = meta_arr_[cur_pos];
       const auto offset = meta.offset;
       const auto key_len = meta.key_len;
-      if (offset + key_len > kPageSize || key_len > kMaxKeySize) [[unlikely]] {
+      if (offset + key_len > page_size_ || key_len > kMaxKeySize) [[unlikely]] {
         break;  // read corrupted data due to OCC
       }
 
@@ -814,13 +849,15 @@ class Node
   void
   CleanUp()
   {
-    auto *tmp = new (&_tls_page) Node{};
-    tmp->offset_ = kPageSize - hk_len_;
+    auto *tmp = AllocNode();
+    tmp->offset_ = page_size_ - hk_len_;
 
     size_t pos = 0;
     tmp->CopyHighKey(ShiftAddr(this, tmp->offset_), hk_len_);
     tmp->CopyRecords(this, pos, rec_num_);
-    CopyFromTmpNode();
+    CopyFrom(tmp);
+
+    FreeNode(tmp);
   }
 
   /**
@@ -828,15 +865,15 @@ class Node
    *
    */
   void
-  CopyFromTmpNode() noexcept
+  CopyFrom(  //
+      const Node *src) noexcept
   {
-    const auto *tmp = std::bit_cast<Node *>(&_tls_page);
-    rec_num_ = tmp->rec_num_;
-    offset_ = tmp->offset_;
-    usage_ = tmp->usage_;
-    hk_len_ = tmp->hk_len_;
-    std::memcpy(meta_arr_, tmp->meta_arr_, kMetaSize * rec_num_);
-    std::memcpy(ShiftAddr(this, offset_), ShiftAddr(tmp, offset_), kPageSize - offset_);
+    rec_num_ = src->rec_num_;
+    offset_ = src->offset_;
+    usage_ = src->usage_;
+    hk_len_ = src->hk_len_;
+    std::memcpy(meta_arr_, src->meta_arr_, kMetaSize * rec_num_);
+    std::memcpy(ShiftAddr(this, offset_), ShiftAddr(src, offset_), page_size_ - offset_);
   }
 
   /**
@@ -850,7 +887,7 @@ class Node
       const void *src,
       const size_t key_len) noexcept
   {
-    std::memcpy(ShiftAddr(this, kPageSize - key_len), src, key_len);
+    std::memcpy(ShiftAddr(this, page_size_ - key_len), src, key_len);
     usage_ += key_len;
     hk_len_ = key_len;
   }
@@ -869,7 +906,7 @@ class Node
       const Node *src,
       size_t &pos,
       const size_t end_pos,
-      [[maybe_unused]] const size_t sep_size = kPageSize) noexcept
+      [[maybe_unused]] const size_t sep_size = 0) noexcept
   {
     for (; pos < end_pos; ++pos) {
       const auto meta = src->meta_arr_[pos];
@@ -900,6 +937,12 @@ class Node
    * Internal member variables
    *##########################################################################*/
 
+  /// @brief The page size for each node.
+  uint16_t page_size_{};
+
+  /// @brief The alignment size for each node.
+  uint16_t align_val_{};
+
   /// @brief The number of records in this node.
   uint16_t rec_num_{};
 
@@ -921,9 +964,6 @@ class Node
   /// @brief A flag for indicating the leftmost node.
   bool leftmost_{true};
 
-  /// @brief A blank block.
-  std::byte blank_[5]{};  // NOLINT
-
   /// @brief A lock for concurrency controls.
   Lock lock_{};
 
@@ -932,16 +972,6 @@ class Node
 
   /// @brief An actual data block (it starts with record metadata).
   Metadata meta_arr_[0];
-
-  /*##########################################################################*
-   * Thread local class variables
-   *##########################################################################*/
-  // NOLINTBEGIN
-
-  /// @brief A temporary node page for SMOs.
-  static thread_local inline Page _tls_page{};
-
-  // NOLINTEND
 };
 
 }  // namespace dbgroup::index::b_tree::component
