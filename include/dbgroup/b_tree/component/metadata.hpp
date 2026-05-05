@@ -52,10 +52,12 @@ struct Metadata {
    * @param rec_len The length of a record.
    */
   constexpr Metadata(  //
-      const size_t offset,
-      const size_t key_len,
-      const size_t rec_len) noexcept
-      : offset{offset}, key_len{key_len}, rec_len{rec_len}
+      const int32_t offset,
+      const int32_t key_len,
+      const int32_t rec_len) noexcept
+      : offset{static_cast<uint16_t>(offset)},
+        key_len{static_cast<uint16_t>(key_len)},
+        rec_len{static_cast<uint16_t>(rec_len)}
   {
   }
 
@@ -68,11 +70,14 @@ struct Metadata {
    * @param rec_len The length of a record.
    */
   constexpr Metadata(  //
-      const size_t deleted,
-      const size_t offset,
-      const size_t key_len,
-      const size_t rec_len) noexcept
-      : deleted{deleted}, offset{offset}, key_len{key_len}, rec_len{rec_len}
+      const bool deleted,
+      const int32_t offset,
+      const int32_t key_len,
+      const int32_t rec_len) noexcept
+      : deleted{deleted},
+        offset{static_cast<uint16_t>(offset)},
+        key_len{static_cast<uint16_t>(key_len)},
+        rec_len{static_cast<uint16_t>(rec_len)}
   {
   }
 
@@ -102,7 +107,7 @@ struct Metadata {
   [[nodiscard]]
   constexpr auto
   GetPayOff() const noexcept  //
-      -> size_t
+      -> int32_t
   {
     return offset + key_len;
   }
@@ -113,7 +118,7 @@ struct Metadata {
   [[nodiscard]]
   constexpr auto
   GetPayLen() const noexcept  //
-      -> size_t
+      -> int32_t
   {
     return rec_len - key_len;
   }
@@ -123,16 +128,16 @@ struct Metadata {
    *##########################################################################*/
 
   /// @brief A flag for indicating whether a record is deleted.
-  uint64_t deleted : 1 {};
+  bool deleted{};
 
   /// @brief An offset to a corresponding record.
-  uint64_t offset : 31 {};
+  uint16_t offset{};
 
   /// @brief Length of a key in a corresponding record.
-  uint64_t key_len : 16 {};
+  uint16_t key_len{};
 
   /// @brief The total length of a corresponding record.
-  uint64_t rec_len : 16 {};
+  uint16_t rec_len{};
 };
 
 /*############################################################################*
