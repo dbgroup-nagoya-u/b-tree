@@ -56,12 +56,14 @@ namespace dbgroup::index::b_tree
  * @tparam Comp A comparator class for keys.
  * @tparam GC A garbage collector for reusing node pages.
  * @tparam Lock A class for locking each node.
+ * @tparam Delta A class for representing delta updates.
  */
 template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           class GC = ::dbgroup::memory::EpochBasedGC<>,
-          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock>
+          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock,
+          class Delta = Payload>
 class BTree
 {
   /*##########################################################################*
@@ -542,15 +544,17 @@ class BTree
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
+   * @param merger A function for merging payloads.
    * @note This function is the alias of `Upsert`.
    */
   void
   Write(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))
+      const size_t key_len = sizeof(Key),
+      Payload (*merger)(const Payload &, const Payload &) = nullptr)
   {
-    Upsert(key, payload, key_len);
+    Upsert(key, payload, key_len, merger);
   }
 
   /**
@@ -559,6 +563,7 @@ class BTree
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
+   * @param merger A function for merging payloads.
    * @retval The previous payload if exist (i.e., the function acts as update).
    * @retval std::nullopt otherwise.
    * @note If a given verifier finds inconsistent record modifications, this
@@ -568,7 +573,8 @@ class BTree
   Upsert(  //
       const Key &key,
       const Payload &payload,
-      const size_t key_len = sizeof(Key))  //
+      const size_t key_len = sizeof(Key),
+      Payload (*merger)(const Payload &, const Payload &) = nullptr)  //
       -> std::optional<Payload>
   {
     [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
@@ -582,7 +588,7 @@ class BTree
       auto &&x_grd = grd.TryLockX(kInsDelMask);
       if (x_grd) {
         if (found && !deleted) {
-          out_pay = node->Update(pos, payload, merger_);
+          out_pay = node->Update(pos, payload, merger);
           break;
         }
         const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
@@ -644,19 +650,29 @@ class BTree
   /**
    * @brief Update a record using a given kay/payload pair.
    *
+   * @tparam T A delta-payload class (`Payload` or `Delta`).
    * @param key A target key.
    * @param payload A target payload.
    * @param key_len The length of a target key.
+   * @param merger A function for merging payloads.
+   * @param pay_len The length of a target payload.
    * @retval The previous payload if exist (i.e., succeeded).
    * @retval std::nullopt otherwise (i.e., failed).
    */
+  template <class T = Payload>
   auto
   Update(  //
       const Key &key,
-      const Payload &payload,
-      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
+      const std::type_identity_t<T> &payload,
+      [[maybe_unused]] const size_t key_len = sizeof(Key),
+      Payload (*merger)(const Payload &, const T &) = nullptr,
+      [[maybe_unused]] const size_t pay_len = sizeof(T))  //
       -> std::optional<Payload>
   {
+    static_assert(                                               //
+        std::is_same_v<T, Payload> || std::is_same_v<T, Delta>,  //
+        "The update API requires the pre-defined Payload or Delta types.");
+
     [[maybe_unused]] const auto &gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
@@ -670,7 +686,7 @@ class BTree
       } else {
         auto &&x_grd = grd.TryLockX(kInsDelMask);
         if (x_grd) {
-          out_pay = node->Update(pos, payload, merger_);
+          out_pay = node->Update(pos, payload, merger);
           break;
         }
       }
@@ -794,21 +810,6 @@ class BTree
     // set a new root
     auto *old_root = root_.exchange(new_root, kRelease);
     gc_->AddGarbage(old_root, page_size_);
-  }
-
-  /*##########################################################################*
-   * Public APIs
-   *##########################################################################*/
-
-  /**
-   * @brief Set a merger function for performing read-modify-write operations.
-   *
-   * @param merger A function for merging payloads.
-   */
-  constexpr void SetRecordMerger(  //
-      Payload (*merger)(const Payload &, const Payload &))
-  {
-    merger_ = merger;
   }
 
  private:
@@ -1331,9 +1332,6 @@ class BTree
 
   /// @brief The root node of this tree.
   std::atomic<Node *> root_{new (AllocPage()) Node{page_size_, align_val_}};
-
-  /// @brief A function for merging payloads.
-  Payload (*merger_)(const Payload &, const Payload &){};
 };
 
 }  // namespace dbgroup::index::b_tree

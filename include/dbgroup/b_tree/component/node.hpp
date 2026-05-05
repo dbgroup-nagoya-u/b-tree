@@ -587,12 +587,12 @@ class Node
    * @param merger A function for merging payloads.
    * @return The payload before updating.
    */
-  template <class Payload>
+  template <class Payload, class Delta>
   auto
   Update(  //
       size_t pos,
-      const Payload &payload,
-      Payload (*merger)(const Payload &, const Payload &)) noexcept  //
+      const Delta &payload,
+      Payload (*merger)(const Payload &, const Delta &)) noexcept  //
       -> Payload
   {
     Payload out_pay{};
