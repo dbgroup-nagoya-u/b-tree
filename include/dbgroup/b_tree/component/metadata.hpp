@@ -59,6 +59,23 @@ struct Metadata {
   {
   }
 
+  /**
+   * @brief Construct a new insert/update-delta metadata object.
+   *
+   * @param deleted A flag for indicating whether a record is deleted.
+   * @param offset The offset of a record position.
+   * @param key_len The length of a key.
+   * @param rec_len The length of a record.
+   */
+  constexpr Metadata(  //
+      const size_t deleted,
+      const size_t offset,
+      const size_t key_len,
+      const size_t rec_len) noexcept
+      : deleted{deleted}, offset{offset}, key_len{key_len}, rec_len{rec_len}
+  {
+  }
+
   constexpr Metadata(const Metadata &) = default;
   constexpr Metadata(Metadata &&) = default;
 

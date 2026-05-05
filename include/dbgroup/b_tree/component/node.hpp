@@ -148,6 +148,7 @@ class Node
                                                                 : 0.5;  // NOLINTEND
     const size_t sep_size = (l_node->usage_ - l_node->hk_len_) * sep_ratio;
     size_t pos = 0;
+    tmp->CopyLowRecord(l_node, pos);
     tmp->template CopyRecords<kSplit>(l_node, pos, l_node->rec_num_, sep_size);
     const auto sep_meta = l_node->meta_arr_[pos];
     tmp->CopyHighKey(ShiftAddr(l_node, sep_meta.offset), sep_meta.key_len);
@@ -533,12 +534,14 @@ class Node
   {
     auto &meta = meta_arr_[pos];
     std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
-    usage_ -= meta.rec_len + kMetaSize;
     if (level_ > 0) {
+      assert(pos > 0);
       std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1));
       --rec_num_;
+      usage_ -= meta.rec_len + kMetaSize;
     } else {
       meta.deleted = 1;
+      usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
     }
     return (kHeaderSize + usage_ < page_size_ / k8) ? kNeedMerge : kCompleted;
   }
@@ -565,6 +568,7 @@ class Node
 
     size_t pos = 0;
     tmp->CopyHighKey(ShiftAddr(r_node, tmp->offset_), r_node->hk_len_);
+    tmp->CopyLowRecord(this, pos);
     tmp->CopyRecords(this, pos, rec_num_);
     pos = 0;
     tmp->CopyRecords(r_node, pos, r_node->rec_num_);
@@ -854,6 +858,7 @@ class Node
 
     size_t pos = 0;
     tmp->CopyHighKey(ShiftAddr(this, tmp->offset_), hk_len_);
+    tmp->CopyLowRecord(this, pos);
     tmp->CopyRecords(this, pos, rec_num_);
     CopyFrom(tmp);
 
@@ -890,6 +895,26 @@ class Node
     std::memcpy(ShiftAddr(this, page_size_ - key_len), src, key_len);
     usage_ += key_len;
     hk_len_ = key_len;
+  }
+
+  /**
+   * @brief Copy a record that includes the lowest key in a node.
+   *
+   * @param src A source node page.
+   */
+  void
+  CopyLowRecord(  //
+      const Node *src,
+      size_t &pos) noexcept
+  {
+    if (src->rec_num_ == 0) return;
+
+    const auto meta = src->meta_arr_[pos++];
+    const auto rec_len = meta.rec_len;
+    offset_ -= rec_len;
+    std::memcpy(ShiftAddr(this, offset_), ShiftAddr(src, meta.offset), rec_len);
+    meta_arr_[rec_num_++] = Metadata{meta.deleted, offset_, meta.key_len, rec_len};
+    usage_ += rec_len + kMetaSize;
   }
 
   /**
