@@ -256,9 +256,11 @@ class Node
    */
   [[nodiscard]]
   auto
-  GetSeparatorKey() const  //
+  GetHighKey() const  //
       -> std::pair<Key, size_t>
   {
+    assert(hk_len_ > 0);
+
     const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       auto *key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
@@ -272,14 +274,39 @@ class Node
   }
 
   /**
+   * @return The lowest key.
+   */
+  [[nodiscard]]
+  auto
+  GetLowKey() const  //
+      -> Key
+  {
+    assert(rec_num_ > 0);
+
+    Key key;
+    const auto meta = meta_arr_[0];
+    const auto *src_addr = ShiftAddr(this, meta.offset);
+    if constexpr (IsVarLenData<Key>()) {
+      const auto key_len = meta.key_len;
+      key = ::dbgroup::memory::Allocate<KeyWOPtr>(key_len);
+      std::memcpy(key, src_addr, key_len);
+    } else {
+      std::memcpy(&key, src_addr, sizeof(Key));
+    }
+    return key;
+  }
+
+  /**
    * @param key A search key.
+   * @param reverse A flag for searching in reverse order.
    * @retval true if this node can include a given key.
    * @retval false otherwise.
    */
   [[nodiscard]]
   auto
-  Include(                            //
-      const Key &key) const noexcept  //
+  Include(  //
+      const Key &key,
+      const bool reverse = false) const noexcept  //
       -> bool
   {
     if (hk_len_ == 0) return true;
@@ -293,7 +320,48 @@ class Node
     } else {
       std::memcpy(&h_key, src_addr, sizeof(Key));
     }
-    return kLess(key, h_key);
+    return kLess(key, h_key) || (reverse && !kLess(h_key, key));
+  }
+
+  /**
+   * @brief Get the position of a search key using binary search.
+   *
+   * @param key A search key.
+   * @retval 1st: true if a target key is found.
+   * @retval 1st: false otherwise.
+   * @retval 2nd: The position of a found record.
+   * @note If no specified key is in this node, this returns the minimum
+   * position greater than the specified key.
+   */
+  [[nodiscard]]
+  auto
+  SearchRecord(                       //
+      const Key &key) const noexcept  //
+      -> std::pair<bool, size_t>
+  {
+    auto found = false;
+    auto pos = static_cast<int64_t>(level_ > 0);
+    int64_t end_pos = rec_num_ - 1;
+    while (pos <= end_pos) {
+      const int64_t cur_pos = (pos + end_pos) / 2;
+      const auto meta = meta_arr_[cur_pos];
+      const auto key_len = meta.key_len;
+      if (meta.offset + key_len > page_size_ || key_len > kMaxKeySize) [[unlikely]] {
+        break;  // read corrupted data due to OCC
+      }
+
+      const auto &index_key = GetKey(meta);
+      if (kLess(key, index_key)) {
+        end_pos = cur_pos - 1;
+      } else if (kLess(index_key, key)) {
+        pos = cur_pos + 1;
+      } else {  // the target key has been found
+        pos = cur_pos;
+        found = true;
+        break;
+      }
+    }
+    return {found, pos};
   }
 
   /**
@@ -420,24 +488,45 @@ class Node
   /**
    * @brief Get the end position of records for scanning and check it has been finished.
    *
-   * @param end_key A scan-end key.
-   * @retval 1st: true if this node includes the end key.
-   * @retval 2nd: The end position of this scan operation.
+   * @tparam kForward A flag for indicating forward or backward order.
+   * @param[in] end_key A scan-end key.
+   * @param[out] is_end A flag for indicating the last scan node.
+   * @param[out] end_pos The end position of this scan operation.
    */
-  [[nodiscard]]
-  auto
-  SearchEndPosition(                          //
-      const ScanKey &end_key) const noexcept  //
-      -> std::pair<bool, size_t>
+  template <bool kForward>
+  void
+  SearchEndPosition(  //
+      const ScanKey &end_key,
+      bool &is_end,
+      int32_t &end_pos) const noexcept
   {
-    const auto is_end = !sib_node_ || (end_key && Include(std::get<0>(*end_key)));
-    size_t end_pos = rec_num_;
-    if (is_end && end_key) {
-      const auto &[key, key_len, closed] = *end_key;
-      const auto [found, deleted, pos] = CheckUniqueness(key);
-      end_pos = pos + static_cast<size_t>(found && !deleted && closed);
+    if (!end_key) {
+      if constexpr (kForward) {
+        is_end = !sib_node_;
+        end_pos = rec_num_;
+      } else {
+        is_end = leftmost_;
+        end_pos = static_cast<int32_t>(rec_num_ == 0);
+      }
+      return;
     }
-    return {is_end, end_pos};
+
+    const auto &[key, _, closed] = *end_key;
+    if constexpr (kForward) {
+      is_end = !sib_node_ || Include(key);
+      end_pos = rec_num_;
+    } else {
+      is_end = leftmost_ || (rec_num_ > 0 && !kLess(key, GetKey(meta_arr_[0])));
+      end_pos = 0;
+    }
+    if (is_end) {
+      const auto [found, deleted, pos] = CheckUniqueness(key);
+      if constexpr (kForward) {
+        end_pos = pos + static_cast<int32_t>(found && !deleted && closed);
+      } else {
+        end_pos = pos + static_cast<int32_t>(!found || deleted || !closed);
+      }
+    }
   }
 
   /*##########################################################################*
@@ -795,55 +884,25 @@ class Node
   }
 
   /**
-   * @brief Get the position of a search key using binary search.
-   *
-   * @param key A search key.
-   * @retval 1st: true if a target key is found.
-   * @retval 1st: false otherwise.
-   * @retval 2nd: The position of a found record.
-   * @note If no specified key is in this node, this returns the minimum
-   * position greater than the specified key.
+   * @param meta Record metadata.
+   * @return The key in the target record.
    */
   [[nodiscard]]
   auto
-  SearchRecord(                       //
-      const Key &key) const noexcept  //
-      -> std::pair<bool, size_t>
+  GetKey(                                  //
+      const Metadata meta) const noexcept  //
+      -> Key
   {
-    Key index_key;
-
-    auto found = false;
-    auto pos = static_cast<int64_t>(level_ > 0);
-    int64_t end_pos = rec_num_ - 1;
-    while (pos <= end_pos) {
-      const int64_t cur_pos = (pos + end_pos) / 2;
-      const auto meta = meta_arr_[cur_pos];
-      const auto offset = meta.offset;
-      const auto key_len = meta.key_len;
-      if (offset + key_len > page_size_ || key_len > kMaxKeySize) [[unlikely]] {
-        break;  // read corrupted data due to OCC
-      }
-
-      const auto *src_addr = ShiftAddr(this, offset);
-      if constexpr (IsVarLenData<Key>()) {
-        alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
-        index_key = std::bit_cast<Key>(&tls_key);
-        std::memcpy(index_key, src_addr, key_len);
-      } else {
-        std::memcpy(&index_key, src_addr, sizeof(Key));
-      }
-
-      if (kLess(key, index_key)) {
-        end_pos = cur_pos - 1;
-      } else if (kLess(index_key, key)) {
-        pos = cur_pos + 1;
-      } else {  // the target key has been found
-        pos = cur_pos;
-        found = true;
-        break;
-      }
+    Key key;
+    const auto *src_addr = ShiftAddr(this, meta.offset);
+    if constexpr (IsVarLenData<Key>()) {
+      alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
+      key = std::bit_cast<Key>(&tls_key);
+      std::memcpy(key, src_addr, meta.key_len);
+    } else {
+      std::memcpy(&key, src_addr, sizeof(Key));
     }
-    return {found, pos};
+    return key;
   }
 
   /**
