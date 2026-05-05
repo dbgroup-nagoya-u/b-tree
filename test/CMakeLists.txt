@@ -7,13 +7,16 @@ include(FetchContent)
 FetchContent_Declare(
   index_fixtures
   GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/index-fixtures.git"
-  GIT_TAG "df8bbf8cc7471f198e786139258f68d6fde8a2f5"
+  GIT_TAG "173a5e042bfa02abb8e804471137c3e7377aa1c3"
 )
 FetchContent_MakeAvailable(index_fixtures)
 
 #------------------------------------------------------------------------------#
 # Build Unit Tests
 #------------------------------------------------------------------------------#
+
+# disable tests for not implemented APIs
+set(DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST ON CACHE BOOL "" FORCE)
 
 # define function to add unit tests in the same format
 function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
