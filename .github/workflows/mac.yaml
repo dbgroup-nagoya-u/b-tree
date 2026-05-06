@@ -1,0 +1,13 @@
+name: macOS
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  call-unit-test-workflow:
+    uses: ./.github/workflows/unit_tests.yaml
+    with:
+      os: macos-latest

@@ -4,7 +4,6 @@
     "visualstudioexptteam.vscodeintellicode",
     "ms-vscode.cpptools",
     "ms-vscode.cmake-tools",
-    "twxs.cmake",
     "ms-vscode.test-adapter-converter",
     "hbenl.vscode-test-explorer",
     "matepek.vscode-catch2-test-adapter",
@@ -14,6 +13,5 @@
     "eamodio.gitlens",
     "yzhang.markdown-all-in-one",
     "streetsidesoftware.code-spell-checker",
-    "jebbs.plantuml",
   ]
 }

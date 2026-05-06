@@ -1,7 +1,7 @@
 {
   // editor settings
   "editor.rulers": [
-    88,
+    80,
     100
   ],
   "editor.renderControlCharacters": true,
@@ -18,7 +18,15 @@
     "**/.hg": true,
     "**/CVS": true,
     "**/.DS_Store": true,
-    "**/build": true,
+    "**/build/vscode/*.*": true,
+    "**/build/vscode/bin": true,
+    "**/build/vscode/CMakeFiles": true,
+    "**/build/vscode/external": true,
+    "**/build/vscode/lib": true,
+    "**/build/vscode/test": true,
+    "**/build/vscode/Testing": true,
+    "**/build/vscode/_deps/*-build": true,
+    "**/build/vscode/_deps/*-subbuild": true,
   },
   "files.watcherExclude": {
     "**/.git/objects/**": true,
@@ -26,13 +34,26 @@
     "**/node_modules/*/**": true,
     "**/.hg/store/**": true,
   },
+  // C/C++ settings
+  "C_Cpp.codeAnalysis.runAutomatically": true,
+  "C_Cpp.codeAnalysis.clangTidy.enabled": true,
+  "C_Cpp.codeAnalysis.clangTidy.path": "/usr/bin/clang-tidy",
+  "C_Cpp.codeAnalysis.clangTidy.useBuildPath": true,
+  "C_Cpp.codeAnalysis.clangTidy.headerFilter": "${workspaceFolder}/include/*",
   // unit test settings
   "testMate.cpp.test.runtimeLimit": 60,
-  "testMate.cpp.test.executables": "build/**/test/*_test",
+  "testMate.cpp.test.executables": "build/vscode/test/*_test",
   // cmake settings
+  "[cmake]": {
+    "editor.autoIndent": "brackets",
+  },
   "cmake.configureOnOpen": true,
-  "cmake.buildDirectory": "${workspaceRoot}/build/${buildType}",
+  "cmake.buildDirectory": "${workspaceRoot}/build/vscode",
   "cmake.generator": "Ninja",
+  "cmake.options.statusBarVisibility": "compact",
+  "cmake.debugConfig": {
+    "args": []
+  },
   // Markdown settings
   "[markdown]": {
     "editor.tabSize": 4,
@@ -41,23 +62,31 @@
   "markdown.extension.list.indentationSize": "inherit",
   "markdown.extension.tableFormatter.enabled": false,
   "markdown.extension.toc.levels": "2..3",
-  // setings for PlantUML
-  "plantuml.diagramsRoot": "design_doc/figures/src",
-  "plantuml.exportOutDir": "design_doc/figures",
-  "plantuml.exportFormat": "svg",
-  "plantuml.exportSubFolder": false,
   // local dictionary
+  "cSpell.enabledFileTypes": {
+    "*": true,
+    "ignore": false
+  },
   "cSpell.words": [
     "Alfons",
     "alignas",
     "B_TREE",
+    "bugprone",
+    "bulkload",
+    "Constexpr",
+    "cppcoreguidelines",
     "ctest",
+    "dbgroup",
     "DBUILD",
     "DCMAKE",
+    "DDBGROUP",
+    "endfunction",
     "gflags",
     "GLOG",
     "gtest",
+    "hicpp",
     "Hwang",
+    "ISIX",
     "JPNP",
     "KAKENHI",
     "Kemper",
@@ -65,15 +94,22 @@
     "Kihong",
     "Kwon",
     "libgflags",
+    "malloc",
     "mimalloc",
+    "NEDO",
     "Neumann",
     "NOLINT",
+    "nullptr",
     "OLFIT",
     "pthread",
     "Scheibner",
+    "STREQUAL",
     "TODS",
+    "VARLEN",
     "Viktor",
-    "Wextra"
+    "Warray",
+    "Wextra",
+    "Wzero"
   ],
   //
   "files.associations": {
@@ -158,6 +194,13 @@
     "typeindex": "cpp",
     "valarray": "cpp",
     "*.ipp": "cpp",
-    "source_location": "cpp"
+    "source_location": "cpp",
+    "regex": "cpp",
+    "compare": "cpp",
+    "concepts": "cpp",
+    "numbers": "cpp",
+    "ranges": "cpp",
+    "semaphore": "cpp",
+    "stop_token": "cpp"
   },
 }
