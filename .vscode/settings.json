@@ -79,6 +79,7 @@
     "dbgroup",
     "DBUILD",
     "DCMAKE",
+    "DDBGROUP",
     "endfunction",
     "gflags",
     "GLOG",

@@ -16,7 +16,8 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        page-size: [1024, 2048, 4096, 8192]
+        page-size: [512, 65536]
+        merger-flag: [OFF, ON]
 
     steps:
     - name: Clone Main Repository
@@ -32,8 +33,9 @@ jobs:
       run: >
         cmake ${GITHUB_WORKSPACE}
         -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
-        -DB_TREE_PAGE_SIZE=${{matrix.page-size}}
         -DB_TREE_BUILD_TESTS=ON
+        -DDBGROUP_TEST_PAGE_SIZE=${{matrix.page-size}}
+        -DDBGROUP_TEST_DISABLE_RECORD_MERGING=${{matrix.merger-flag}}
 
     - name: Build
       shell: bash

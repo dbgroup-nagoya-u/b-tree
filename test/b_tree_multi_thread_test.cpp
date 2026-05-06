@@ -20,6 +20,9 @@
 // external sources
 #include <dbgroup/index_fixtures/index_fixture_multi_thread.hpp>
 
+// local sources
+#include "page_size_wrapper.hpp"
+
 namespace dbgroup::index::test
 {
 /*############################################################################*
@@ -27,7 +30,7 @@ namespace dbgroup::index::test
  *############################################################################*/
 
 template <class K, class V, class C>
-using Index = ::dbgroup::index::b_tree::BTree<K, V, C>;
+using Index = PageSizeWrapper<b_tree::BTree, K, V, C>;
 
 using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys

@@ -52,12 +52,12 @@ struct Metadata {
    * @param rec_len The length of a record.
    */
   constexpr Metadata(  //
-      const int32_t offset,
-      const int32_t key_len,
-      const int32_t rec_len) noexcept
-      : offset{static_cast<uint16_t>(offset)},
-        key_len{static_cast<uint16_t>(key_len)},
-        rec_len{static_cast<uint16_t>(rec_len)}
+      const uint32_t offset,
+      const size_t key_len,
+      const size_t rec_len) noexcept
+      : offset{offset},
+        key_len{static_cast<uint32_t>(key_len)},
+        rec_len{static_cast<uint32_t>(rec_len)}
   {
   }
 
@@ -70,14 +70,14 @@ struct Metadata {
    * @param rec_len The length of a record.
    */
   constexpr Metadata(  //
-      const bool deleted,
-      const int32_t offset,
-      const int32_t key_len,
-      const int32_t rec_len) noexcept
-      : deleted{deleted},
-        offset{static_cast<uint16_t>(offset)},
-        key_len{static_cast<uint16_t>(key_len)},
-        rec_len{static_cast<uint16_t>(rec_len)}
+      const uint32_t deleted,
+      const uint32_t offset,
+      const size_t key_len,
+      const size_t rec_len) noexcept
+      : deleted{static_cast<uint32_t>(deleted)},
+        offset{offset},
+        key_len{static_cast<uint32_t>(key_len)},
+        rec_len{static_cast<uint32_t>(rec_len)}
   {
   }
 
@@ -107,7 +107,7 @@ struct Metadata {
   [[nodiscard]]
   constexpr auto
   GetPayOff() const noexcept  //
-      -> int32_t
+      -> uint32_t
   {
     return offset + key_len;
   }
@@ -118,7 +118,7 @@ struct Metadata {
   [[nodiscard]]
   constexpr auto
   GetPayLen() const noexcept  //
-      -> int32_t
+      -> uint32_t
   {
     return rec_len - key_len;
   }
@@ -128,16 +128,16 @@ struct Metadata {
    *##########################################################################*/
 
   /// @brief A flag for indicating whether a record is deleted.
-  bool deleted{};
+  uint32_t deleted : 1 {};
 
   /// @brief An offset to a corresponding record.
-  uint16_t offset{};
+  uint32_t offset : 17 {};
 
   /// @brief Length of a key in a corresponding record.
-  uint16_t key_len{};
+  uint32_t key_len : 16 {};
 
   /// @brief The total length of a corresponding record.
-  uint16_t rec_len{};
+  uint32_t rec_len : 16 {};
 };
 
 /*############################################################################*

@@ -15,6 +15,12 @@ FetchContent_MakeAvailable(index_fixtures)
 # Build Unit Tests
 #------------------------------------------------------------------------------#
 
+set(
+  DBGROUP_TEST_PAGE_SIZE
+  "1024" CACHE STRING
+  "A page size for each node in unit tests."
+)
+
 # disable tests for not implemented APIs
 set(DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST ON CACHE BOOL "" FORCE)
 
@@ -31,6 +37,9 @@ function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
     $<$<STREQUAL:"${CMAKE_BUILD_TYPE}","Debug">:-g3>
     -Wall
     -Wextra
+  )
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
+    DBGROUP_TEST_PAGE_SIZE=${DBGROUP_TEST_PAGE_SIZE}
   )
   target_link_libraries(${DBGROUP_TEST_TARGET} PRIVATE
     dbgroup::b_tree

@@ -37,10 +37,10 @@ namespace dbgroup::index::b_tree::component
  *############################################################################*/
 
 /// @brief The size of record metadata.
-constexpr int32_t kMetaSize = kWordSize;
+constexpr uint32_t kMetaSize = kWordSize;
 
 /// @brief The size of pointers.
-constexpr int32_t kPtrSize = kWordSize;
+constexpr uint32_t kPtrSize = kWordSize;
 
 /// @brief The length of node header.
 constexpr uint32_t kHeaderSize = 32;
@@ -75,7 +75,7 @@ enum NodeRC {
 template <class T>
 constexpr auto
 MaxSize() noexcept  //
-    -> int32_t
+    -> uint32_t
 {
   return IsVarLenData<T>() ? kMaxVarDataSize : sizeof(T);
 }

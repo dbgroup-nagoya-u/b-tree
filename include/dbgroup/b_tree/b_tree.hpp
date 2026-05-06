@@ -84,7 +84,7 @@ class BTree
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
   using NodeEntry = std::tuple<Key, Node *, size_t>;
-  using BulkResult = std::pair<int32_t, std::vector<NodeEntry>>;
+  using BulkResult = std::pair<uint32_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
 
@@ -264,7 +264,7 @@ class BTree
      *########################################################################*/
 
     /// @brief The maximum size of keys.
-    static constexpr int32_t kMaxKeySize = component::MaxSize<Key>();
+    static constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
 
     /*########################################################################*
      * Internal utilities
@@ -358,7 +358,7 @@ class BTree
       const size_t page_size = k1Ki,
       const size_t gc_interval_micro = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
-      : page_size_{static_cast<uint16_t>(page_size)},
+      : page_size_{static_cast<uint32_t>(page_size)},
         gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
   {
     VerifyPageSize();
@@ -373,7 +373,7 @@ class BTree
   explicit BTree(  //
       const std::shared_ptr<GC> &gc,
       const size_t page_size = k1Ki)
-      : page_size_{static_cast<uint16_t>(page_size)}, gc_{gc}
+      : page_size_{static_cast<uint32_t>(page_size)}, gc_{gc}
   {
     VerifyPageSize();
   }
@@ -394,7 +394,7 @@ class BTree
    */
   ~BTree()
   {
-    std::vector<std::pair<Node *, int32_t>> stack{};
+    std::vector<std::pair<Node *, uint32_t>> stack{};
     stack.reserve(kInitialHeight);
     stack.emplace_back(root_.load(kAcquire), 0);
     while (!stack.empty()) {
@@ -759,7 +759,7 @@ class BTree
     std::vector<NodeEntry> nodes{};
     auto &&iter = entries.cbegin();
     const auto rec_num = entries.size();
-    int32_t level = 1;
+    uint32_t level = 1;
     if (thread_num <= 1 || rec_num < thread_num) {
       std::tie(level, nodes) = BulkloadWithSingleThread<Entry>(iter, rec_num);
     } else {
@@ -818,13 +818,13 @@ class BTree
    *##########################################################################*/
 
   /// @brief The initial capacity of a node stack.
-  static constexpr int32_t kInitialHeight = 8;
+  static constexpr uint32_t kInitialHeight = 8;
 
   /// @brief The size of payloads.
-  static constexpr int32_t kPayLen = sizeof(Payload);
+  static constexpr uint32_t kPayLen = sizeof(Payload);
 
   /// @brief The expected size of records.
-  static constexpr int32_t kRecLen = (sizeof(Key) + kPayLen + kWordSize);
+  static constexpr uint32_t kRecLen = (sizeof(Key) + kPayLen + kWordSize);
 
   /*##########################################################################*
    * Internal utility functions
@@ -874,7 +874,7 @@ class BTree
       const bool reverse = false)  //
       -> bool
   {
-    int32_t i = 0;
+    uint32_t i = 0;
     while (true) {
       auto *sib_node = node->GetSibNode();
       const auto removed = node->Removed();
@@ -903,7 +903,7 @@ class BTree
   SearchNode(  //
       std::vector<Node *> &stack,
       const Key &key,
-      const int32_t level = 0) const  //
+      const uint32_t level = 0) const  //
       -> std::pair<Node *, OptGuard>
   {
     Node *node;
@@ -1245,7 +1245,7 @@ class BTree
       size_t n)  //
       -> BulkResult
   {
-    int32_t level = 0;
+    uint32_t level = 0;
     auto &&nodes = ConstructSingleLevel<Entry>(iter, n, level++);
     while (true) {
       n = nodes.size();
@@ -1269,7 +1269,7 @@ class BTree
   ConstructSingleLevel(  //
       BulkIter<Entry> iter,
       const size_t n,
-      const int32_t level)  //
+      const uint32_t level)  //
       -> std::vector<NodeEntry>
   {
     std::vector<NodeEntry> nodes{};
@@ -1304,11 +1304,11 @@ class BTree
   void
   VerifyPageSize()
   {
-    constexpr int32_t kMaxKeySize = component::MaxSize<Key>();
-    const int32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
-                                   + (page_size_ - component::kHeaderSize) * 0.75
-                                   + (kMaxKeySize + kPayLen + kWordSize) * 0.5
-                                   + kMaxKeySize;  // NOLINTEND
+    constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
+    const uint32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
+                                    + (page_size_ - component::kHeaderSize) * 0.75
+                                    + (kMaxKeySize + kPayLen + kWordSize) * 0.5
+                                    + kMaxKeySize;  // NOLINTEND
     if (max_split_size > page_size_) {
       throw std::runtime_error{"The page size is too small to store records."};
     }
@@ -1322,10 +1322,10 @@ class BTree
    *##########################################################################*/
 
   /// @brief The page size for each node.
-  const uint16_t page_size_{};
+  const uint32_t page_size_{};
 
   /// @brief The alignment size for each node.
-  const uint16_t align_val_{static_cast<uint16_t>(GetAlignValOnVirtualPages(page_size_))};
+  const uint32_t align_val_{static_cast<uint32_t>(GetAlignValOnVirtualPages(page_size_))};
 
   /// @brief A garbage collector.
   std::shared_ptr<GC> gc_{};
