@@ -485,7 +485,8 @@ class BTree
       begin_pos = 0;
     }
 
-    return Iterator{this, node, begin_pos, end_key, std::move(gc_grd)};
+    constexpr bool kForward = true;
+    return Iterator<kForward>{this, node, begin_pos, end_key, std::move(gc_grd)};
   }
 
   /**
