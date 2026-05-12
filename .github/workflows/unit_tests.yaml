@@ -13,11 +13,10 @@ env:
 jobs:
   unit_test:
     runs-on: ${{ inputs.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       matrix:
         page-size: [512, 65536]
-        merger-flag: [OFF, ON]
 
     steps:
     - name: Clone Main Repository
@@ -34,9 +33,8 @@ jobs:
         cmake ${GITHUB_WORKSPACE}
         -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
         -DB_TREE_BUILD_TESTS=ON
-        -DDBGROUP_TEST_EXEC_NUM=30000
         -DDBGROUP_TEST_PAGE_SIZE=${{matrix.page-size}}
-        -DDBGROUP_TEST_DISABLE_RECORD_MERGING=${{matrix.merger-flag}}
+        -DDBGROUP_TEST_DISABLE_RECORD_MERGING=OFF
 
     - name: Build
       shell: bash

@@ -8,6 +8,19 @@
   "editor.renderWhitespace": "all",
   "editor.formatOnSave": true,
   "editor.tabSize": 2,
+  "editor.inlayHints.enabled": "off",
+  "editor.semanticHighlighting.enabled": true,
+  "editor.semanticTokenColorCustomizations": {
+    "enabled": true,
+    "rules": {
+      "type": {
+        "foreground": "#CB4B16"
+      },
+      "class": {
+        "foreground": "#CB4B16"
+      },
+    }
+  },
   // files settings
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
@@ -35,11 +48,14 @@
     "**/.hg/store/**": true,
   },
   // C/C++ settings
-  "C_Cpp.codeAnalysis.runAutomatically": true,
-  "C_Cpp.codeAnalysis.clangTidy.enabled": true,
-  "C_Cpp.codeAnalysis.clangTidy.path": "/usr/bin/clang-tidy",
-  "C_Cpp.codeAnalysis.clangTidy.useBuildPath": true,
-  "C_Cpp.codeAnalysis.clangTidy.headerFilter": "${workspaceFolder}/include/*",
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "clangd.path": "/usr/bin/clangd",
+  "clangd.arguments": [
+    "--clang-tidy",
+    "--compile-commands-dir=${workspaceFolder}/build/vscode",
+    "--header-insertion=never",
+    "--background-index",
+  ],
   // unit test settings
   "testMate.cpp.test.runtimeLimit": 60,
   "testMate.cpp.test.executables": "build/vscode/test/*_test",
@@ -52,7 +68,9 @@
   "cmake.generator": "Ninja",
   "cmake.options.statusBarVisibility": "compact",
   "cmake.debugConfig": {
-    "args": []
+    "args": [],
+    "MIMode": "gdb",
+    "miDebuggerPath": "/usr/bin/gdb",
   },
   // Markdown settings
   "[markdown]": {

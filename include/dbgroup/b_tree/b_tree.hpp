@@ -26,7 +26,6 @@
 #include <optional>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -78,7 +77,6 @@ class BTree
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
 
-  using RC = component::NodeRC;
   using Node = component::Node<Key, Comp, Lock>;
 
   template <class Entry>
@@ -90,7 +88,7 @@ class BTree
 
  public:
   /*##########################################################################*
-   * Public types
+   * Public type declarations
    *##########################################################################*/
 
   /**
@@ -100,248 +98,7 @@ class BTree
    * @note The APIs of this class are not thread-safe.
    */
   template <bool kForward = true>
-  class Iterator
-  {
-   public:
-    /*########################################################################*
-     * Public constructors and assignment operators
-     *########################################################################*/
-
-    constexpr Iterator() = default;
-
-    /**
-     * @brief Construct a new iterator object.
-     *
-     * @param index A source index structure.
-     * @param node The current scanning node.
-     * @param begin_pos The begin position for scanning.
-     * @param end_key  The end key given from a user.
-     * @param gc_grd  The guard instance for preventing GC from reclaiming nodes.
-     * @param stack A stack of traversed nodes.
-     */
-    Iterator(  //
-        BTree *index,
-        Node *node,
-        const int32_t begin_pos,
-        const ScanKey &end_key,
-        GCGuard gc_grd,
-        std::vector<std::tuple<Node *, int32_t, OptGuard>> stack = {})
-        : node_{node},
-          pos_{begin_pos},
-          index_{index},
-          end_key_{end_key},
-          gc_grd_{std::move(gc_grd)},
-          stack_{std::move(stack)}
-    {
-      node_->template SearchEndPosition<kForward>(end_key_, is_end_, end_pos_);
-      FetchRecord();
-    }
-
-    Iterator(  //
-        Iterator &&obj) noexcept
-        : node_{std::exchange(obj.node_, nullptr)},
-          pos_{obj.pos_},
-          end_pos_{obj.end_pos_},
-          is_end_{obj.is_end_},
-          payload_{obj.payload_},
-          index_{obj.index_},
-          end_key_{obj.end_key_},
-          gc_grd_{std::move(obj.gc_grd_)},
-          stack_{std::move(obj.stack_)}
-    {
-      std::memcpy(key_, obj.key_, kMaxKeySize);
-    }
-
-    auto
-    operator=(                    //
-        Iterator &&rhs) noexcept  //
-        -> Iterator &
-    {
-      node_ = std::exchange(rhs.node_, nullptr);
-      pos_ = rhs.pos_;
-      end_pos_ = rhs.end_pos_;
-      is_end_ = rhs.is_end_;
-      payload_ = rhs.payload_;
-      index_ = rhs.index_;
-      end_key_ = rhs.end_key_;
-      gc_grd_ = std::move(rhs.gc_grd_);
-      stack_ = std::move(rhs.stack_);
-      std::memcpy(key_, rhs.key_, kMaxKeySize);
-      return *this;
-    }
-
-    // forbit copying
-    Iterator(const Iterator &) = delete;
-    auto operator=(const Iterator &) -> Iterator & = delete;
-
-    /*########################################################################*
-     * Public destructors
-     *########################################################################*/
-
-    ~Iterator()
-    {
-      if (index_ && node_) {
-        index_->FreePage(node_);
-      }
-    }
-
-    /*########################################################################*
-     * Public operators for iterators
-     *########################################################################*/
-
-    /**
-     * @retval true if this iterator indicates a live record.
-     * @retval false otherwise.
-     */
-    [[nodiscard]]
-    constexpr explicit
-    operator bool() const noexcept
-    {
-      return node_;
-    }
-
-    /**
-     * @retval 1st: A key indicated by the iterator.
-     * @retval 2nd: A payload indicated by the iterator.
-     */
-    [[nodiscard]]
-    constexpr auto
-    operator*() const noexcept  //
-        -> std::pair<Key, Payload>
-    {
-      return {GetKey(), payload_};
-    }
-
-    /**
-     * @brief Forward the iterator.
-     *
-     */
-    void
-    operator++()
-    {
-      if constexpr (kForward) {
-        ++pos_;
-      } else {
-        --pos_;
-      }
-      FetchRecord();
-    }
-
-    /*########################################################################*
-     * Public APIs
-     *########################################################################*/
-
-    /**
-     * @return A key indicated by the iterator.
-     */
-    [[nodiscard]]
-    constexpr auto
-    GetKey() const noexcept  //
-        -> Key
-    {
-      auto *addr = std::bit_cast<void *>(&key_[0]);
-      if constexpr (IsVarLenData<Key>()) {
-        return std::bit_cast<Key>(addr);
-      } else {
-        return *std::bit_cast<Key *>(addr);
-      }
-    }
-
-    /**
-     * @return A payload indicated by the iterator.
-     */
-    [[nodiscard]]
-    constexpr auto
-    GetPayload() const noexcept  //
-        -> Payload
-    {
-      return payload_;
-    }
-
-   private:
-    /*########################################################################*
-     * Internal constants
-     *########################################################################*/
-
-    /// @brief The maximum size of keys.
-    static constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
-
-    /*########################################################################*
-     * Internal utilities
-     *########################################################################*/
-
-    /**
-     * @brief Fetch the record of the current position from a node.
-     *
-     */
-    void
-    FetchRecord()
-    {
-      while (true) {
-        if constexpr (kForward) {
-          if (pos_ < end_pos_) {
-            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
-            ++pos_;
-            continue;
-          }
-        } else {
-          if (pos_ >= end_pos_) {
-            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
-            --pos_;
-            continue;
-          }
-        }
-
-        if (is_end_) {
-          index_->FreePage(node_);
-          node_ = nullptr;
-          return;
-        }
-
-        if constexpr (kForward) {
-          pos_ = index_->SiblingScan(node_);
-        } else {
-          pos_ = index_->SiblingScanReverse(node_, stack_);
-        }
-        node_->template SearchEndPosition<kForward>(end_key_, is_end_, end_pos_);
-      }
-    }
-
-    /*########################################################################*
-     * Internal member variables
-     *########################################################################*/
-
-    /// @brief The current scanning node.
-    Node *node_{};
-
-    /// @brief The position of the current record.
-    int32_t pos_{};
-
-    /// @brief The end position of records in the node.
-    int32_t end_pos_{};
-
-    /// @brief A flag for indicating a current node is rightmost in scan-range.
-    bool is_end_{};
-
-    /// @brief The key of the current record.
-    alignas(alignof(KeyWOPtr)) std::byte key_[kMaxKeySize]{};
-
-    /// @brief The payload of the current record.
-    Payload payload_{};
-
-    /// @brief A source index structure.
-    const BTree *index_{};
-
-    /// @brief The end key given from a user.
-    ScanKey end_key_{};
-
-    /// @brief The guard instance for preventing GC from reclaiming nodes.
-    GCGuard gc_grd_{};
-
-    /// @brief A stack of traversed nodes.
-    /// @note This filed is only used for backward scan.
-    std::vector<std::tuple<Node *, int32_t, OptGuard>> stack_{};
-  };
+  class Iterator;
 
   /*##########################################################################*
    * Public constructors and assignment operators
@@ -592,8 +349,7 @@ class BTree
           out_pay = node->Update(pos, payload, merger);
           break;
         }
-        const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
-        if (rc == RC::kCompleted) {
+        if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
           VerIncrement<kInsDelMask>(x_grd);
           break;
         }
@@ -634,8 +390,7 @@ class BTree
       } else {
         auto &&x_grd = grd.TryLockX(kInsDelMask);
         if (x_grd) {
-          const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
-          if (rc == RC::kCompleted) {
+          if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
             VerIncrement<kInsDelMask>(x_grd);
             out_pay = std::nullopt;
             break;
@@ -724,10 +479,10 @@ class BTree
         auto &&x_grd = grd.TryLockX(kInsDelMask);
         if (x_grd) {
           Payload tmp_pay{};
-          const auto rc = node->Delete(pos, &tmp_pay);
+          const auto need_merge = node->Delete(pos, &tmp_pay);
           out_pay = tmp_pay;
           VerIncrement<kInsDelMask>(x_grd);
-          if (rc == RC::kNeedMerge) {
+          if (need_merge) {
             TryMerge(stack, node, x_grd.DowngradeToSIX());
           }
           break;
@@ -812,6 +567,254 @@ class BTree
     auto *old_root = root_.exchange(new_root, kRelease);
     gc_->AddGarbage(old_root, page_size_);
   }
+
+  /*##########################################################################*
+   * Public type definitions
+   *##########################################################################*/
+
+  template <bool kForward>
+  class Iterator
+  {
+   public:
+    /*########################################################################*
+     * Public constructors and assignment operators
+     *########################################################################*/
+
+    constexpr Iterator() = default;
+
+    /**
+     * @brief Construct a new iterator object.
+     *
+     * @param index A source index structure.
+     * @param node The current scanning node.
+     * @param begin_pos The begin position for scanning.
+     * @param end_key  The end key given from a user.
+     * @param gc_grd  The guard instance for preventing GC from reclaiming nodes.
+     * @param stack A stack of traversed nodes.
+     */
+    Iterator(  //
+        BTree *index,
+        Node *node,
+        const int32_t begin_pos,
+        const ScanKey &end_key,
+        GCGuard gc_grd,
+        std::vector<std::tuple<Node *, int32_t, OptGuard>> stack = {})
+        : node_{node},
+          pos_{begin_pos},
+          index_{index},
+          end_key_{end_key},
+          gc_grd_{std::move(gc_grd)},
+          stack_{std::move(stack)}
+    {
+      node_->template SearchEndPosition<kForward>(end_key_, is_end_, end_pos_);
+      FetchRecord();
+    }
+
+    Iterator(  //
+        Iterator &&obj) noexcept
+        : node_{std::exchange(obj.node_, nullptr)},
+          pos_{obj.pos_},
+          end_pos_{obj.end_pos_},
+          is_end_{obj.is_end_},
+          payload_{obj.payload_},
+          index_{obj.index_},
+          end_key_{obj.end_key_},
+          gc_grd_{std::move(obj.gc_grd_)},
+          stack_{std::move(obj.stack_)}
+    {
+      std::memcpy(key_, obj.key_, kMaxKeySize);
+    }
+
+    auto
+    operator=(                    //
+        Iterator &&rhs) noexcept  //
+        -> Iterator &
+    {
+      node_ = std::exchange(rhs.node_, nullptr);
+      pos_ = rhs.pos_;
+      end_pos_ = rhs.end_pos_;
+      is_end_ = rhs.is_end_;
+      payload_ = rhs.payload_;
+      index_ = rhs.index_;
+      end_key_ = rhs.end_key_;
+      gc_grd_ = std::move(rhs.gc_grd_);
+      stack_ = std::move(rhs.stack_);
+      std::memcpy(key_, rhs.key_, kMaxKeySize);
+      return *this;
+    }
+
+    // forbit copying
+    Iterator(const Iterator &) = delete;
+    auto operator=(const Iterator &) -> Iterator & = delete;
+
+    /*########################################################################*
+     * Public destructors
+     *########################################################################*/
+
+    ~Iterator()
+    {
+      if (index_ && node_) {
+        index_->FreePage(node_);
+      }
+    }
+
+    /*########################################################################*
+     * Public operators for iterators
+     *########################################################################*/
+
+    /**
+     * @retval true if this iterator indicates a live record.
+     * @retval false otherwise.
+     */
+    [[nodiscard]]
+    constexpr explicit
+    operator bool() const noexcept
+    {
+      return node_;
+    }
+
+    /**
+     * @retval 1st: A key indicated by the iterator.
+     * @retval 2nd: A payload indicated by the iterator.
+     */
+    [[nodiscard]]
+    constexpr auto
+    operator*() const noexcept  //
+        -> std::pair<Key, Payload>
+    {
+      return {GetKey(), payload_};
+    }
+
+    /**
+     * @brief Forward the iterator.
+     *
+     */
+    void
+    operator++()
+    {
+      if constexpr (kForward) {
+        ++pos_;
+      } else {
+        --pos_;
+      }
+      FetchRecord();
+    }
+
+    /*########################################################################*
+     * Public APIs
+     *########################################################################*/
+
+    /**
+     * @return A key indicated by the iterator.
+     */
+    [[nodiscard]]
+    constexpr auto
+    GetKey() const noexcept  //
+        -> Key
+    {
+      auto *addr = std::bit_cast<void *>(&key_[0]);
+      if constexpr (IsVarLenData<Key>()) {
+        return std::bit_cast<Key>(addr);
+      } else {
+        return *std::bit_cast<Key *>(addr);
+      }
+    }
+
+    /**
+     * @return A payload indicated by the iterator.
+     */
+    [[nodiscard]]
+    constexpr auto
+    GetPayload() const noexcept  //
+        -> Payload
+    {
+      return payload_;
+    }
+
+   private:
+    /*########################################################################*
+     * Internal constants
+     *########################################################################*/
+
+    /// @brief The maximum size of keys.
+    static constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
+
+    /*########################################################################*
+     * Internal utilities
+     *########################################################################*/
+
+    /**
+     * @brief Fetch the record of the current position from a node.
+     *
+     */
+    void
+    FetchRecord()
+    {
+      while (true) {
+        if constexpr (kForward) {
+          if (pos_ < end_pos_) {
+            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
+            ++pos_;
+            continue;
+          }
+        } else {
+          if (pos_ >= end_pos_) {
+            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
+            --pos_;
+            continue;
+          }
+        }
+
+        if (is_end_) {
+          index_->FreePage(node_);
+          node_ = nullptr;
+          return;
+        }
+
+        if constexpr (kForward) {
+          pos_ = index_->SiblingScan(node_);
+        } else {
+          pos_ = index_->SiblingScanReverse(node_, stack_);
+        }
+        node_->template SearchEndPosition<kForward>(end_key_, is_end_, end_pos_);
+      }
+    }
+
+    /*########################################################################*
+     * Internal member variables
+     *########################################################################*/
+
+    /// @brief The current scanning node.
+    Node *node_{};
+
+    /// @brief The position of the current record.
+    int32_t pos_{};
+
+    /// @brief The end position of records in the node.
+    int32_t end_pos_{};
+
+    /// @brief A flag for indicating a current node is rightmost in scan-range.
+    bool is_end_{};
+
+    /// @brief The key of the current record.
+    alignas(alignof(KeyWOPtr)) std::byte key_[kMaxKeySize]{};
+
+    /// @brief The payload of the current record.
+    Payload payload_{};
+
+    /// @brief A source index structure.
+    const BTree *index_{};
+
+    /// @brief The end key given from a user.
+    ScanKey end_key_{};
+
+    /// @brief The guard instance for preventing GC from reclaiming nodes.
+    GCGuard gc_grd_{};
+
+    /// @brief A stack of traversed nodes.
+    /// @note This filed is only used for backward scan.
+    std::vector<std::tuple<Node *, int32_t, OptGuard>> stack_{};
+  };
 
  private:
   /*##########################################################################*
@@ -915,11 +918,6 @@ class BTree
         node = stack.back();
         stack.pop_back();
       }
-      if (node->GetLevel() < level) {
-        stack.clear();  // the stack has expired nodes
-        continue;
-      }
-
       while (true) {
         Node *child{};
         auto &&grd = node->GetGuard();
@@ -1155,8 +1153,7 @@ class BTree
       assert(!found);
       auto &&x_grd = grd.TryLockX(kInsDelMask);
       if (!x_grd) continue;  // another thread may insert the key
-      const auto rc = node->Insert(pos, found, key, key_len, &r_child, kWordSize);
-      if (rc == RC::kCompleted) {
+      if (node->Insert(pos, found, key, key_len, &r_child, kWordSize)) {
         VerIncrement<kInsDelMask>(x_grd);
         break;
       }
@@ -1208,15 +1205,15 @@ class BTree
       if (!x_grd) continue;  // another thread may modify a node
 
       Node *r_child{};
-      const auto rc = node->Delete(pos, &r_child);
+      const auto need_merge = node->Delete(pos, &r_child);
       VerIncrement<kInsDelMask>(x_grd);
-      if (rc == RC::kCompleted) {
-        x_grd = XGuard{};
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
-      } else {
+      if (need_merge) {
         auto &&six_grd = x_grd.DowngradeToSIX();
         l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
         TryMerge(stack, node, std::move(six_grd));
+      } else {
+        x_grd = XGuard{};
+        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
       }
       gc_->AddGarbage(r_child, page_size_);
       break;

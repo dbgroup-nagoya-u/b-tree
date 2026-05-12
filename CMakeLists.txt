@@ -34,19 +34,19 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   # use multi-threads
   find_package(Threads)
 
-  # use our thread ID manager
+  # use our C++ utilities
   FetchContent_Declare(
     cpp-utility
     GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/cpp-utility.git"
-    GIT_TAG "4d0e2367eb21f7495e0433dc36766a316d49ce41"
+    GIT_TAG "65210c10893227e2276009bcf95161501d4ded11"
   )
   FetchContent_MakeAvailable(cpp-utility)
 
-   # use our local GC
+   # use our GC library
   FetchContent_Declare(
     memory-manager
     GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/memory-manager.git"
-    GIT_TAG "f28e24d781d519a29882da0e1c62448c7ba4a6fa"
+    GIT_TAG "7b08410443ece0f6b99a97bd342c0f7d47a1488d"
   )
   FetchContent_MakeAvailable(memory-manager)
 

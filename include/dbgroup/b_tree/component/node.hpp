@@ -43,7 +43,9 @@
 // NOLINTBEGIN
 // we intentionally use a zero-length array for record metadata
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wzero-length-bounds"
+#endif
 // NOLINTEND
 
 namespace dbgroup::index::b_tree::component
@@ -542,8 +544,8 @@ class Node
    * @param key_len The length of a target key.
    * @param payload A target payload to be written.
    * @param pay_len The length of a target payload.
-   * @retval kCompleted if a record is written.
-   * @retval kNeedSplit if this node should be split before inserting a record.
+   * @retval true if a record is written.
+   * @retval false if this node should be split before inserting a record.
    */
   auto
   Insert(  //
@@ -553,7 +555,7 @@ class Node
       const size_t key_len,
       const void *payload,
       const size_t pay_len) noexcept  //
-      -> NodeRC
+      -> bool
   {
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
@@ -562,7 +564,7 @@ class Node
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = false;
     } else {  // insert a new record
-      if (kHeaderSize + usage_ + total_len > page_size_) return kNeedSplit;
+      if (kHeaderSize + usage_ + total_len > page_size_) return false;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
         CleanUp();
         pos = SearchRecord(key).second;
@@ -577,7 +579,7 @@ class Node
       ++rec_num_;
     }
     usage_ += total_len;
-    return kCompleted;
+    return true;
   }
 
   /**
@@ -613,14 +615,14 @@ class Node
    *
    * @param[in] pos A position where a target record is.
    * @param[out] out_pay An instance for storing an output payload.
-   * @retval kNeedMerge if this node should be merged.
-   * @retval kCompleted otherwise.
+   * @retval true if this node should be merged.
+   * @retval false otherwise.
    */
   auto
   Delete(  //
       const int32_t pos,
       void *out_pay) noexcept  //
-      -> NodeRC
+      -> bool
   {
     auto &meta = meta_arr_[pos];
     std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
@@ -633,7 +635,7 @@ class Node
       meta.deleted = true;
       usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
     }
-    return (kHeaderSize + usage_ < page_size_ / k8) ? kNeedMerge : kCompleted;
+    return kHeaderSize + usage_ < page_size_ / k8;
   }
 
   /*##########################################################################*

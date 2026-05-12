@@ -18,7 +18,6 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_COMMON_HPP_
 
 // C++ standard libraries
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -44,25 +43,6 @@ constexpr uint32_t kPtrSize = kWordSize;
 
 /// @brief The length of node header.
 constexpr uint32_t kHeaderSize = 32;
-
-/*############################################################################*
- * Internal types
- *############################################################################*/
-
-/**
- * @brief Internal return codes for representing results of node modification.
- *
- */
-enum NodeRC {
-  kCompleted = 0,
-  kKeyNotInserted = -100,
-  kKeyAlreadyDeleted,
-  kKeyAlreadyInserted,
-  kNeedSplit,
-  kNeedMerge,
-  kAbortMerge,
-  kNeedRetry,
-};
 
 /*############################################################################*
  * Global utility functions
