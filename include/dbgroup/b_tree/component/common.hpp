@@ -18,7 +18,6 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_COMMON_HPP_
 
 // C++ standard libraries
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 

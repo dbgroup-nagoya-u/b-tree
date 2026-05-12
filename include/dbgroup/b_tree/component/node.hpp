@@ -43,7 +43,9 @@
 // NOLINTBEGIN
 // we intentionally use a zero-length array for record metadata
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wzero-length-bounds"
+#endif
 // NOLINTEND
 
 namespace dbgroup::index::b_tree::component

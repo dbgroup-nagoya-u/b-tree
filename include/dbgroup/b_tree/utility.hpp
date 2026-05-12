@@ -19,6 +19,7 @@
 
 // C++ standard libraries
 #include <cstddef>
+#include <cstdint>
 
 namespace dbgroup::index::b_tree
 {
