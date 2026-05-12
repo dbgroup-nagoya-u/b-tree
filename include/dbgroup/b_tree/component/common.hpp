@@ -45,25 +45,6 @@ constexpr uint32_t kPtrSize = kWordSize;
 constexpr uint32_t kHeaderSize = 32;
 
 /*############################################################################*
- * Internal types
- *############################################################################*/
-
-/**
- * @brief Internal return codes for representing results of node modification.
- *
- */
-enum NodeRC {
-  kCompleted = 0,
-  kKeyNotInserted = -100,
-  kKeyAlreadyDeleted,
-  kKeyAlreadyInserted,
-  kNeedSplit,
-  kNeedMerge,
-  kAbortMerge,
-  kNeedRetry,
-};
-
-/*############################################################################*
  * Global utility functions
  *############################################################################*/
 

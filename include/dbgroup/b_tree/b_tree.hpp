@@ -77,7 +77,6 @@ class BTree
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
 
-  using RC = component::NodeRC;
   using Node = component::Node<Key, Comp, Lock>;
 
   template <class Entry>
@@ -591,8 +590,7 @@ class BTree
           out_pay = node->Update(pos, payload, merger);
           break;
         }
-        const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
-        if (rc == RC::kCompleted) {
+        if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
           VerIncrement<kInsDelMask>(x_grd);
           break;
         }
@@ -633,8 +631,7 @@ class BTree
       } else {
         auto &&x_grd = grd.TryLockX(kInsDelMask);
         if (x_grd) {
-          const auto rc = node->Insert(pos, found, key, key_len, &payload, kPayLen);
-          if (rc == RC::kCompleted) {
+          if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
             VerIncrement<kInsDelMask>(x_grd);
             out_pay = std::nullopt;
             break;
@@ -723,10 +720,10 @@ class BTree
         auto &&x_grd = grd.TryLockX(kInsDelMask);
         if (x_grd) {
           Payload tmp_pay{};
-          const auto rc = node->Delete(pos, &tmp_pay);
+          const auto need_merge = node->Delete(pos, &tmp_pay);
           out_pay = tmp_pay;
           VerIncrement<kInsDelMask>(x_grd);
-          if (rc == RC::kNeedMerge) {
+          if (need_merge) {
             TryMerge(stack, node, x_grd.DowngradeToSIX());
           }
           break;
@@ -914,11 +911,6 @@ class BTree
         node = stack.back();
         stack.pop_back();
       }
-      if (node->GetLevel() < level) {
-        stack.clear();  // the stack has expired nodes
-        continue;
-      }
-
       while (true) {
         Node *child{};
         auto &&grd = node->GetGuard();
@@ -1154,8 +1146,7 @@ class BTree
       assert(!found);
       auto &&x_grd = grd.TryLockX(kInsDelMask);
       if (!x_grd) continue;  // another thread may insert the key
-      const auto rc = node->Insert(pos, found, key, key_len, &r_child, kWordSize);
-      if (rc == RC::kCompleted) {
+      if (node->Insert(pos, found, key, key_len, &r_child, kWordSize)) {
         VerIncrement<kInsDelMask>(x_grd);
         break;
       }
@@ -1207,15 +1198,15 @@ class BTree
       if (!x_grd) continue;  // another thread may modify a node
 
       Node *r_child{};
-      const auto rc = node->Delete(pos, &r_child);
+      const auto need_merge = node->Delete(pos, &r_child);
       VerIncrement<kInsDelMask>(x_grd);
-      if (rc == RC::kCompleted) {
-        x_grd = XGuard{};
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
-      } else {
+      if (need_merge) {
         auto &&six_grd = x_grd.DowngradeToSIX();
         l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
         TryMerge(stack, node, std::move(six_grd));
+      } else {
+        x_grd = XGuard{};
+        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
       }
       gc_->AddGarbage(r_child, page_size_);
       break;
