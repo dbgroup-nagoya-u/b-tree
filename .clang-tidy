@@ -49,7 +49,7 @@ readability-*,
 -readability-identifier-length,
 performance-*,'
 WarningsAsErrors: ''
-HeaderFilterRegex: '(include|src|test)/.*\.hpp$'
+HeaderFilterRegex: '.*include/.*'
 AnalyzeTemporaryDtors: false
 FormatStyle:     none
 CheckOptions:

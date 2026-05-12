@@ -37,7 +37,7 @@ constexpr size_t kPageSize = (DBGROUP_TEST_PAGE_SIZE);
  * Fixture definitions
  *############################################################################*/
 
-template <template <class Key, class Payload, class Comp> class IndexBase,
+template <template <class Key, class Payload, class Comp, class... Others> class IndexBase,
           class Key,
           class Payload,
           class Comp>

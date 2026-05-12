@@ -1,9 +1,9 @@
 {
   "recommendations": [
     "ms-vscode-remote.vscode-remote-extensionpack",
-    "visualstudioexptteam.vscodeintellicode",
     "ms-vscode.cpptools",
     "ms-vscode.cmake-tools",
+    "llvm-vs-code-extensions.vscode-clangd",
     "ms-vscode.test-adapter-converter",
     "hbenl.vscode-test-explorer",
     "matepek.vscode-catch2-test-adapter",
@@ -12,6 +12,7 @@
     "donjayamanne.githistory",
     "eamodio.gitlens",
     "yzhang.markdown-all-in-one",
+    "shd101wyy.markdown-preview-enhanced",
     "streetsidesoftware.code-spell-checker",
   ]
 }
