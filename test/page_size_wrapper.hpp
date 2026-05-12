@@ -32,6 +32,7 @@ namespace dbgroup::index::test
  *############################################################################*/
 
 constexpr size_t kPageSize = (DBGROUP_TEST_PAGE_SIZE);
+constexpr size_t kGCIntervalMS = 10;
 
 /*############################################################################*
  * Fixture definitions
@@ -164,7 +165,7 @@ class PageSizeWrapper
    * Internal member variables
    *##########################################################################*/
 
-  std::unique_ptr<Index> index_{std::make_unique<Index>(kPageSize)};
+  std::unique_ptr<Index> index_{std::make_unique<Index>(kPageSize, kGCIntervalMS)};
 };
 
 }  // namespace dbgroup::index::test
