@@ -10,7 +10,7 @@ set(DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   index_fixtures
   GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/index-fixtures.git"
-  GIT_TAG "173a5e042bfa02abb8e804471137c3e7377aa1c3"
+  GIT_TAG "8d58d0cf2ea7cf16c9eb61ddb2d29d6249b773d8"
 )
 FetchContent_MakeAvailable(index_fixtures)
 
@@ -42,12 +42,12 @@ function(ADD_DBGROUP_TEST DBGROUP_TEST_TARGET)
     DBGROUP_TEST_PAGE_SIZE=${DBGROUP_TEST_PAGE_SIZE}
   )
   target_link_libraries(${DBGROUP_TEST_TARGET} PRIVATE
-    dbgroup::b_tree
+    dbgroup::${PROJECT_NAME}
     dbgroup::index_fixtures
   )
   add_test(NAME ${DBGROUP_TEST_TARGET} COMMAND $<TARGET_FILE:${DBGROUP_TEST_TARGET}>)
 endfunction()
 
 # add unit tests to build targets
-ADD_DBGROUP_TEST("b_tree_test")
-ADD_DBGROUP_TEST("b_tree_multi_thread_test")
+ADD_DBGROUP_TEST("single_thread_test")
+ADD_DBGROUP_TEST("multi_thread_test")

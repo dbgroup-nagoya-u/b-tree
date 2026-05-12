@@ -17,7 +17,7 @@
 // the corresponding header
 #include "dbgroup/b_tree/b_tree.hpp"
 
-// external sources
+// external libraries
 #include <dbgroup/index_fixtures/index_fixture.hpp>
 
 // local sources
