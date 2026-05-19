@@ -344,8 +344,7 @@ class BTree
     while (true) {
       auto&& [node, grd] = SearchNode(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      auto&& x_grd = grd.TryLockX(kInsDelMask);
-      if (x_grd) {
+      if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (found && !deleted) {
           out_pay = node->Update(pos, payload, merger);
           break;
@@ -388,16 +387,13 @@ class BTree
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
         if (grd.VerifyVersion(kInsDelMask)) break;
-      } else {
-        auto&& x_grd = grd.TryLockX(kInsDelMask);
-        if (x_grd) {
-          if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
-            VerIncrement<kInsDelMask>(x_grd);
-            out_pay = std::nullopt;
-            break;
-          }
-          Split(stack, node, std::move(x_grd));
+      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
+        if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
+          VerIncrement<kInsDelMask>(x_grd);
+          out_pay = std::nullopt;
+          break;
         }
+        Split(stack, node, std::move(x_grd));
       }
       stack.emplace_back(std::bit_cast<Node*>(node));
     }
@@ -440,12 +436,9 @@ class BTree
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
-      } else {
-        auto&& x_grd = grd.TryLockX(kInsDelMask);
-        if (x_grd) {
-          out_pay = node->Update(pos, payload, merger);
-          break;
-        }
+      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
+        out_pay = node->Update(pos, payload, merger);
+        break;
       }
       stack.emplace_back(std::bit_cast<Node*>(node));
     }
@@ -476,18 +469,15 @@ class BTree
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
-      } else {
-        auto&& x_grd = grd.TryLockX(kInsDelMask);
-        if (x_grd) {
-          Payload tmp_pay{};
-          const auto need_merge = node->Delete(pos, &tmp_pay);
-          out_pay = tmp_pay;
-          VerIncrement<kInsDelMask>(x_grd);
-          if (need_merge) {
-            TryMerge(stack, node, x_grd.DowngradeToSIX());
-          }
-          break;
+      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
+        Payload tmp_pay{};
+        const auto need_merge = node->Delete(pos, &tmp_pay);
+        out_pay = tmp_pay;
+        VerIncrement<kInsDelMask>(x_grd);
+        if (need_merge) {
+          TryMerge(stack, node, x_grd.DowngradeToSIX());
         }
+        break;
       }
       stack.emplace_back(std::bit_cast<Node*>(node));
     }

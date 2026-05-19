@@ -18,6 +18,7 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_NODE_HPP_
 
 // C++ standard libraries
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <cstddef>
@@ -710,8 +711,7 @@ class Node
       const BulkIter& iter_end) noexcept
   {
     const uint32_t leaf_cap = page_size_ * 3 / 4;
-    const uint32_t inner_cap =
-        page_size_ - (kMaxKeySize > page_size_ / 8 ? kMaxKeySize : page_size_ / 8);
+    const uint32_t inner_cap = page_size_ - std::max(kMaxKeySize, page_size_ / 8);
 
     offset_ = page_size_ - kMaxKeySize;
     const uint32_t max_usage = level_ > 0 ? inner_cap : leaf_cap;
