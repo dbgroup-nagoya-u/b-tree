@@ -55,9 +55,9 @@ struct Metadata {
       const uint32_t offset,
       const size_t key_len,
       const size_t rec_len) noexcept
-      : offset{offset},
-        key_len{static_cast<uint32_t>(key_len)},
-        rec_len{static_cast<uint32_t>(rec_len)}
+      : offset{offset}
+      , key_len{static_cast<uint32_t>(key_len)}
+      , rec_len{static_cast<uint32_t>(rec_len)}
   {
   }
 
@@ -74,18 +74,18 @@ struct Metadata {
       const uint32_t offset,
       const size_t key_len,
       const size_t rec_len) noexcept
-      : deleted{static_cast<uint32_t>(deleted)},
-        offset{offset},
-        key_len{static_cast<uint32_t>(key_len)},
-        rec_len{static_cast<uint32_t>(rec_len)}
+      : deleted{static_cast<uint32_t>(deleted)}
+      , offset{offset}
+      , key_len{static_cast<uint32_t>(key_len)}
+      , rec_len{static_cast<uint32_t>(rec_len)}
   {
   }
 
-  constexpr Metadata(const Metadata &) = default;
-  constexpr Metadata(Metadata &&) = default;
+  constexpr Metadata(const Metadata&) = default;
+  constexpr Metadata(Metadata&&) = default;
 
-  constexpr auto operator=(const Metadata &) -> Metadata & = default;
-  constexpr auto operator=(Metadata &&) -> Metadata & = default;
+  constexpr auto operator=(const Metadata&) -> Metadata& = default;
+  constexpr auto operator=(Metadata&&) -> Metadata& = default;
 
   /*##########################################################################*
    * Public destructors

@@ -21,7 +21,7 @@
 #include <dbgroup/index_fixtures/index_fixture.hpp>
 
 // local sources
-#include "page_size_wrapper.hpp"
+#include "parameter_wrapper.hpp"
 
 namespace dbgroup::index::test
 {
@@ -30,7 +30,7 @@ namespace dbgroup::index::test
  *############################################################################*/
 
 template <class K, class V, class C>
-using Index = PageSizeWrapper<b_tree::BTree, K, V, C>;
+using Index = ParameterWrapper<b_tree::BTree, K, V, C>;
 
 using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys
