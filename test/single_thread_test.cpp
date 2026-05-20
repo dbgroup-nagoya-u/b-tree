@@ -36,9 +36,8 @@ using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys
     IndexInfo<Index, UInt4, UInt8>,    // small keys
     IndexInfo<Index, Var, UInt8>,      // varlen keys
-    IndexInfo<Index, UInt8, UInt4>,    // fixed-length keys/small payloads
-    IndexInfo<Index, UInt4, UInt4>,    // small keys/small payloads
-    IndexInfo<Index, Var, UInt4>       // varlen keys/small payloads
+    IndexInfo<Index, UInt8, UInt4>,    // small payloads
+    IndexInfo<Index, UInt8, UInt16>    // long payloads
     >;
 TYPED_TEST_SUITE(IndexFixture, TestTargets);
 

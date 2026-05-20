@@ -10,7 +10,7 @@ set(DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
   index_fixtures
   GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/index-fixtures.git"
-  GIT_TAG "8d58d0cf2ea7cf16c9eb61ddb2d29d6249b773d8"
+  GIT_TAG "679a4077e832aad505732a0782665741be531bf9"
 )
 FetchContent_MakeAvailable(index_fixtures)
 
