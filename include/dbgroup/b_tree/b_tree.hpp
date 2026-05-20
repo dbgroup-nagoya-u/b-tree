@@ -269,7 +269,7 @@ class BTree
     if (end_key) {
       const auto& [key, _, closed] = *end_key;
       while (true) {
-        SearchNodeBackward(stack, key);
+        SearchNodeBackward(stack, key, !closed);
         auto& [tmp_node, _, grd] = stack.back();
         std::memcpy(tmp_page, tmp_node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
@@ -930,14 +930,15 @@ class BTree
    *
    * @param[in,out] stack A stack of traversed nodes.
    * @param[in] key A search key.
+   * @param[in] open A flag for indicating open intervals.
    * @note A found node is retained in the stack.
    */
   void
   SearchNodeBackward(  //
       std::vector<std::tuple<Node*, int32_t, OptGuard>>& stack,
-      const Key& key) const
+      const Key& key,
+      const bool open = true) const
   {
-    constexpr bool kBackward = true;
     Node* child{};
     while (true) {
       if (stack.empty()) {
@@ -948,7 +949,7 @@ class BTree
       while (true) {
         auto& [node, pos, grd] = stack.back();
         while (true) {
-          if (!SearchHorizontally(node, grd, key, kBackward)) goto out;
+          if (!SearchHorizontally(node, grd, key, open)) goto out;
           if (node->GetLevel() == 0) return;
 
           pos = node->SearchRecord(key).second - 1;
