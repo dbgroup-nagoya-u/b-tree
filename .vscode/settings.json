@@ -68,7 +68,9 @@
   "cmake.generator": "Ninja",
   "cmake.options.statusBarVisibility": "compact",
   "cmake.debugConfig": {
-    "args": [],
+    "args": [
+      "--gtest_repeat=1",
+    ],
     "MIMode": "gdb",
     "miDebuggerPath": "/usr/bin/gdb",
   },
