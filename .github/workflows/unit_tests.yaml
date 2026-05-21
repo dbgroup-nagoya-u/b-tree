@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        page-size: [512, 65536]
+        page-size: [512, 32768]
 
     steps:
     - name: Clone Main Repository
