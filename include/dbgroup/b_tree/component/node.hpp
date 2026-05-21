@@ -629,9 +629,10 @@ class Node
     std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
     if (level_ > 0) {
       assert(pos > 0);
+      const auto rec_len = meta.rec_len;
       std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1UL));
       --rec_num_;
-      usage_ -= meta.rec_len + kMetaSize;
+      usage_ -= rec_len + kMetaSize;
     } else {
       meta.deleted = true;
       usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
