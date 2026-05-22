@@ -234,26 +234,6 @@ class Node
   }
 
   /**
-   * @return The SIX guard of a right sibling node.
-   */
-  auto
-  GetMergeableSib()  //
-      -> SIXGuard
-  {
-    SIXGuard six_grd{};
-    if (sib_node_) {
-      auto&& grd = sib_node_->GetGuard();
-      while (true) {
-        const auto merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-        if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
-        six_grd = grd.TryLockSIX();
-        if (six_grd) break;
-      }
-    }
-    return six_grd;
-  }
-
-  /**
    * @retval 1st: A separator key.
    * @retval 2nd: The length of a separator key.
    */
@@ -410,7 +390,6 @@ class Node
   }
 
   /**
-   * @tparam Guard A desired guard type.
    * @return A guard instance for this node.
    */
   [[nodiscard]]
@@ -644,6 +623,38 @@ class Node
   /*##########################################################################*
    * SMO APIs
    *##########################################################################*/
+
+  /**
+   * @return The SIX guard of a right sibling node.
+   */
+  auto
+  GetMergeableSib()  //
+      -> SIXGuard
+  {
+    SIXGuard six_grd{};
+    if (sib_node_) {
+      auto&& grd = sib_node_->GetGuard();
+      do {
+        const auto merged_usage = usage_ - hk_len_ + sib_node_->usage_;
+        assert(merged_usage < 2 * page_size_);
+        if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
+        six_grd = grd.TryLockSIX();
+      } while (!six_grd);
+    }
+    return six_grd;
+  }
+
+  /**
+   * @retval true if this node is a redundant inner node.
+   * @retval false otherwise.
+   */
+  [[nodiscard]]
+  constexpr auto
+  IsRemovableInner() const noexcept  //
+      -> bool
+  {
+    return level_ > 0 && leftmost_ && !sib_node_ && rec_num_ == 1;
+  }
 
   /**
    * @brief Merge a given node into this node.

@@ -1175,12 +1175,11 @@ class BTree
     auto&& r_grd = l_child->GetMergeableSib();
     if (!r_grd) {  // remove a root node if possible
       auto* root = root_.load(kRelaxed);
-      if (level > 1 && l_child == root && !l_child->GetSibNode() && l_child->GetRecNum() == 1) {
-        l_child->CopyPayloadTo(0, &root);  // `root` has become a new root
-        if (root_.compare_exchange_strong(l_child, root, kRelease, kRelaxed)) {
-          l_child->Remove(std::move(l_grd));
-          gc_->AddGarbage(l_child, page_size_);
-        }
+      if (root == l_child && root->IsRemovableInner()) {
+        root->CopyPayloadTo(0, &l_child);  // `l_child` has become a new root
+        root_.store(l_child, kRelease);
+        root->Remove(std::move(l_grd));
+        gc_->AddGarbage(root, page_size_);
       }
       return;
     }
