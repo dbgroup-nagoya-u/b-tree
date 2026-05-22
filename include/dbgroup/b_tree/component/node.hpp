@@ -564,6 +564,7 @@ class Node
       auto& meta = meta_arr_[pos];
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = false;
+      usage_ += pos > 0 ? total_len : 0;
     } else {  // insert a new record
       if (kHeaderSize + usage_ + total_len > page_size_) return false;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
@@ -578,8 +579,8 @@ class Node
       std::memmove(ShiftAddr(&meta, kMetaSize), &meta, mov_size);
       meta = Metadata{offset_, key_len, rec_len};
       ++rec_num_;
+      usage_ += total_len;
     }
-    usage_ += total_len;
     return true;
   }
 
