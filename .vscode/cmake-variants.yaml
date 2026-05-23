@@ -7,37 +7,46 @@ buildType:
       long: Include debugging information without optimizations
       buildType: Debug
       settings:
-        B_TREE_BUILD_TESTS: ON
-        DBGROUP_TEST_PAGE_SIZE: 1024
-        DBGROUP_TEST_THREAD_NUM: 8
-        DBGROUP_TEST_RANDOM_SEED: 0
-        DBGROUP_TEST_EXEC_NUM: 1E5
         DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
-        DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST: ON
-        DBGROUP_TEST_DISABLE_RECORD_MERGING: OFF
     relWithDebInfo:
       short: RelWithDebInfo
       long: Perform optimizations and include debugging informatin
       buildType: RelWithDebInfo
       settings:
-        B_TREE_BUILD_TESTS: ON
-        DBGROUP_TEST_PAGE_SIZE: 1024
-        DBGROUP_TEST_THREAD_NUM: 8
-        DBGROUP_TEST_RANDOM_SEED: 0
-        DBGROUP_TEST_EXEC_NUM: 1E5
         DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
-        DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST: ON
-        DBGROUP_TEST_DISABLE_RECORD_MERGING: OFF
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: ON
+
+threadNumbers:
+  default: 8threads
+  description: Thread counts
+  choices:
+    8threads:
+      short: w/8T
+      long: Use 8 threads for unit tests
+      settings:
+        DBGROUP_TEST_THREAD_NUM: 8
+    256threads:
+      short: w/256T
+      long: Use 256 threads for unit tests
+      settings:
+        DBGROUP_TEST_THREAD_NUM: 256
+
+defaltSettings:
+  default: default
+  description: "Default parameters"
+  choices:
+    default:
+      short: "w/Test"
+      long: "Build unit tests"
+      settings:
         B_TREE_BUILD_TESTS: ON
         DBGROUP_TEST_PAGE_SIZE: 1024
-        DBGROUP_TEST_THREAD_NUM: 8
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
-        DBGROUP_TEST_OVERRIDE_MIMALLOC: ON
         DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST: ON
         DBGROUP_TEST_DISABLE_RECORD_MERGING: OFF

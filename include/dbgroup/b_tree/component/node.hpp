@@ -18,6 +18,7 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_NODE_HPP_
 
 // C++ standard libraries
+#include <algorithm>
 #include <bit>
 #include <cassert>
 #include <cstddef>
@@ -40,13 +41,11 @@
 #include "dbgroup/b_tree/component/metadata.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
-// NOLINTBEGIN
 // we intentionally use a zero-length array for record metadata
 #pragma GCC diagnostic ignored "-Warray-bounds"
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic ignored "-Wzero-length-bounds"
 #endif
-// NOLINTEND
 
 namespace dbgroup::index::b_tree::component
 {
@@ -85,7 +84,9 @@ class Node
       const uint32_t page_size,
       const uint32_t align_val,
       const uint32_t level = 0) noexcept
-      : page_size_{page_size}, align_val_{align_val}, level_{static_cast<uint8_t>(level)}
+      : page_size_{page_size}
+      , align_val_{align_val}
+      , level_{static_cast<uint8_t>(level)}
   {
     static_assert(                    //
         sizeof(Node) <= kHeaderSize,  //
@@ -103,16 +104,16 @@ class Node
    */
   Node(  //
       const uint32_t level,
-      const Key &key,
+      const Key& key,
       const uint32_t key_len,
-      const Node *l_child,
-      const Node *r_child) noexcept  //
-      : page_size_{l_child->page_size_},
-        align_val_{l_child->align_val_},
-        offset_{static_cast<uint32_t>(page_size_ - (2 * kPtrSize + key_len))},
-        rec_num_{2},
-        usage_{static_cast<uint32_t>(2 * (kMetaSize + kPtrSize) + key_len)},
-        level_{static_cast<uint8_t>(level)}
+      const Node* l_child,
+      const Node* r_child) noexcept  //
+      : page_size_{l_child->page_size_}
+      , align_val_{l_child->align_val_}
+      , offset_{static_cast<uint32_t>(page_size_ - (2 * kPtrSize + key_len))}
+      , rec_num_{2}
+      , usage_{static_cast<uint32_t>(2 * (kMetaSize + kPtrSize) + key_len)}
+      , level_{static_cast<uint8_t>(level)}
   {
     const uint32_t l_offset = page_size_ - kPtrSize;
     const uint32_t r_offset = page_size_ - 2 * kPtrSize;
@@ -133,15 +134,15 @@ class Node
    * @note This is a split right node.
    */
   explicit Node(  //
-      Node *l_node)
-      : page_size_{l_node->page_size_},
-        align_val_{l_node->align_val_},
-        offset_{static_cast<uint32_t>(page_size_ - l_node->hk_len_)},
-        level_{l_node->level_},
-        leftmost_{false},
-        sib_node_{l_node->sib_node_}
+      Node* l_node)
+      : page_size_{l_node->page_size_}
+      , align_val_{l_node->align_val_}
+      , offset_{static_cast<uint32_t>(page_size_ - l_node->hk_len_)}
+      , level_{l_node->level_}
+      , leftmost_{false}
+      , sib_node_{l_node->sib_node_}
   {
-    auto *tmp = AllocNode();
+    auto* tmp = AllocNode();
     tmp->offset_ = page_size_ - kMaxKeySize;
 
     // copy split-left records to a temporary region
@@ -166,11 +167,11 @@ class Node
     FreeNode(tmp);
   }
 
-  Node(const Node &) = delete;
-  Node(Node &&) = delete;
+  Node(const Node&) = delete;
+  Node(Node&&) = delete;
 
-  auto operator=(const Node &) -> Node & = delete;
-  auto operator=(Node &&) -> Node & = delete;
+  auto operator=(const Node&) -> Node& = delete;
+  auto operator=(Node&&) -> Node& = delete;
 
   /*##########################################################################*
    * Public destructors
@@ -227,29 +228,9 @@ class Node
   [[nodiscard]]
   constexpr auto
   GetSibNode() const noexcept  //
-      -> Node *
+      -> Node*
   {
     return sib_node_;
-  }
-
-  /**
-   * @return The SIX guard of a right sibling node.
-   */
-  auto
-  GetMergeableSib()  //
-      -> SIXGuard
-  {
-    SIXGuard six_grd{};
-    if (sib_node_) {
-      auto &&grd = sib_node_->GetGuard();
-      while (true) {
-        const auto merged_usage = usage_ - hk_len_ + sib_node_->usage_;
-        if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
-        six_grd = grd.TryLockSIX();
-        if (six_grd) break;
-      }
-    }
-    return six_grd;
   }
 
   /**
@@ -263,9 +244,9 @@ class Node
   {
     assert(hk_len_ > 0);
 
-    const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
-      auto *key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
+      auto* key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
       std::memcpy(key, src_addr, hk_len_);
       return {key, hk_len_};
     } else {
@@ -287,7 +268,7 @@ class Node
 
     Key key;
     const auto meta = meta_arr_[0];
-    const auto *src_addr = ShiftAddr(this, meta.offset);
+    const auto* src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       const auto key_len = meta.key_len;
       key = ::dbgroup::memory::Allocate<KeyWOPtr>(key_len);
@@ -307,14 +288,14 @@ class Node
   [[nodiscard]]
   auto
   Include(  //
-      const Key &key,
+      const Key& key,
       const bool reverse = false) const noexcept  //
       -> bool
   {
     if (hk_len_ == 0) return true;
 
     Key h_key;
-    const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       h_key = std::bit_cast<Key>(&tls_key);
@@ -338,7 +319,7 @@ class Node
   [[nodiscard]]
   auto
   SearchRecord(                       //
-      const Key &key) const noexcept  //
+      const Key& key) const noexcept  //
       -> std::pair<bool, int32_t>
   {
     auto found = false;
@@ -352,7 +333,7 @@ class Node
         break;  // read corrupted data due to OCC
       }
 
-      const auto &index_key = GetKey(meta);
+      const auto& index_key = GetKey(meta);
       if (kLess(key, index_key)) {
         end_pos = cur_pos - 1;
       } else if (kLess(index_key, key)) {
@@ -381,7 +362,7 @@ class Node
   [[nodiscard]]
   auto
   CheckUniqueness(                    //
-      const Key &key) const noexcept  //
+      const Key& key) const noexcept  //
       -> std::tuple<bool, bool, int32_t>
   {
     const auto [found, pos] = SearchRecord(key);
@@ -397,19 +378,18 @@ class Node
   [[nodiscard]]
   auto
   SearchChild(                        //
-      const Key &key) const noexcept  //
-      -> Node *
+      const Key& key) const noexcept  //
+      -> Node*
   {
     auto [found, pos] = SearchRecord(key);
     pos -= static_cast<int32_t>(!found);
 
-    Node *child{};
+    Node* child{};
     CopyPayloadTo(pos, &child);
     return child;
   }
 
   /**
-   * @tparam Guard A desired guard type.
    * @return A guard instance for this node.
    */
   [[nodiscard]]
@@ -452,7 +432,7 @@ class Node
   void
   CopyPayloadTo(  //
       const int32_t pos,
-      void *out_pay,
+      void* out_pay,
       const size_t pay_len = kPtrSize) const noexcept
   {
     const auto offset = meta_arr_[pos].GetPayOff();
@@ -475,8 +455,8 @@ class Node
   auto
   CopyRecordTo(  //
       const int32_t pos,
-      void *key,
-      void *payload) const noexcept  //
+      void* key,
+      void* payload) const noexcept  //
       -> bool
   {
     const auto meta = meta_arr_[pos];
@@ -498,9 +478,9 @@ class Node
   template <bool kForward>
   void
   SearchEndPosition(  //
-      const ScanKey &end_key,
-      bool &is_end,
-      int32_t &end_pos) const noexcept
+      const ScanKey& end_key,
+      bool& is_end,
+      int32_t& end_pos) const noexcept
   {
     if (!end_key) {
       if constexpr (kForward) {
@@ -513,7 +493,7 @@ class Node
       return;
     }
 
-    const auto &[key, _, closed] = *end_key;
+    const auto& [key, _, closed] = *end_key;
     if constexpr (kForward) {
       is_end = !sib_node_ || Include(key);
       end_pos = rec_num_;
@@ -551,18 +531,19 @@ class Node
   Insert(  //
       int32_t pos,
       bool found,
-      const Key &key,
+      const Key& key,
       const size_t key_len,
-      const void *payload,
+      const void* payload,
       const size_t pay_len) noexcept  //
       -> bool
   {
     const auto rec_len = key_len + pay_len;
     const auto total_len = rec_len + kMetaSize;
     if (found) {  // reuse the deleted record
-      auto &meta = meta_arr_[pos];
+      auto& meta = meta_arr_[pos];
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta.deleted = false;
+      usage_ += pos > 0 ? total_len : 0;
     } else {  // insert a new record
       if (kHeaderSize + usage_ + total_len > page_size_) return false;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
@@ -570,15 +551,15 @@ class Node
         pos = SearchRecord(key).second;
       }
       const auto mov_size = kMetaSize * (rec_num_ - pos);
-      auto &meta = meta_arr_[pos];
+      auto& meta = meta_arr_[pos];
       offset_ -= rec_len;
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
       std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
       std::memmove(ShiftAddr(&meta, kMetaSize), &meta, mov_size);
       meta = Metadata{offset_, key_len, rec_len};
       ++rec_num_;
+      usage_ += total_len;
     }
-    usage_ += total_len;
     return true;
   }
 
@@ -594,15 +575,15 @@ class Node
   auto
   Update(  //
       int32_t pos,
-      const Delta &payload,
-      Payload (*merger)(const Payload &, const Delta &)) noexcept  //
+      const Delta& payload,
+      Payload (*merger)(const Payload&, const Delta&)) noexcept  //
       -> Payload
   {
     Payload out_pay{};
-    auto *pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
+    auto* pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
     std::memcpy(&out_pay, pay_addr, sizeof(Payload));
     if (merger) {
-      const auto &merged = merger(out_pay, payload);
+      const auto& merged = merger(out_pay, payload);
       std::memcpy(pay_addr, &merged, sizeof(Payload));
     } else {
       std::memcpy(pay_addr, &payload, sizeof(Payload));
@@ -621,16 +602,17 @@ class Node
   auto
   Delete(  //
       const int32_t pos,
-      void *out_pay) noexcept  //
+      void* out_pay) noexcept  //
       -> bool
   {
-    auto &meta = meta_arr_[pos];
+    auto& meta = meta_arr_[pos];
     std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
     if (level_ > 0) {
       assert(pos > 0);
+      const auto rec_len = meta.rec_len;
       std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1UL));
       --rec_num_;
-      usage_ -= meta.rec_len + kMetaSize;
+      usage_ -= rec_len + kMetaSize;
     } else {
       meta.deleted = true;
       usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
@@ -643,6 +625,38 @@ class Node
    *##########################################################################*/
 
   /**
+   * @return The SIX guard of a right sibling node.
+   */
+  auto
+  GetMergeableSib()  //
+      -> SIXGuard
+  {
+    SIXGuard six_grd{};
+    if (sib_node_) {
+      auto&& grd = sib_node_->GetGuard();
+      do {
+        const auto merged_usage = usage_ - hk_len_ + sib_node_->usage_;
+        assert(merged_usage < 2 * page_size_);
+        if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
+        six_grd = grd.TryLockSIX();
+      } while (!six_grd);
+    }
+    return six_grd;
+  }
+
+  /**
+   * @retval true if this node is a redundant inner node.
+   * @retval false otherwise.
+   */
+  [[nodiscard]]
+  constexpr auto
+  IsRemovableInner() const noexcept  //
+      -> bool
+  {
+    return level_ > 0 && leftmost_ && !sib_node_ && rec_num_ == 1;
+  }
+
+  /**
    * @brief Merge a given node into this node.
    *
    * @param grd The SIX-lock guard of this node.
@@ -652,10 +666,10 @@ class Node
   void
   Merge(  //
       SIXGuard grd,
-      Node *r_node,
+      Node* r_node,
       SIXGuard r_grd)
   {
-    auto *tmp = AllocNode();
+    auto* tmp = AllocNode();
     tmp->offset_ = page_size_ - r_node->hk_len_;
 
     int32_t pos = 0;
@@ -665,7 +679,7 @@ class Node
     pos = 0;
     tmp->CopyRecords(r_node, pos, r_node->rec_num_);
     {
-      auto &&x_grd = grd.UpgradeToX();
+      auto&& x_grd = grd.UpgradeToX();
       CopyFrom(tmp);
       sib_node_ = r_node->sib_node_;
       VerIncrement<kSMOMask>(x_grd);
@@ -684,9 +698,9 @@ class Node
   void
   Remove(  //
       SIXGuard grd,
-      Node *next = nullptr)
+      Node* next = nullptr)
   {
-    auto &&x_grd = grd.UpgradeToX();
+    auto&& x_grd = grd.UpgradeToX();
     removed_ = true;
     sib_node_ = next;
     VerIncrement<kSMOMask>(x_grd);
@@ -706,17 +720,16 @@ class Node
   template <class BulkIter>
   void
   Bulkload(  //
-      BulkIter &iter,
-      const BulkIter &iter_end) noexcept
+      BulkIter& iter,
+      const BulkIter& iter_end) noexcept
   {
     const uint32_t leaf_cap = page_size_ * 3 / 4;
-    const uint32_t inner_cap =
-        page_size_ - (kMaxKeySize > page_size_ / 8 ? kMaxKeySize : page_size_ / 8);
+    const uint32_t inner_cap = page_size_ - std::max(kMaxKeySize, page_size_ / 8U);
 
     offset_ = page_size_ - kMaxKeySize;
     const uint32_t max_usage = level_ > 0 ? inner_cap : leaf_cap;
     for (; iter < iter_end; ++iter) {
-      const auto &[key, payload, key_len, pay_len] = ParseEntry(*iter);
+      const auto& [key, payload, key_len, pay_len] = ParseEntry(*iter);
       const uint32_t rec_len = key_len + pay_len;
       const uint32_t total_len = rec_len + kMetaSize;
       if (usage_ + total_len > max_usage) break;
@@ -739,8 +752,8 @@ class Node
    */
   void
   LinkSiblingNode(  //
-      Node *sib_node,
-      const Key &key,
+      Node* sib_node,
+      const Key& key,
       const size_t key_len) noexcept
   {
     sib_node_ = sib_node;
@@ -757,8 +770,8 @@ class Node
    */
   static void
   LinkVerticalBorderNodes(  //
-      Node *l_node,
-      Node *r_node) noexcept
+      Node* l_node,
+      Node* r_node) noexcept
   {
     if (l_node == nullptr) return;
 
@@ -769,7 +782,7 @@ class Node
       l_node->sib_node_ = r_node;
       l_node->hk_len_ = key_len;
       l_node->usage_ += key_len;
-      auto *hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
+      auto* hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
       std::memcpy(hk_addr, ShiftAddr(r_node, meta.offset), key_len);
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
@@ -786,13 +799,13 @@ class Node
    */
   static void
   RemoveLeftmostKeys(  //
-      Node *node) noexcept
+      Node* node) noexcept
   {
     while (true) {
       node->leftmost_ = true;
       if (node->level_ == 0) break;
 
-      auto &meta = node->meta_arr_[0];
+      auto& meta = node->meta_arr_[0];
       meta = Metadata{meta.GetPayOff(), 0, kWordSize};
       node->CopyPayloadTo(0, &node);
     }
@@ -821,7 +834,7 @@ class Node
        << "  leftmost : " << leftmost_ << "\n";
     if (hk_len_ > 0) {
       Key h_key;
-      const auto *src_addr = ShiftAddr(this, page_size_ - hk_len_);
+      const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
       if constexpr (IsVarLenData<Key>()) {
         alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
         h_key = std::bit_cast<Key>(&tls_key);
@@ -870,9 +883,9 @@ class Node
   [[nodiscard]]
   auto
   AllocNode()  //
-      -> Node *
+      -> Node*
   {
-    auto *page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
+    auto* page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
     return new (page) Node{page_size_, align_val_};
   }
 
@@ -881,7 +894,7 @@ class Node
    */
   void
   FreeNode(  //
-      void *page)
+      void* page)
   {
     ::operator delete(page, static_cast<std::align_val_t>(align_val_));
   }
@@ -897,7 +910,7 @@ class Node
       -> Key
   {
     Key key;
-    const auto *src_addr = ShiftAddr(this, meta.offset);
+    const auto* src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       key = std::bit_cast<Key>(&tls_key);
@@ -915,7 +928,7 @@ class Node
   void
   CleanUp()
   {
-    auto *tmp = AllocNode();
+    auto* tmp = AllocNode();
     tmp->offset_ = page_size_ - hk_len_;
 
     int32_t pos = 0;
@@ -933,7 +946,7 @@ class Node
    */
   void
   CopyFrom(  //
-      const Node *src) noexcept
+      const Node* src) noexcept
   {
     rec_num_ = src->rec_num_;
     offset_ = src->offset_;
@@ -951,7 +964,7 @@ class Node
    */
   void
   CopyHighKey(  //
-      const void *src,
+      const void* src,
       const size_t key_len) noexcept
   {
     std::memcpy(ShiftAddr(this, page_size_ - key_len), src, key_len);
@@ -966,8 +979,8 @@ class Node
    */
   void
   CopyLowRecord(  //
-      const Node *src,
-      int32_t &pos) noexcept
+      const Node* src,
+      int32_t& pos) noexcept
   {
     if (src->rec_num_ == 0) return;
 
@@ -990,8 +1003,8 @@ class Node
   template <bool kSearchSplitPos = false>
   void
   CopyRecords(  //
-      const Node *src,
-      int32_t &pos,
+      const Node* src,
+      int32_t& pos,
       const int32_t end_pos,
       [[maybe_unused]] const uint32_t sep_size = 0) noexcept
   {
@@ -1055,7 +1068,7 @@ class Node
   Lock lock_{};
 
   /// @brief A right sibling node.
-  Node *sib_node_{};
+  Node* sib_node_{};
 
   /// @brief An actual data block (it starts with record metadata).
   Metadata meta_arr_[0];

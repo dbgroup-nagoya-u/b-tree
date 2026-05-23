@@ -42,7 +42,7 @@ template <template <class Key, class Payload, class Comp, class... Others> class
           class Key,
           class Payload,
           class Comp>
-class PageSizeWrapper
+class ParameterWrapper
 {
   /*##########################################################################*
    * Type aliases
@@ -56,19 +56,19 @@ class PageSizeWrapper
    * Public constructors and assignment operators
    *##########################################################################*/
 
-  PageSizeWrapper() = default;
+  ParameterWrapper() = default;
 
-  PageSizeWrapper(const PageSizeWrapper &) = delete;
-  PageSizeWrapper(PageSizeWrapper &&) = delete;
+  ParameterWrapper(const ParameterWrapper&) = delete;
+  ParameterWrapper(ParameterWrapper&&) = delete;
 
-  auto operator=(const PageSizeWrapper &) -> PageSizeWrapper & = delete;
-  auto operator=(PageSizeWrapper &&) -> PageSizeWrapper & = delete;
+  auto operator=(const ParameterWrapper&) -> ParameterWrapper& = delete;
+  auto operator=(ParameterWrapper&&) -> ParameterWrapper& = delete;
 
   /*##########################################################################*
    * Public destructors
    *##########################################################################*/
 
-  ~PageSizeWrapper() = default;
+  ~ParameterWrapper() = default;
 
   /*##########################################################################*
    * Public read/write APIs
@@ -76,7 +76,7 @@ class PageSizeWrapper
 
   auto
   Read(  //
-      const Key &key,
+      const Key& key,
       const size_t key_len = sizeof(Key))
   {
     return index_->Read(key, key_len);
@@ -84,44 +84,44 @@ class PageSizeWrapper
 
   auto
   Scan(  //
-      const ScanKey &begin_key = std::nullopt,
-      const ScanKey &end_key = std::nullopt)
+      const ScanKey& begin_key = std::nullopt,
+      const ScanKey& end_key = std::nullopt)
   {
     return index_->Scan(begin_key, end_key);
   }
 
   auto
   ScanBackward(  //
-      const ScanKey &begin_key = std::nullopt,
-      const ScanKey &end_key = std::nullopt)
+      const ScanKey& begin_key = std::nullopt,
+      const ScanKey& end_key = std::nullopt)
   {
     return index_->ScanBackward(begin_key, end_key);
   }
 
   void
   Write(  //
-      const Key &key,
-      const Payload &payload,
+      const Key& key,
+      const Payload& payload,
       const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload &, const Payload &) = nullptr)
+      Payload (*merger)(const Payload&, const Payload&) = nullptr)
   {
     index_->Write(key, payload, key_len, merger);
   }
 
   auto
   Upsert(  //
-      const Key &key,
-      const Payload &payload,
+      const Key& key,
+      const Payload& payload,
       const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload &, const Payload &) = nullptr)
+      Payload (*merger)(const Payload&, const Payload&) = nullptr)
   {
     return index_->Upsert(key, payload, key_len, merger);
   }
 
   auto
   Insert(  //
-      const Key &key,
-      const Payload &payload,
+      const Key& key,
+      const Payload& payload,
       const size_t key_len = sizeof(Key))
   {
     return index_->Insert(key, payload, key_len);
@@ -130,10 +130,10 @@ class PageSizeWrapper
   template <class T = Payload>
   auto
   Update(  //
-      const Key &key,
-      const std::type_identity_t<T> &payload,
+      const Key& key,
+      const std::type_identity_t<T>& payload,
       const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload &, const T &) = nullptr,
+      Payload (*merger)(const Payload&, const T&) = nullptr,
       const size_t pay_len = sizeof(T))
   {
     return index_->Update(key, payload, key_len, merger, pay_len);
@@ -141,7 +141,7 @@ class PageSizeWrapper
 
   auto
   Delete(  //
-      const Key &key,
+      const Key& key,
       const size_t key_len = sizeof(Key))
   {
     return index_->Delete(key, key_len);
@@ -154,7 +154,7 @@ class PageSizeWrapper
   template <class Entry>
   auto
   Bulkload(  //
-      const std::vector<Entry> &entries,
+      const std::vector<Entry>& entries,
       const size_t thread_num = 1)
   {
     return index_->Bulkload(entries, thread_num);
