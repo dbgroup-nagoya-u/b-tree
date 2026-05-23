@@ -355,7 +355,7 @@ class BTree
         }
         Split(stack, node, std::move(x_grd));
       }
-      stack.emplace_back(std::bit_cast<Node*>(node));
+      stack.emplace_back(node);
     }
     return out_pay;
   }
@@ -395,7 +395,7 @@ class BTree
         }
         Split(stack, node, std::move(x_grd));
       }
-      stack.emplace_back(std::bit_cast<Node*>(node));
+      stack.emplace_back(node);
     }
     return out_pay;
   }
@@ -440,7 +440,7 @@ class BTree
         out_pay = node->Update(pos, payload, merger);
         break;
       }
-      stack.emplace_back(std::bit_cast<Node*>(node));
+      stack.emplace_back(node);
     }
     return out_pay;
   }
@@ -479,7 +479,7 @@ class BTree
         }
         break;
       }
-      stack.emplace_back(std::bit_cast<Node*>(node));
+      stack.emplace_back(node);
     }
     return out_pay;
   }
@@ -1132,7 +1132,7 @@ class BTree
     while (true) {
       if (stack.empty()) {  // create a new root
         auto* old_root = root_.load(kRelaxed);
-        if (old_root == std::bit_cast<Node*>(l_child)) {
+        if (old_root == l_child) {
           auto* root = new (AllocPage()) Node{level, key, key_len, l_child, r_child};
           if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) break;
           FreePage(root);
