@@ -37,10 +37,10 @@ constexpr size_t kDefaultGCThreadNum = 1;
 constexpr uint32_t kNoMask = ~0U;
 
 /// @brief A bit mask for extracting insert/delete versions.
-constexpr uint32_t kInsDelMask = 0xFFFF'F000U;
+constexpr uint32_t kInsDelMask = 0xFFFF'FC00U;
 
 /// @brief A bit mask for extracting SMO versions.
-constexpr uint32_t kSMOMask = 0xFF00'0000U;
+constexpr uint32_t kSMOMask = 0xFFF0'0000U;
 
 /*############################################################################*
  * Tuning parameters for B+trees
