@@ -112,7 +112,7 @@ class BTree
    * @param gc_thread_num the number of GC threads (default: 1).
    */
   explicit BTree(  //
-      const size_t page_size = k1Ki,
+      const size_t page_size = kDefaultPageSize,
       const size_t gc_interval_micro = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
       : page_size_{static_cast<uint32_t>(page_size)}
@@ -129,7 +129,7 @@ class BTree
    */
   explicit BTree(  //
       const std::shared_ptr<GC>& gc,
-      const size_t page_size = k1Ki)
+      const size_t page_size = kDefaultPageSize)
       : page_size_{static_cast<uint32_t>(page_size)}
       , gc_{gc}
   {

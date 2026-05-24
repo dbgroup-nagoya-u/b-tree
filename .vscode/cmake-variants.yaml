@@ -44,8 +44,10 @@ defaltSettings:
       short: "w/Test"
       long: "Build unit tests"
       settings:
+        B_TREE_DEFAULT_PAGE_SIZE: 1024
+        B_TREE_DEFAULT_GC_INTERVAL: 10
+        B_TREE_DEFAULT_GC_THREADS: 1
         B_TREE_BUILD_TESTS: ON
-        DBGROUP_TEST_PAGE_SIZE: 1024
         DBGROUP_TEST_RANDOM_SEED: 0
         DBGROUP_TEST_EXEC_NUM: 1E5
         DBGROUP_TEST_DISABLE_SCAN_VERIFIER_TEST: ON

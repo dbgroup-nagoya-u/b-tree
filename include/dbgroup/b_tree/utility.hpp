@@ -27,12 +27,6 @@ namespace dbgroup::index::b_tree
  * Global constants
  *############################################################################*/
 
-/// @brief The default time interval for garbage collection [us].
-constexpr size_t kDefaultGCTime = 100;  // 100 ms
-
-/// @brief The default number of worker threads for garbage collection.
-constexpr size_t kDefaultGCThreadNum = 1;
-
 /// @brief A bit mask for using all bits.
 constexpr uint32_t kNoMask = ~0U;
 
@@ -46,8 +40,17 @@ constexpr uint32_t kSMOMask = 0xFFF0'0000U;
  * Tuning parameters for B+trees
  *############################################################################*/
 
+/// @brief The default page size of each node.
+constexpr size_t kDefaultPageSize = (B_TREE_DEFAULT_PAGE_SIZE);
+
 /// @brief The maximum size of variable-length data.
 constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
+
+/// @brief The default time interval for garbage collection [ms].
+constexpr size_t kDefaultGCTime = (B_TREE_DEFAULT_GC_INTERVAL);
+
+/// @brief The default number of worker threads for garbage collection.
+constexpr size_t kDefaultGCThreadNum = (B_TREE_DEFAULT_GC_THREADS);
 
 }  // namespace dbgroup::index::b_tree
 

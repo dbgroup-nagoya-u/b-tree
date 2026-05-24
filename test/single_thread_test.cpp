@@ -20,17 +20,14 @@
 // external libraries
 #include <dbgroup/index_fixtures/index_fixture.hpp>
 
-// local sources
-#include "parameter_wrapper.hpp"
-
 namespace dbgroup::index::test
 {
 /*############################################################################*
  * Preparation for typed testing
  *############################################################################*/
 
-template <class K, class V, class C>
-using Index = ParameterWrapper<b_tree::BTree, K, V, C>;
+template <class K, class V, class C, class... Others>
+using Index = b_tree::BTree<K, V, C, Others...>;
 
 using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys

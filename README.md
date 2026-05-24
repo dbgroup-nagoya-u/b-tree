@@ -27,6 +27,9 @@ sudo apt update && sudo apt install -y \
 
 #### Tuning Parameters
 
+- `B_TREE_DEFAULT_PAGE_SIZE`: A default page size in bytes (default `1024`).
+- `B_TREE_DEFAULT_GC_INTERVAL`: A default interval for GC in milliseconds (default `100`).
+- `B_TREE_DEFAULT_GC_THREADS`: The default number of GC threads (default `1`).
 - `B_TREE_MAX_VARLEN_DATA_SIZE`: The expected maximum size of a variable-length data (default `32`).
 
 #### Build Options for Unit Testing
@@ -34,7 +37,6 @@ sudo apt update && sudo apt install -y \
 Please refer to [index-fixtures](https://github.com/dbgroup-nagoya-u/index-fixtures?tab=readme-ov-file#build-options) for more build options.
 
 - `B_TREE_BUILD_TESTS`: Build unit tests for this library if `ON` (default `OFF`).
-- `DBGROUP_TEST_PAGE_SIZE`: A page size for each node in unit tests (default `1024`).
 
 ### Build and Run Unit Tests
 

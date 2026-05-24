@@ -32,8 +32,9 @@ jobs:
       run: >
         cmake ${GITHUB_WORKSPACE}
         -DCMAKE_BUILD_TYPE=${BUILD_TYPE}
+        -DB_TREE_DEFAULT_PAGE_SIZE=${{matrix.page-size}}
+        -DB_TREE_DEFAULT_GC_INTERVAL=10
         -DB_TREE_BUILD_TESTS=ON
-        -DDBGROUP_TEST_PAGE_SIZE=${{matrix.page-size}}
         -DDBGROUP_TEST_DISABLE_RECORD_MERGING=OFF
 
     - name: Build

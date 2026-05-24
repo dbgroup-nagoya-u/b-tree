@@ -22,6 +22,24 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   #----------------------------------------------------------------------------#
 
   set(
+    B_TREE_DEFAULT_PAGE_SIZE
+    "1024" CACHE STRING
+    "A default page size in bytes."
+  )
+
+  set(
+    B_TREE_DEFAULT_GC_INTERVAL
+    "100" CACHE STRING
+    "A default interval for GC in milliseconds."
+  )
+
+  set(
+    B_TREE_DEFAULT_GC_THREADS
+    "1" CACHE STRING
+    "The default number of GC threads."
+  )
+
+  set(
     B_TREE_MAX_VARLEN_DATA_SIZE
     "32" CACHE STRING
     "The expected maximum size of a variable-length data."
@@ -60,6 +78,9 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
     "cxx_std_20"
   )
   target_compile_definitions(${PROJECT_NAME} INTERFACE
+    B_TREE_DEFAULT_PAGE_SIZE=${B_TREE_DEFAULT_PAGE_SIZE}
+    B_TREE_DEFAULT_GC_INTERVAL=${B_TREE_DEFAULT_GC_INTERVAL}
+    B_TREE_DEFAULT_GC_THREADS=${B_TREE_DEFAULT_GC_THREADS}
     B_TREE_MAX_VARLEN_DATA_SIZE=${B_TREE_MAX_VARLEN_DATA_SIZE}
   )
   target_include_directories(${PROJECT_NAME} INTERFACE
