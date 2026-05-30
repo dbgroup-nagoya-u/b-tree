@@ -211,6 +211,17 @@ class Node
   }
 
   /**
+   * @return The current memory usage.
+   */
+  [[nodiscard]]
+  constexpr auto
+  Usage() const noexcept  //
+      -> uint32_t
+  {
+    return kHeaderSize + usage_;
+  }
+
+  /**
    * @retval true if this node has been removed.
    * @retval false otherwise.
    */
@@ -545,7 +556,7 @@ class Node
       meta.deleted = false;
       usage_ += pos > 0 ? total_len : 0;
     } else {  // insert a new record
-      if (kHeaderSize + usage_ + total_len > page_size_) return false;
+      if (Usage() + total_len > page_size_) return false;
       if (kHeaderSize + kMetaSize * rec_num_ + total_len > offset_) {
         CleanUp();
         pos = SearchRecord(key).second;
@@ -617,7 +628,7 @@ class Node
       meta.deleted = true;
       usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
     }
-    return kHeaderSize + usage_ < page_size_ / k8;
+    return Usage() < page_size_ / k8;
   }
 
   /*##########################################################################*

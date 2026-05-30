@@ -152,20 +152,7 @@ class BTree
    */
   ~BTree()
   {
-    std::vector<std::pair<Node*, uint32_t>> stack{};
-    stack.reserve(kInitialHeight);
-    stack.emplace_back(root_.load(kAcquire), 0);
-    while (!stack.empty()) {
-      auto& [node, pos] = stack.back();
-      if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
-        Node* child{};
-        node->CopyPayloadTo(pos++, &child);
-        stack.emplace_back(child, 0);
-        continue;
-      }
-      FreePage(node);
-      stack.pop_back();
-    }
+    TraverseAllNodes([&](Node* node) { FreePage(node); });
   }
 
   /*##########################################################################*
@@ -485,7 +472,7 @@ class BTree
   }
 
   /*##########################################################################*
-   * Public bulkload API
+   * Public utilities
    *##########################################################################*/
 
   /**
@@ -557,6 +544,48 @@ class BTree
     // set a new root
     auto* old_root = root_.exchange(new_root, kRelease);
     gc_->AddGarbage(old_root, page_size_);
+  }
+
+  /**
+   * @retval 1st: The actual usage of this index.
+   * @retval 2nd: The allocated memory amount for this index.
+   */
+  auto
+  MemoryUsage() const  //
+      -> std::pair<size_t, size_t>
+  {
+    size_t total_used{};
+    size_t total_alloc{};
+    const auto& usage = MemoryUsageDetailed();
+    for (const auto [used, allocated] : usage) {
+      total_used += used;
+      total_alloc += allocated;
+    }
+    return {total_used, total_alloc};
+  }
+
+  /**
+   * @return The memory usage of each level.
+   * @retval 1st: The actual usage of this index.
+   * @retval 2nd: The allocated memory amount for this index.
+   */
+  auto
+  MemoryUsageDetailed() const  //
+      -> std::vector<std::pair<size_t, size_t>>
+  {
+    std::vector<std::pair<size_t, size_t>> usage{};
+    usage.reserve(kInitialHeight);
+    TraverseAllNodes([&](Node* node) {
+      const auto level = node->GetLevel();
+      while (usage.size() <= level) [[unlikely]] {
+        usage.emplace_back();
+      }
+      auto& [used, allocated] = usage[level];
+      used += node->Usage();
+      allocated += page_size_;
+    });
+
+    return usage;
   }
 
   /*##########################################################################*
@@ -1104,6 +1133,32 @@ class BTree
       ::dbgroup::memory::Release<KeyWOPtr>(key);
     }
     return pos;
+  }
+
+  /**
+   * @brief Traverse all nodes and perform a given function.
+   *
+   * @param f A function to be performed to each node.
+   */
+  void
+  TraverseAllNodes(  //
+      std::function<void(Node*)> f) const
+  {
+    std::vector<std::pair<Node*, uint32_t>> stack{};
+    stack.reserve(kInitialHeight);
+    stack.emplace_back(root_.load(kAcquire), 0);
+    while (!stack.empty()) {
+      auto& [node, pos] = stack.back();
+      if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
+        Node* child{};
+        node->CopyPayloadTo(pos++, &child);
+        stack.emplace_back(child, 0);
+        continue;
+      }
+
+      f(node);
+      stack.pop_back();
+    }
   }
 
   /*##########################################################################*
