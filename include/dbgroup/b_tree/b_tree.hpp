@@ -272,7 +272,7 @@ class BTree
         if (grd.VerifyVersion(kNoMask)) break;
       }
       node = std::bit_cast<Node*>(tmp_page);
-      begin_pos = node->GetRecNum() - 1;
+      begin_pos = node->RecNum() - 1;
     }
 
     constexpr bool kBackward = false;
@@ -576,7 +576,7 @@ class BTree
     std::vector<std::pair<size_t, size_t>> usage{};
     usage.reserve(kInitialHeight);
     TraverseAllNodes([&](Node* node) {
-      const auto level = node->GetLevel();
+      const auto level = node->Level();
       while (usage.size() <= level) [[unlikely]] {
         usage.emplace_back();
       }
@@ -943,7 +943,7 @@ class BTree
         auto&& grd = node->GetGuard();
         while (true) {
           if (!SearchHorizontally(node, grd, key)) goto out;
-          if (node->GetLevel() == level) return {node, std::move(grd)};
+          if (node->Level() == level) return {node, std::move(grd)};
 
           child = node->SearchChild(key);
           if (grd.VerifyVersion(kInsDelMask)) break;
@@ -979,7 +979,7 @@ class BTree
         auto& [node, pos, grd] = stack.back();
         while (true) {
           if (!SearchHorizontally(node, grd, key, open)) goto out;
-          if (node->GetLevel() == 0) return;
+          if (node->Level() == 0) return;
 
           pos = node->SearchRecord(key).second - 1;
           node->CopyPayloadTo(pos--, &child);
@@ -1007,7 +1007,7 @@ class BTree
   {
     auto* node = root_.load(kAcquire);
     while (true) {
-      if (node->GetLevel() == 0) return {node, node->GetGuard()};
+      if (node->Level() == 0) return {node, node->GetGuard()};
 
       Node* child{};
       auto&& grd = node->GetGuard();
@@ -1043,8 +1043,8 @@ class BTree
           if (!grd.VerifyVersion(kSMOMask)) continue;
 
           if (!removed && !sib) {
-            if (node->GetLevel() == 0) return;
-            pos = node->GetRecNum() - 1;
+            if (node->Level() == 0) return;
+            pos = node->RecNum() - 1;
             node->CopyPayloadTo(pos--, &child);
             if (grd.VerifyVersion(kInsDelMask)) break;
             continue;
@@ -1149,7 +1149,7 @@ class BTree
     stack.emplace_back(root_.load(kAcquire), 0);
     while (!stack.empty()) {
       auto& [node, pos] = stack.back();
-      if (node->GetLevel() > 0 && pos < node->GetRecNum()) {
+      if (node->Level() > 0 && pos < node->RecNum()) {
         Node* child{};
         node->CopyPayloadTo(pos++, &child);
         stack.emplace_back(child, 0);
@@ -1183,7 +1183,7 @@ class BTree
     const auto& [key, key_len] = l_child->GetHighKey();
     l_grd = XGuard{};
 
-    const auto level = l_child->GetLevel() + 1;
+    const auto level = l_child->Level() + 1;
     while (true) {
       if (stack.empty()) {  // create a new root
         auto* old_root = root_.load(kRelaxed);
@@ -1226,7 +1226,7 @@ class BTree
       Node* l_child,
       SIXGuard l_grd)
   {
-    const auto level = l_child->GetLevel() + 1;
+    const auto level = l_child->Level() + 1;
     auto&& r_grd = l_child->GetMergeableSib();
     if (!r_grd) {  // remove a root node if possible
       auto* root = root_.load(kRelaxed);

@@ -193,7 +193,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  GetLevel() const noexcept  //
+  Level() const noexcept  //
       -> uint32_t
   {
     return level_;
@@ -204,7 +204,7 @@ class Node
    */
   [[nodiscard]]
   constexpr auto
-  GetRecNum() const noexcept  //
+  RecNum() const noexcept  //
       -> uint32_t
   {
     return rec_num_;
