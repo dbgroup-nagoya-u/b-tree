@@ -557,7 +557,7 @@ class BTree
     size_t total_used{};
     size_t total_alloc{};
     const auto& usage = MemoryUsageDetailed();
-    for (const auto [used, allocated] : usage) {
+    for (const auto& [used, allocated] : usage) {
       total_used += used;
       total_alloc += allocated;
     }

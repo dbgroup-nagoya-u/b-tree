@@ -8,7 +8,7 @@ endif()
 # project information
 project(
   b_tree
-  VERSION "0.1.0"
+  VERSION "0.2.0"
   DESCRIPTION "An open-source B+tree library."
   LANGUAGES "CXX"
 )
@@ -55,16 +55,16 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   # use our C++ utilities
   FetchContent_Declare(
     cpp-utility
-    GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/cpp-utility.git"
-    GIT_TAG "ce6ea366f3be9b699d2136cef9269c48d9c47841"
+    GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/cpp-utility"
+    GIT_TAG "1b790bf1a89cf29b5d759e4dd84ce814e727b06d" # v0.17.1
   )
   FetchContent_MakeAvailable(cpp-utility)
 
-   # use our GC library
+   # use our local GC
   FetchContent_Declare(
     memory-manager
-    GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/memory-manager.git"
-    GIT_TAG "5982e394ff15d14db39c8ecd0c4516d65faf4074"
+    GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/memory-manager"
+    GIT_TAG "5982e394ff15d14db39c8ecd0c4516d65faf4074" # v0.5.1
   )
   FetchContent_MakeAvailable(memory-manager)
 
