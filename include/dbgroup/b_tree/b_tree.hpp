@@ -379,7 +379,7 @@ class BTree
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
-        if (grd.VerifyVersion(kInsDelMask)) break;
+        if (grd.VerifyVersion(kNoMask)) break;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
           VerIncrement<kInsDelMask>(x_grd);
