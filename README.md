@@ -37,6 +37,10 @@ sudo apt update && sudo apt install -y \
 Please refer to [index-fixtures](https://github.com/dbgroup-nagoya-u/index-fixtures?tab=readme-ov-file#build-options) for more build options.
 
 - `B_TREE_BUILD_TESTS`: Build unit tests for this library if `ON` (default `OFF`).
+- `B_TREE_TEST_SANITIZER`: Build unit tests and their dependencies with sanitizers (default `none`).
+    - `thread`: Use ThreadSanitizer. The unit tests load `test/tsan.supp` automatically to suppress races caused by optimistic reads of node fields. Use Clang 18 or later; GCC's ThreadSanitizer may abort under address space layout randomization unless tests run via `setarch $(uname -m) -R`.
+    - `address`: Use AddressSanitizer and UndefinedBehaviorSanitizer.
+    - Sanitizers cannot be used with `DBGROUP_TEST_OVERRIDE_MIMALLOC`.
 
 ### Build and Run Unit Tests
 
