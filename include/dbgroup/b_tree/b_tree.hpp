@@ -224,7 +224,7 @@ class BTree
       }
       node = static_cast<LeafNode*>(tmp_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      begin_pos = pos + static_cast<int32_t>(!found || deleted || !closed);
+      begin_pos = pos + static_cast<int32_t>(found && !closed);
     } else {
       auto&& [tmp_node, grd] = SearchLeftmostLeaf(stack);
       do {
@@ -1109,11 +1109,12 @@ class BTree
       std::memcpy(static_cast<void*>(node), sib_node, page_size_);
     } while (!grd.VerifyVersion(kNoMask));
 
-    auto [found, deleted, pos] = node->CheckUniqueness(key);
+    // deleted records are skipped when fetching, so start from the high key
+    const auto pos = node->SearchRecord(key).second;
     if constexpr (IsVarLenData<Key>()) {
       ::dbgroup::memory::Release<KeyWOPtr>(key);
     }
-    return pos + static_cast<int32_t>(!found || deleted);
+    return pos;
   }
 
   /**
