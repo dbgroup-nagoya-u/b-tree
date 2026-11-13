@@ -42,7 +42,9 @@
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
-#include "dbgroup/b_tree/component/node.hpp"
+#include "dbgroup/b_tree/component/inner_node.hpp"
+#include "dbgroup/b_tree/component/leaf_node.hpp"
+#include "dbgroup/b_tree/component/node_header.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
 namespace dbgroup::index::b_tree
@@ -77,11 +79,13 @@ class BTree
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
 
-  using Node = component::Node<Key, Comp, Lock>;
+  using NodeHeader = component::NodeHeader<Key, Comp, Lock>;
+  using InnerNode = component::InnerNode<Key, Comp, Lock>;
+  using LeafNode = component::LeafNode<Key, Comp, Lock>;
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
-  using NodeEntry = std::tuple<Key, Node*, size_t>;
+  using NodeEntry = std::tuple<Key, NodeHeader*, size_t>;
   using BulkResult = std::pair<uint32_t, std::vector<NodeEntry>>;
   using BulkPromise = std::promise<BulkResult>;
   using BulkFuture = std::future<BulkResult>;
@@ -152,7 +156,7 @@ class BTree
    */
   ~BTree()
   {
-    TraverseAllNodes([&](Node* node) { FreePage(node); });
+    TraverseAllNodes([&](NodeHeader* node) { FreePage(node); });
   }
 
   /*##########################################################################*
@@ -176,10 +180,10 @@ class BTree
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key);
+      auto&& [node, grd] = SearchLeaf(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
@@ -203,22 +207,22 @@ class BTree
       const ScanKey& begin_key = std::nullopt,
       const ScanKey& end_key = std::nullopt)
   {
-    Node* node;
+    LeafNode* node;
     int32_t begin_pos;
     auto&& gc_grd = gc_->CreateEpochGuard();
 
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     auto* tmp_page = AllocPage();
     if (begin_key) {
       const auto& [key, _, closed] = *begin_key;
       while (true) {
-        auto&& [tmp_node, grd] = SearchNode(stack, key);
+        auto&& [tmp_node, grd] = SearchLeaf(stack, key);
         std::memcpy(tmp_page, tmp_node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
         stack.emplace_back(tmp_node);
       }
-      node = std::bit_cast<Node*>(tmp_page);
+      node = static_cast<LeafNode*>(tmp_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos + static_cast<int32_t>(!found || deleted || !closed);
     } else {
@@ -226,7 +230,7 @@ class BTree
       do {
         std::memcpy(tmp_page, tmp_node, page_size_);
       } while (!grd.VerifyVersion(kNoMask));
-      node = std::bit_cast<Node*>(tmp_page);
+      node = static_cast<LeafNode*>(tmp_page);
       begin_pos = 0;
     }
 
@@ -246,11 +250,11 @@ class BTree
       const ScanKey& begin_key = std::nullopt,
       const ScanKey& end_key = std::nullopt)
   {
-    Node* node;
+    LeafNode* node;
     int32_t begin_pos;
     auto&& gc_grd = gc_->CreateEpochGuard();
 
-    std::vector<std::tuple<Node*, int32_t, OptGuard>> stack{};
+    std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack{};
     stack.reserve(kInitialHeight);
     auto* tmp_page = AllocPage();
     if (end_key) {
@@ -261,7 +265,7 @@ class BTree
         std::memcpy(tmp_page, tmp_node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
       }
-      node = std::bit_cast<Node*>(tmp_page);
+      node = static_cast<LeafNode*>(tmp_page);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       begin_pos = pos - static_cast<int32_t>(!found || deleted || !closed);
     } else {
@@ -271,7 +275,7 @@ class BTree
         std::memcpy(tmp_page, tmp_node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
       }
-      node = std::bit_cast<Node*>(tmp_page);
+      node = static_cast<LeafNode*>(tmp_page);
       begin_pos = node->RecNum() - 1;
     }
 
@@ -326,10 +330,10 @@ class BTree
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key);
+      auto&& [node, grd] = SearchLeaf(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (found && !deleted) {
@@ -366,10 +370,10 @@ class BTree
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key);
+      auto&& [node, grd] = SearchLeaf(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
@@ -416,10 +420,10 @@ class BTree
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key);
+      auto&& [node, grd] = SearchLeaf(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
@@ -449,10 +453,10 @@ class BTree
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
     std::optional<Payload> out_pay{};
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key);
+      auto&& [node, grd] = SearchLeaf(stack, key);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
@@ -523,13 +527,13 @@ class BTree
 
       // align the height of partial trees and link their rightmost/leftmost nodes
       nodes.reserve(2UL * (page_size_ / kRecLen) * thread_num);
-      Node* prev_node = nullptr;
+      NodeHeader* prev_node = nullptr;
       for (auto&& [p_level, p_nodes] : trees) {
         while (p_level < level) {
           p_nodes = ConstructSingleLevel<NodeEntry>(p_nodes.cbegin(), p_nodes.size(), p_level++);
         }
         nodes.insert(nodes.end(), p_nodes.begin(), p_nodes.end());
-        Node::LinkVerticalBorderNodes(prev_node, std::get<1>(p_nodes.front()));
+        NodeHeader::LinkVerticalBorderNodes(prev_node, std::get<1>(p_nodes.front()));
         prev_node = std::get<1>(p_nodes.back());
       }
     }
@@ -539,7 +543,7 @@ class BTree
       nodes = ConstructSingleLevel<NodeEntry>(nodes.cbegin(), nodes.size(), level++);
     }
     auto* new_root = std::get<1>(nodes.front());
-    Node::RemoveLeftmostKeys(new_root);
+    NodeHeader::RemoveLeftmostKeys(new_root);
 
     // set a new root
     auto* old_root = root_.exchange(new_root, kRelease);
@@ -575,7 +579,7 @@ class BTree
   {
     std::vector<std::pair<size_t, size_t>> usage{};
     usage.reserve(kInitialHeight);
-    TraverseAllNodes([&](Node* node) {
+    TraverseAllNodes([&](NodeHeader* node) {
       const auto level = node->Level();
       while (usage.size() <= level) [[unlikely]] {
         usage.emplace_back();
@@ -614,11 +618,11 @@ class BTree
      */
     Iterator(  //
         BTree* index,
-        Node* node,
+        LeafNode* node,
         const int32_t begin_pos,
         const ScanKey& end_key,
         GCGuard gc_grd,
-        std::vector<std::tuple<Node*, int32_t, OptGuard>> stack = {})
+        std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack = {})
         : node_{node}
         , pos_{begin_pos}
         , index_{index}
@@ -805,7 +809,7 @@ class BTree
      *########################################################################*/
 
     /// @brief The current scanning node.
-    Node* node_{};
+    LeafNode* node_{};
 
     /// @brief The position of the current record.
     int32_t pos_{};
@@ -833,7 +837,7 @@ class BTree
 
     /// @brief A stack of traversed nodes.
     /// @note This filed is only used for backward scan.
-    std::vector<std::tuple<Node*, int32_t, OptGuard>> stack_{};
+    std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack_{};
   };
 
  private:
@@ -892,7 +896,7 @@ class BTree
   [[nodiscard]]
   static auto
   SearchHorizontally(  //
-      Node*& node,
+      NodeHeader*& node,
       OptGuard& grd,
       const Key& key,
       const bool reverse = false)  //
@@ -925,12 +929,12 @@ class BTree
   [[nodiscard]]
   auto
   SearchNode(  //
-      std::vector<Node*>& stack,
+      std::vector<NodeHeader*>& stack,
       const Key& key,
       const uint32_t level = 0) const  //
-      -> std::pair<Node*, OptGuard>
+      -> std::pair<NodeHeader*, OptGuard>
   {
-    Node* node;
+    NodeHeader* node;
     while (true) {
       if (stack.empty()) {
         node = root_.load(kAcquire);
@@ -939,19 +943,38 @@ class BTree
         stack.pop_back();
       }
       while (true) {
-        Node* child{};
+        NodeHeader* child{};
         auto&& grd = node->GetGuard();
         while (true) {
           if (!SearchHorizontally(node, grd, key)) goto out;
           if (node->Level() == level) return {node, std::move(grd)};
 
-          child = node->SearchChild(key);
+          child = static_cast<InnerNode*>(node)->SearchChild(key);
           if (grd.VerifyVersion(kInsDelMask)) break;
         }
         stack.emplace_back(std::exchange(node, child));
       }
     out:;  // the current node has been removed or too old, so retry
     }
+  }
+
+  /**
+   * @brief Search a leaf node that may have a target key.
+   *
+   * @param[in,out] stack A stack of traversed nodes.
+   * @param[in] key A search key.
+   * @retval 1st: A found leaf node.
+   * @retval 2nd: The lock guard of a found node.
+   */
+  [[nodiscard]]
+  auto
+  SearchLeaf(  //
+      std::vector<NodeHeader*>& stack,
+      const Key& key) const  //
+      -> std::pair<LeafNode*, OptGuard>
+  {
+    auto&& [node, grd] = SearchNode(stack, key);
+    return {static_cast<LeafNode*>(node), std::move(grd)};
   }
 
   /**
@@ -964,11 +987,11 @@ class BTree
    */
   void
   SearchNodeBackward(  //
-      std::vector<std::tuple<Node*, int32_t, OptGuard>>& stack,
+      std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>>& stack,
       const Key& key,
       const bool open = true) const
   {
-    Node* child{};
+    NodeHeader* child{};
     while (true) {
       if (stack.empty()) {
         auto* root = root_.load(kAcquire);
@@ -981,8 +1004,9 @@ class BTree
           if (!SearchHorizontally(node, grd, key, open)) goto out;
           if (node->Level() == 0) return;
 
-          pos = node->SearchRecord(key).second - 1;
-          node->CopyPayloadTo(pos--, &child);
+          auto* inner = static_cast<InnerNode*>(node);
+          pos = inner->SearchRecord(key).second - 1;
+          child = inner->GetChild(pos--);
           if (grd.VerifyVersion(kInsDelMask)) break;
         }
         stack.emplace_back(child, 0, child->GetGuard());
@@ -1001,18 +1025,18 @@ class BTree
    */
   [[nodiscard]]
   auto
-  SearchLeftmostLeaf(                   //
-      std::vector<Node*>& stack) const  //
-      -> std::pair<Node*, OptGuard>
+  SearchLeftmostLeaf(                         //
+      std::vector<NodeHeader*>& stack) const  //
+      -> std::pair<LeafNode*, OptGuard>
   {
     auto* node = root_.load(kAcquire);
     while (true) {
-      if (node->Level() == 0) return {node, node->GetGuard()};
+      if (node->Level() == 0) return {static_cast<LeafNode*>(node), node->GetGuard()};
 
-      Node* child{};
+      NodeHeader* child{};
       auto&& grd = node->GetGuard();
       do {
-        node->CopyPayloadTo(0, &child);
+        child = static_cast<InnerNode*>(node)->GetChild(0);
       } while (!grd.VerifyVersion(kInsDelMask));
       stack.emplace_back(std::exchange(node, child));
     }
@@ -1025,7 +1049,7 @@ class BTree
    */
   void
   SearchRightmostLeaf(  //
-      std::vector<std::tuple<Node*, int32_t, OptGuard>>& stack) const
+      std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>>& stack) const
   {
     while (true) {
       if (stack.empty()) {
@@ -1034,7 +1058,7 @@ class BTree
       }
 
       while (true) {
-        Node* child{};
+        NodeHeader* child{};
         auto cnt = 0;
         auto& [node, pos, grd] = stack.back();
         while (true) {
@@ -1045,7 +1069,7 @@ class BTree
           if (!removed && !sib) {
             if (node->Level() == 0) return;
             pos = node->RecNum() - 1;
-            node->CopyPayloadTo(pos--, &child);
+            child = static_cast<InnerNode*>(node)->GetChild(pos--);
             if (grd.VerifyVersion(kInsDelMask)) break;
             continue;
           }
@@ -1069,19 +1093,19 @@ class BTree
    */
   [[nodiscard]]
   auto
-  SiblingScan(            //
-      Node*& node) const  //
+  SiblingScan(                //
+      LeafNode*& node) const  //
       -> int32_t
   {
     OptGuard grd{};
-    auto* sib_node = node->GetSibNode();
+    NodeHeader* sib_node = node->GetSibNode();
     const auto& key = node->GetHighKey().first;
 
-    std::vector<Node*> stack{};
+    std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     do {
       stack.emplace_back(sib_node);
-      std::tie(sib_node, grd) = SearchNode(stack, key);
+      std::tie(sib_node, grd) = SearchLeaf(stack, key);
       std::memcpy(static_cast<void*>(node), sib_node, page_size_);
     } while (!grd.VerifyVersion(kNoMask));
 
@@ -1102,16 +1126,15 @@ class BTree
   [[nodiscard]]
   auto
   SiblingScanReverse(  //
-      Node*& node,
-      std::vector<std::tuple<Node*, int32_t, OptGuard>>& stack) const  //
+      LeafNode*& node,
+      std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>>& stack) const  //
       -> int32_t
   {
     stack.pop_back();
     while (!stack.empty()) {
       auto& [node, pos, grd] = stack.back();
       if (pos >= 0) {
-        Node* child{};
-        node->CopyPayloadTo(pos--, &child);
+        auto* child = static_cast<InnerNode*>(node)->GetChild(pos--);
         if (grd.VerifyVersion(kInsDelMask)) {
           stack.emplace_back(child, 0, child->GetGuard());
         }
@@ -1142,16 +1165,15 @@ class BTree
    */
   void
   TraverseAllNodes(  //
-      std::function<void(Node*)> f) const
+      std::function<void(NodeHeader*)> f) const
   {
-    std::vector<std::pair<Node*, uint32_t>> stack{};
+    std::vector<std::pair<NodeHeader*, uint32_t>> stack{};
     stack.reserve(kInitialHeight);
     stack.emplace_back(root_.load(kAcquire), 0);
     while (!stack.empty()) {
       auto& [node, pos] = stack.back();
       if (node->Level() > 0 && pos < node->RecNum()) {
-        Node* child{};
-        node->CopyPayloadTo(pos++, &child);
+        auto* child = static_cast<InnerNode*>(node)->GetChild(pos++);
         stack.emplace_back(child, 0);
         continue;
       }
@@ -1172,13 +1194,14 @@ class BTree
    * @param l_child A split-left node.
    * @param l_grd The guard instance of a split-left node.
    */
+  template <class NodeT>
   void
   Split(  //
-      std::vector<Node*> stack,
-      Node* l_child,
+      std::vector<NodeHeader*> stack,
+      NodeT* l_child,
       XGuard l_grd)
   {
-    auto* r_child = new (AllocPage()) Node{l_child};
+    auto* r_child = new (AllocPage()) NodeT{l_child};
     VerIncrement<kSMOMask>(l_grd);
     const auto& [key, key_len] = l_child->GetHighKey();
     l_grd = XGuard{};
@@ -1188,19 +1211,21 @@ class BTree
       if (stack.empty()) {  // create a new root
         auto* old_root = root_.load(kRelaxed);
         if (old_root == l_child) {
-          auto* root = new (AllocPage()) Node{level, key, key_len, l_child, r_child};
+          auto* root = new (AllocPage())
+              InnerNode{page_size_, align_val_, level, key, key_len, l_child, r_child};
           if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) break;
           FreePage(root);
         }
       }
 
       // insert a new down link
-      auto&& [node, grd] = SearchNode(stack, key, level);
+      auto&& [tmp_node, grd] = SearchNode(stack, key, level);
+      auto* node = static_cast<InnerNode*>(tmp_node);
       const auto [found, pos] = node->SearchRecord(key);
       assert(!found);
       auto&& x_grd = grd.TryLockX(kInsDelMask);
       if (!x_grd) continue;  // another thread may insert the key
-      if (node->Insert(pos, found, key, key_len, &r_child, kWordSize)) {
+      if (node->InsertChild(pos, key, key_len, r_child)) {
         VerIncrement<kInsDelMask>(x_grd);
         break;
       }
@@ -1222,16 +1247,16 @@ class BTree
    */
   void
   TryMerge(  //
-      std::vector<Node*>& stack,
-      Node* l_child,
+      std::vector<NodeHeader*>& stack,
+      NodeHeader* l_child,
       SIXGuard l_grd)
   {
     const auto level = l_child->Level() + 1;
     auto&& r_grd = l_child->GetMergeableSib();
     if (!r_grd) {  // remove a root node if possible
       auto* root = root_.load(kRelaxed);
-      if (root == l_child && root->IsRemovableInner()) {
-        root->CopyPayloadTo(0, &l_child);  // `l_child` has become a new root
+      if (root == l_child && root->Level() > 0 && static_cast<InnerNode*>(root)->IsRemovable()) {
+        l_child = static_cast<InnerNode*>(root)->GetChild(0);  // a new root
         root_.store(l_child, kRelease);
         root->Remove(std::move(l_grd));
         gc_->AddGarbage(root, page_size_);
@@ -1241,7 +1266,8 @@ class BTree
 
     const auto& key = l_child->GetHighKey().first;
     while (true) {
-      auto&& [node, grd] = SearchNode(stack, key, level);
+      auto&& [tmp_node, grd] = SearchNode(stack, key, level);
+      auto* node = static_cast<InnerNode*>(tmp_node);
       const auto [found, pos] = node->SearchRecord(key);
       if (!found) {
         if (!grd.VerifyVersion(kInsDelMask)) continue;
@@ -1250,8 +1276,7 @@ class BTree
       auto&& x_grd = grd.TryLockX(kInsDelMask);
       if (!x_grd) continue;  // another thread may modify a node
 
-      Node* r_child{};
-      const auto need_merge = node->Delete(pos, &r_child);
+      const auto [r_child, need_merge] = node->DeleteChild(pos);
       VerIncrement<kInsDelMask>(x_grd);
       if (need_merge) {
         auto&& six_grd = x_grd.DowngradeToSIX();
@@ -1319,15 +1344,26 @@ class BTree
     std::vector<NodeEntry> nodes{};
     nodes.reserve((n / (page_size_ / kRecLen)) + 1);
     const auto& iter_end = std::next(iter, n);
-    for (Node* prev_node = nullptr; iter < iter_end;) {
+    for (NodeHeader* prev_node = nullptr; iter < iter_end;) {
       const auto& [key, key_len] = ParseKey(*iter);
-      auto* node = new (AllocPage()) Node{page_size_, align_val_, level};
+      LeafNode* leaf{};
+      InnerNode* inner{};
+      NodeHeader* node{};
+      if (level == 0) {
+        node = leaf = new (AllocPage()) LeafNode{page_size_, align_val_};
+      } else {
+        node = inner = new (AllocPage()) InnerNode{page_size_, align_val_, level};
+      }
       nodes.emplace_back(key, node, key_len);
       if (prev_node) {
         prev_node->LinkSiblingNode(node, key, key_len);
       }
 
-      node->Bulkload(iter, iter_end);
+      if (leaf) {
+        leaf->Bulkload(iter, iter_end);
+      } else {
+        inner->Bulkload(iter, iter_end);
+      }
       prev_node = node;
     }
     return nodes;
@@ -1375,7 +1411,7 @@ class BTree
   std::shared_ptr<GC> gc_{};
 
   /// @brief The root node of this tree.
-  std::atomic<Node*> root_{new (AllocPage()) Node{page_size_, align_val_}};
+  std::atomic<NodeHeader*> root_{new (AllocPage()) LeafNode{page_size_, align_val_}};
 };
 
 }  // namespace dbgroup::index::b_tree
