@@ -18,12 +18,14 @@
 #define B_TREE_DBGROUP_B_TREE_B_TREE_HPP_
 
 // C++ standard libraries
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -923,8 +925,11 @@ class BTree
    * @param[in,out] stack A stack of traversed nodes.
    * @param[in] key A search key.
    * @param[in] level The bottom level of search space.
-   * @retval 1st: A found node.
+   * @retval 1st: A node if the appropriate target is found.
+   * @retval 1st: `nullptr` otherwise.
    * @retval 2nd: The lock guard of a found node.
+   * @note `nullptr` is returned only when the stack is empty; the root has been
+   * removed by a concurrent merge.
    */
   [[nodiscard]]
   auto
@@ -938,6 +943,7 @@ class BTree
     while (true) {
       if (stack.empty()) {
         node = root_.load(kAcquire);
+        if (node->Level() < level) return {nullptr, OptGuard{}};
       } else {
         node = stack.back();
         stack.pop_back();
@@ -974,6 +980,7 @@ class BTree
       -> std::pair<LeafNode*, OptGuard>
   {
     auto&& [node, grd] = SearchNode(stack, key);
+    assert(node);  // leaf nodes always exist
     return {static_cast<LeafNode*>(node), std::move(grd)};
   }
 
@@ -1221,6 +1228,10 @@ class BTree
 
       // insert a new down link
       auto&& [tmp_node, grd] = SearchNode(stack, key, level);
+      if (!tmp_node) {  // the parent level has been removed
+        std::this_thread::yield();
+        continue;  // retry from the root creation with the empty stack
+      }
       auto* node = static_cast<InnerNode*>(tmp_node);
       const auto [found, pos] = node->SearchRecord(key);
       assert(!found);
@@ -1268,6 +1279,7 @@ class BTree
     const auto& key = l_child->GetHighKey().first;
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key, level);
+      if (!tmp_node) break;  // the parent level has been removed
       auto* node = static_cast<InnerNode*>(tmp_node);
       const auto [found, pos] = node->SearchRecord(key);
       if (!found) {
