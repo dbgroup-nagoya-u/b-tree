@@ -185,7 +185,8 @@ class BTree
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchLeaf(stack, key);
+      auto&& [tmp_node, grd] = SearchNode(stack, key);
+      auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
@@ -219,7 +220,7 @@ class BTree
     if (begin_key) {
       const auto& [key, _, closed] = *begin_key;
       while (true) {
-        auto&& [tmp_node, grd] = SearchLeaf(stack, key);
+        auto&& [tmp_node, grd] = SearchNode(stack, key);
         std::memcpy(tmp_page, tmp_node, page_size_);
         if (grd.VerifyVersion(kNoMask)) break;
         stack.emplace_back(tmp_node);
@@ -335,7 +336,8 @@ class BTree
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchLeaf(stack, key);
+      auto&& [tmp_node, grd] = SearchNode(stack, key);
+      auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (found && !deleted) {
@@ -375,7 +377,8 @@ class BTree
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchLeaf(stack, key);
+      auto&& [tmp_node, grd] = SearchNode(stack, key);
+      auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         out_pay = node->template GetPayload<Payload>(pos);
@@ -425,7 +428,8 @@ class BTree
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchLeaf(stack, key);
+      auto&& [tmp_node, grd] = SearchNode(stack, key);
+      auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
@@ -458,7 +462,8 @@ class BTree
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
-      auto&& [node, grd] = SearchLeaf(stack, key);
+      auto&& [tmp_node, grd] = SearchNode(stack, key);
+      auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) break;
@@ -487,6 +492,8 @@ class BTree
    * @tparam Entry A container for a key/payload pair.
    * @param entries All entries for bulkload.
    * @param thread_num The number of threads used for bulkload.
+   * @note This function must be called for an empty tree without any concurrent
+   * operations.
    */
   template <class Entry>
   void
@@ -494,6 +501,7 @@ class BTree
       const std::vector<Entry>& entries,
       const size_t thread_num = 1)
   {
+    assert(root_.load(kRelaxed)->Level() == 0 && root_.load(kRelaxed)->RecNum() == 0);
     if (entries.empty()) return;
 
     std::vector<NodeEntry> nodes{};
@@ -965,26 +973,6 @@ class BTree
   }
 
   /**
-   * @brief Search a leaf node that may have a target key.
-   *
-   * @param[in,out] stack A stack of traversed nodes.
-   * @param[in] key A search key.
-   * @retval 1st: A found leaf node.
-   * @retval 2nd: The lock guard of a found node.
-   */
-  [[nodiscard]]
-  auto
-  SearchLeaf(  //
-      std::vector<NodeHeader*>& stack,
-      const Key& key) const  //
-      -> std::pair<LeafNode*, OptGuard>
-  {
-    auto&& [node, grd] = SearchNode(stack, key);
-    assert(node);  // leaf nodes always exist
-    return {static_cast<LeafNode*>(node), std::move(grd)};
-  }
-
-  /**
    * @brief Search a node that may have a target key.
    *
    * @param[in,out] stack A stack of traversed nodes.
@@ -1112,7 +1100,7 @@ class BTree
     stack.reserve(kInitialHeight);
     do {
       stack.emplace_back(sib_node);
-      std::tie(sib_node, grd) = SearchLeaf(stack, key);
+      std::tie(sib_node, grd) = SearchNode(stack, key);
       std::memcpy(static_cast<void*>(node), sib_node, page_size_);
     } while (!grd.VerifyVersion(kNoMask));
 
