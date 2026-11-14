@@ -56,7 +56,7 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   FetchContent_Declare(
     cpp-utility
     GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/cpp-utility"
-    GIT_TAG "1b790bf1a89cf29b5d759e4dd84ce814e727b06d" # v0.17.1
+    GIT_TAG "32551c6d394e986508c4f4594d2c8cd3bd947132" # v0.19.0
   )
   FetchContent_MakeAvailable(cpp-utility)
 
@@ -64,7 +64,7 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   FetchContent_Declare(
     memory-manager
     GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/memory-manager"
-    GIT_TAG "5982e394ff15d14db39c8ecd0c4516d65faf4074" # v0.5.1
+    GIT_TAG "ef90a32f78ae1bb915ce59aa1a2d0eaab1a838de" # v0.7.0
   )
   FetchContent_MakeAvailable(memory-manager)
 

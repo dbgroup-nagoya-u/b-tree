@@ -1,0 +1,8 @@
+# ThreadSanitizer suppressions for unit tests.
+#
+# Readers access node fields without locks and validate them with node versions
+# afterward (seqlock-style optimistic reads). Such reads race with writers by
+# design, so suppress races involving node classes.
+race:dbgroup::index::b_tree::component::NodeHeader
+race:dbgroup::index::b_tree::component::InnerNode
+race:dbgroup::index::b_tree::component::LeafNode

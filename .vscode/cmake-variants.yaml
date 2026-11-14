@@ -8,18 +8,28 @@ buildType:
       buildType: Debug
       settings:
         DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
-    relWithDebInfo:
-      short: RelWithDebInfo
-      long: Perform optimizations and include debugging informatin
+        B_TREE_TEST_SANITIZER: none
+    tsan:
+      short: RelWithDebInfo+TSan
+      long: Perform optimizations with ThreadSanitizer
       buildType: RelWithDebInfo
       settings:
         DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
+        B_TREE_TEST_SANITIZER: thread
+    asan:
+      short: RelWithDebInfo+ASan/UBSan
+      long: Perform optimizations with AddressSanitizer and UndefinedBehaviorSanitizer
+      buildType: RelWithDebInfo
+      settings:
+        DBGROUP_TEST_OVERRIDE_MIMALLOC: OFF
+        B_TREE_TEST_SANITIZER: address
     release:
       short: Release
       long: Perform optimizations and omit debugging informatin
       buildType: Release
       settings:
         DBGROUP_TEST_OVERRIDE_MIMALLOC: ON
+        B_TREE_TEST_SANITIZER: none
 
 threadNumbers:
   default: 8threads
