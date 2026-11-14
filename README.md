@@ -1,6 +1,6 @@
 # B<sup>+</sup>-trees
 
-[![Ubuntu 24.04](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_24.yaml/badge.svg)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_24.yaml) [![Ubuntu 22.04](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_22.yaml/badge.svg)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_22.yaml) [![macOS](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/mac.yaml/badge.svg)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/mac.yaml)
+[![Ubuntu 24.04](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_24.yaml/badge.svg?branch=main)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_24.yaml) [![Ubuntu 22.04](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_22.yaml/badge.svg?branch=main)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/ubuntu_22.yaml) [![macOS](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/mac.yaml/badge.svg?branch=main)](https://github.com/dbgroup-nagoya-u/b-tree/actions/workflows/mac.yaml)
 
 This repository contains open source implementations of B<sup>+</sup>-trees for research use. The purpose of this implementation is to reproduce B<sup>+</sup>-trees and measure its performance.
 
@@ -84,3 +84,5 @@ We provide the same read/write APIs for the implemented indexes. See [here](http
 ## Acknowledgments
 
 This work is based on results from project JPNP16007 commissioned by the New Energy and Industrial Technology Development Organization (NEDO), and it was supported partially by KAKENHI (JP20K19804, JP21H03555, and JP22H03594).
+
+We used Claude, a generative AI model developed by Anthropic, to assist with development tasks such as debugging.
