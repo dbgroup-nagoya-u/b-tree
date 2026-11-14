@@ -425,7 +425,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @retval true if this node should be merged.
    * @retval false otherwise.
    */
-  auto
+  constexpr auto
   Delete(                          //
       const int32_t pos) noexcept  //
       -> bool
@@ -536,7 +536,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *
    * @param pos A position where a target record is.
    */
-  void
+  constexpr void
   MarkDeleted(  //
       const int32_t pos) noexcept
   {
