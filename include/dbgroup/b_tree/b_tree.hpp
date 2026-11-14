@@ -74,8 +74,7 @@ class BTree
    *##########################################################################*/
 
   using KeyWOPtr = std::remove_pointer_t<Key>;
-  using PayWOPtr =
-      std::conditional_t<IsVarLenData<Payload>(), std::remove_pointer_t<Payload>, Payload>;
+  using PayWOPtr = component::WOPtr<Payload>;
   using PayloadOut = std::conditional_t<IsVarLenData<Payload>(), Payload, Payload*>;
   using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
@@ -87,6 +86,8 @@ class BTree
   using NodeHeader = component::NodeHeader<Key, Comp, Lock>;
   using InnerNode = component::InnerNode<Key, Comp, Lock>;
   using LeafNode = component::LeafNode<Key, Comp, Lock>;
+  template <class T>
+  using Merger = component::Merger<Payload, T>;
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
@@ -316,7 +317,7 @@ class BTree
       const Payload& payload,
       const size_t key_len = sizeof(Key),
       const size_t pay_len = sizeof(Payload),
-      Payload (*merger)(const Payload&, const Payload&) = nullptr)
+      Merger<Payload> merger = nullptr)
   {
     Upsert(key, payload, key_len, pay_len, nullptr, nullptr, merger);
   }
@@ -333,7 +334,8 @@ class BTree
    * @param[in] merger A function for merging payloads.
    * @retval true if an existing record is updated.
    * @retval false if a new record is inserted.
-   * @note `merger` is not supported for variable-length payloads.
+   * @note `merger` may be called multiple times due to retries, so it must not
+   * have side effects.
    */
   auto
   Upsert(  //
@@ -343,7 +345,7 @@ class BTree
       const size_t pay_len = sizeof(Payload),
       PayloadOut old_pay = nullptr,
       size_t* old_len = nullptr,
-      Payload (*merger)(const Payload&, const Payload&) = nullptr)  //
+      Merger<Payload> merger = nullptr)  //
       -> bool
   {
     assert(pay_len <= kMaxPaySize);
@@ -357,8 +359,11 @@ class BTree
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (found && !deleted) {
-          CopyOldPayload(node, pos, old_pay, old_len);
-          if (UpdatePayload(node, pos, key, key_len, payload, pay_len, merger, x_grd)) {
+          if (node->template Update<Payload, Payload>(  //
+                  pos, key, key_len, payload, pay_len, old_pay, old_len, merger)) {
+            if constexpr (IsVarLenData<Payload>()) {
+              VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
+            }
             return true;
           }
         } else if (node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len)) {
@@ -403,7 +408,7 @@ class BTree
       auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        CopyOldPayload(node, pos, old_pay, old_len);
+        node->CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
         if (grd.VerifyVersion(kNoMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len)) {
@@ -429,7 +434,8 @@ class BTree
    * @param[in] merger A function for merging payloads.
    * @retval true if the key exists (i.e., succeeded).
    * @retval false otherwise.
-   * @note `merger` is not supported for variable-length payloads.
+   * @note A delta (i.e., `T` is not `Payload`) requires `merger`. `merger` may
+   * be called multiple times due to retries, so it must not have side effects.
    */
   template <class T = Payload>
   auto
@@ -440,13 +446,13 @@ class BTree
       const size_t pay_len = sizeof(T),
       PayloadOut old_pay = nullptr,
       size_t* old_len = nullptr,
-      Payload (*merger)(const Payload&, const T&) = nullptr)  //
+      Merger<T> merger = nullptr)  //
       -> bool
   {
     static_assert(                                               //
         std::is_same_v<T, Payload> || std::is_same_v<T, Delta>,  //
         "The update API requires the pre-defined Payload or Delta types.");
-    assert(pay_len <= kMaxPaySize);
+    assert(pay_len <= component::MaxPaySize<T>());
 
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
@@ -459,8 +465,11 @@ class BTree
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        CopyOldPayload(node, pos, old_pay, old_len);
-        if (UpdatePayload(node, pos, key, key_len, payload, pay_len, merger, x_grd)) {
+        if (node->template Update<Payload, T>(  //
+                pos, key, key_len, payload, pay_len, old_pay, old_len, merger)) {
+          if constexpr (IsVarLenData<Payload>()) {
+            VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
+          }
           return true;
         }
         Split(stack, node, std::move(x_grd));
@@ -498,7 +507,7 @@ class BTree
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        CopyOldPayload(node, pos, old_pay, old_len);
+        node->CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
         const auto need_merge = node->Delete(pos);
         VerIncrement<kInsDelMask>(x_grd);
         if (need_merge) {
@@ -938,64 +947,6 @@ class BTree
   /*##########################################################################*
    * Internal utility functions
    *##########################################################################*/
-
-  /**
-   * @brief Copy the payload of a given position if requested.
-   *
-   * @param[in] node A target leaf node.
-   * @param[in] pos A target record position.
-   * @param[out] out_pay A destination buffer (ignored if nullptr).
-   * @param[out] out_len The length of a copied payload (ignored if nullptr).
-   */
-  static void
-  CopyOldPayload(  //
-      const LeafNode* node,
-      const int32_t pos,
-      PayloadOut out_pay,
-      size_t* out_len)
-  {
-    if (!out_pay) return;
-    const auto len = node->ReadPayload(pos, out_pay, kMaxPaySize);
-    if (out_len) *out_len = len;
-  }
-
-  /**
-   * @brief Update the payload of an existing record.
-   *
-   * @tparam T A delta-payload class (`Payload` or `Delta`).
-   * @param node A target leaf node.
-   * @param pos A position where a target record is.
-   * @param key A target key.
-   * @param key_len The length of a target key.
-   * @param payload A target payload.
-   * @param pay_len The length of a target payload.
-   * @param merger A function for merging payloads.
-   * @param x_grd The X guard of a given node.
-   * @retval true if the payload is updated.
-   * @retval false if a given node should be split.
-   */
-  template <class T>
-  auto
-  UpdatePayload(  //
-      LeafNode* node,
-      const int32_t pos,
-      [[maybe_unused]] const Key& key,
-      [[maybe_unused]] const size_t key_len,
-      const T& payload,
-      [[maybe_unused]] const size_t pay_len,
-      Payload (*merger)(const Payload&, const T&),
-      [[maybe_unused]] XGuard& x_grd)  //
-      -> bool
-  {
-    if constexpr (IsVarLenData<Payload>()) {
-      assert(!merger);  // not supported yet
-      if (!node->Update(pos, key, key_len, GetSrcAddr(payload), pay_len)) return false;
-      VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
-    } else {
-      node->Update(pos, payload, merger);
-    }
-    return true;
-  }
 
   /**
    * @return A page for a new node.

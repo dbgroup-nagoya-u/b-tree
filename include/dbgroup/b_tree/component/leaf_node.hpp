@@ -18,12 +18,14 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_LEAF_NODE_HPP_
 
 // C++ standard libraries
+#include <bit>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 // external libraries
@@ -216,6 +218,26 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
+   * @brief Copy the payload of a given position if requested.
+   *
+   * @param[in] pos A target record position.
+   * @param[out] out_pay A destination buffer (ignored if nullptr).
+   * @param[out] out_len The length of a copied payload (ignored if nullptr).
+   * @param[in] max_len The maximum length of payloads.
+   */
+  void
+  CopyOldPayload(  //
+      const int32_t pos,
+      void* out_pay,
+      size_t* out_len,
+      const uint32_t max_len) const noexcept
+  {
+    if (!out_pay) return;
+    const auto len = ReadPayload(pos, out_pay, max_len);
+    if (out_len) *out_len = len;
+  }
+
+  /**
    * @brief Copy a record if exist.
    *
    * @param[in] pos A position to be copied.
@@ -335,60 +357,68 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
-   * @brief Update a fixed-length payload in place.
+   * @brief Update the payload of a given position.
    *
-   * @param pos A position where a target record is.
-   * @param payload A target payload to be written.
-   * @param merger A function for merging payloads.
-   */
-  template <class Payload, class Delta>
-  void
-  Update(  //
-      const int32_t pos,
-      const Delta& payload,
-      Payload (*merger)(const Payload&, const Delta&)) noexcept
-  {
-    auto* pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
-    if (merger) {
-      Payload cur{};
-      std::memcpy(&cur, pay_addr, sizeof(Payload));
-      const auto& merged = merger(cur, payload);
-      std::memcpy(pay_addr, &merged, sizeof(Payload));
-    } else {
-      std::memcpy(pay_addr, &payload, sizeof(Payload));
-    }
-  }
-
-  /**
-   * @brief Update a variable-length payload.
-   *
-   * @param pos A position where a target record is.
-   * @param key A target key.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
+   * @tparam Payload A payload class.
+   * @tparam T A class of a given payload or delta.
+   * @param[in] pos A position where a target record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload or delta.
+   * @param[in] pay_len The length of a target payload or delta.
+   * @param[out] old_pay A destination buffer for a previous payload (if given).
+   * @param[out] old_len The length of a previous payload (if given).
+   * @param[in] merger A function for merging payloads.
    * @retval true if the payload is updated.
    * @retval false if this node should be split before updating.
    * @note This node is not modified if this function returns false.
    */
+  template <class Payload, class T>
   auto
   Update(  //
       const int32_t pos,
-      const Key& key,
-      const size_t key_len,
-      const void* payload,
-      const size_t pay_len) noexcept  //
+      [[maybe_unused]] const Key& key,
+      [[maybe_unused]] const size_t key_len,
+      const T& payload,
+      const size_t pay_len,
+      void* old_pay,
+      size_t* old_len,
+      Merger<Payload, T> merger) noexcept  //
       -> bool
   {
-    auto& meta = meta_arr_[pos];
-    const auto old_meta = meta;
-    const auto old_usage = usage_;
-    MarkDeleted(pos);  // the record is dropped if this node is cleaned up
-    if (Insert(pos, true, key, key_len, payload, pay_len)) return true;
+    constexpr uint32_t kMaxPaySize = MaxPaySize<Payload>();
 
-    meta = old_meta;  // Insert does not modify this node if it fails
-    usage_ = old_usage;
-    return false;
+    const void* src = GetSrcAddr(payload);
+    size_t len = pay_len;
+    if (merger) {
+      alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_old[kMaxPaySize];
+      alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_new[kMaxPaySize];
+      size_t cur_len;
+      auto* len_ptr = &cur_len;
+      if (!old_pay) {
+        old_pay = &tls_old[0];
+      } else if (old_len) {
+        len_ptr = old_len;
+      }
+
+      *len_ptr = ReadPayload(pos, old_pay, kMaxPaySize);
+      len = merger(std::bit_cast<const WOPtr<Payload>*>(old_pay), *len_ptr,
+                   static_cast<const WOPtr<T>*>(src), pay_len,
+                   std::bit_cast<WOPtr<Payload>*>(&tls_new[0]));
+      assert(len <= kMaxPaySize);
+      src = &tls_new[0];
+    } else {
+      assert((std::is_same_v<T, Payload>));  // a delta requires a merger
+      CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
+    }
+
+    if constexpr (IsVarLenData<Payload>()) {
+      return Replace(pos, key, key_len, src, len);
+    } else {
+      assert(len == sizeof(Payload));
+      std::memcpy(ShiftAddr(this, meta_arr_[pos].GetPayOff()), src, len);
+      return true;
+    }
   }
 
   /**
@@ -431,6 +461,38 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /*##########################################################################*
    * Internal utilities
    *##########################################################################*/
+
+  /**
+   * @brief Replace a payload with another one that may have a different length.
+   *
+   * @param pos A position where a target record is.
+   * @param key A target key.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval true if the payload is replaced.
+   * @retval false if this node should be split before replacing.
+   * @note This node is not modified if this function returns false.
+   */
+  auto
+  Replace(  //
+      const int32_t pos,
+      const Key& key,
+      const size_t key_len,
+      const void* payload,
+      const size_t pay_len) noexcept  //
+      -> bool
+  {
+    auto& meta = meta_arr_[pos];
+    const auto old_meta = meta;
+    const auto old_usage = usage_;
+    MarkDeleted(pos);  // the record is dropped if this node is cleaned up
+    if (Insert(pos, true, key, key_len, payload, pay_len)) return true;
+
+    meta = old_meta;  // Insert does not modify this node if it fails
+    usage_ = old_usage;
+    return false;
+  }
 
   /**
    * @brief Reuse a deleted record for writing a given payload.
