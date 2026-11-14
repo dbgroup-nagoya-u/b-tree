@@ -18,10 +18,8 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_COMMON_HPP_
 
 // C++ standard libraries
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <type_traits>
 
 // external libraries
 #include <dbgroup/constants.hpp>
@@ -45,33 +43,6 @@ constexpr uint32_t kPtrSize = kWordSize;
 
 /// @brief The length of node header.
 constexpr uint32_t kHeaderSize = 32;
-
-/*############################################################################*
- * Global type aliases
- *############################################################################*/
-
-/// @brief A data class without a pointer for variable-length data.
-template <class T>
-using WOPtr = std::conditional_t<IsVarLenData<T>(), std::remove_pointer_t<T>, T>;
-
-/**
- * @brief A function for merging a payload with a given payload or delta.
- *
- * The arguments are the current payload and its length, a given payload or
- * delta and its length, and a destination buffer of `MaxPaySize<Payload>()`
- * bytes, and the return value is the length of a merged payload. Since this
- * function may be called multiple times due to retries, it must not have
- * side effects.
- *
- * @tparam Payload A payload class.
- * @tparam T A class of given payloads or deltas.
- */
-template <class Payload, class T>
-using Merger = size_t (*)(const WOPtr<Payload>* old_pay,
-                          size_t old_len,
-                          const WOPtr<T>* delta,
-                          size_t delta_len,
-                          WOPtr<Payload>* out_pay);
 
 /*############################################################################*
  * Global utility functions

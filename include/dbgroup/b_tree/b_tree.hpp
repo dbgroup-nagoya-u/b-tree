@@ -54,6 +54,10 @@ namespace dbgroup::index::b_tree
 /**
  * @brief A class for representing B+trees based on single-level SMOs.
  *
+ * This class provides the standard APIs, which accept both fixed-length and
+ * variable-length payloads and output payloads via `PayloadBuf`. See
+ * `BTreeFixLen` for fixed-length payloads with APIs returning `std::optional`.
+ *
  * @tparam Key A class of stored keys.
  * @tparam Payload A class of stored payloads.
  * @tparam Comp A comparator class for keys.
@@ -74,8 +78,7 @@ class BTree
    *##########################################################################*/
 
   using KeyWOPtr = std::remove_pointer_t<Key>;
-  using PayWOPtr = component::WOPtr<Payload>;
-  using PayloadOut = std::conditional_t<IsVarLenData<Payload>(), Payload, Payload*>;
+  using PayWOPtr = WOPtr<Payload>;
   using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
   using GCGuard = dbgroup::thread::EpochGuard;
@@ -86,8 +89,6 @@ class BTree
   using NodeHeader = component::NodeHeader<Key, Comp, Lock>;
   using InnerNode = component::InnerNode<Key, Comp, Lock>;
   using LeafNode = component::LeafNode<Key, Comp, Lock>;
-  template <class T>
-  using Merger = component::Merger<Payload, T>;
 
   template <class Entry>
   using BulkIter = typename std::vector<Entry>::const_iterator;
@@ -100,6 +101,15 @@ class BTree
   /*##########################################################################*
    * Public type declarations
    *##########################################################################*/
+
+  /// @brief A class of keys.
+  using KeyType = Key;
+
+  /// @brief A class of payloads.
+  using PayloadType = Payload;
+
+  /// @brief A buffer for receiving payloads from this index.
+  using PayloadBuf = ::dbgroup::index::PayloadBuf<Payload, kMaxVarPaySize>;
 
   /**
    * @brief A class for iterating through scan results.
@@ -173,21 +183,18 @@ class BTree
    * @brief Read the payload corresponding to a given key if it exists.
    *
    * @param[in] key A search key.
-   * @param[out] out_pay A destination buffer for a payload.
    * @param[in] key_len The length of a target key.
-   * @param[out] pay_len The length of a read payload (if given).
+   * @param[out] out A buffer for storing a read payload (ignored if nullptr).
    * @retval true if the key exists.
    * @retval false otherwise.
-   * @note For variable-length payloads, `out_pay` must have `kMaxVarPaySize`
-   * bytes. If this function returns false, the contents of `out_pay` are
+   * @note If this function returns false, the contents of `out` are
    * unspecified.
    */
   auto
   Read(  //
       const Key& key,
-      PayloadOut out_pay,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      size_t* pay_len = nullptr)  //
+      [[maybe_unused]] const size_t key_len,
+      PayloadBuf* out)  //
       -> bool
   {
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
@@ -199,11 +206,10 @@ class BTree
       auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       const auto exist = found && !deleted;
-      const auto len = exist ? node->ReadPayload(pos, out_pay, kMaxPaySize) : 0;
-      if (grd.VerifyVersion(kNoMask)) {
-        if (pay_len) *pay_len = len;
-        return exist;
+      if (exist) {
+        node->CopyOldPayload(pos, out);
       }
+      if (grd.VerifyVersion(kNoMask)) return exist;
       stack.emplace_back(node);
     }
   }
@@ -305,8 +311,8 @@ class BTree
    * @brief Write (i.e., put) a given key/payload pair.
    *
    * @param key A target key.
-   * @param payload A target payload.
    * @param key_len The length of a target key.
+   * @param payload A target payload.
    * @param pay_len The length of a target payload.
    * @param merger A function for merging payloads.
    * @note This function is the alias of `Upsert`.
@@ -314,23 +320,22 @@ class BTree
   void
   Write(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload),
-      Merger<Payload> merger = nullptr)
+      const size_t pay_len,
+      Merger<Payload, Payload> merger = nullptr)
   {
-    Upsert(key, payload, key_len, pay_len, nullptr, nullptr, merger);
+    Upsert(key, key_len, payload, pay_len, nullptr, merger);
   }
 
   /**
    * @brief Upsert (update or insert) a given key/payload pair.
    *
    * @param[in] key A target key.
-   * @param[in] payload A target payload.
    * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload.
    * @param[in] pay_len The length of a target payload.
-   * @param[out] old_pay A destination buffer for a previous payload (if given).
-   * @param[out] old_len The length of a previous payload (if given).
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
    * @param[in] merger A function for merging payloads.
    * @retval true if an existing record is updated.
    * @retval false if a new record is inserted.
@@ -340,12 +345,11 @@ class BTree
   auto
   Upsert(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload),
-      PayloadOut old_pay = nullptr,
-      size_t* old_len = nullptr,
-      Merger<Payload> merger = nullptr)  //
+      const size_t pay_len,
+      PayloadBuf* old = nullptr,
+      Merger<Payload, Payload> merger = nullptr)  //
       -> bool
   {
     assert(pay_len <= kMaxPaySize);
@@ -360,7 +364,7 @@ class BTree
       if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (found && !deleted) {
           if (node->template Update<Payload, Payload>(  //
-                  pos, key, key_len, payload, pay_len, old_pay, old_len, merger)) {
+                  pos, key, key_len, payload, pay_len, old, merger)) {
             if constexpr (IsVarLenData<Payload>()) {
               VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
             }
@@ -380,22 +384,20 @@ class BTree
    * @brief Insert a given key/payload pair.
    *
    * @param[in] key A target key.
-   * @param[in] payload A target payload.
    * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload.
    * @param[in] pay_len The length of a target payload.
-   * @param[out] old_pay A destination buffer for an existing payload (if given).
-   * @param[out] old_len The length of an existing payload (if given).
+   * @param[out] old A buffer for storing an existing payload (ignored if nullptr).
    * @retval true if a new record is inserted.
    * @retval false if the key exists.
    */
   auto
   Insert(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(Payload),
-      PayloadOut old_pay = nullptr,
-      size_t* old_len = nullptr)  //
+      const size_t pay_len,
+      PayloadBuf* old = nullptr)  //
       -> bool
   {
     assert(pay_len <= kMaxPaySize);
@@ -408,7 +410,7 @@ class BTree
       auto* node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        node->CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
+        node->CopyOldPayload(pos, old);
         if (grd.VerifyVersion(kNoMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len)) {
@@ -426,11 +428,10 @@ class BTree
    *
    * @tparam T A delta-payload class (`Payload` or `Delta`).
    * @param[in] key A target key.
-   * @param[in] payload A target payload.
    * @param[in] key_len The length of a target key.
-   * @param[in] pay_len The length of a target payload.
-   * @param[out] old_pay A destination buffer for a previous payload (if given).
-   * @param[out] old_len The length of a previous payload (if given).
+   * @param[in] payload A target payload or delta.
+   * @param[in] pay_len The length of a target payload or delta.
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
    * @param[in] merger A function for merging payloads.
    * @retval true if the key exists (i.e., succeeded).
    * @retval false otherwise.
@@ -441,12 +442,11 @@ class BTree
   auto
   Update(  //
       const Key& key,
+      const size_t key_len,
       const std::type_identity_t<T>& payload,
-      const size_t key_len = sizeof(Key),
-      const size_t pay_len = sizeof(T),
-      PayloadOut old_pay = nullptr,
-      size_t* old_len = nullptr,
-      Merger<T> merger = nullptr)  //
+      const size_t pay_len,
+      PayloadBuf* old = nullptr,
+      Merger<Payload, T> merger = nullptr)  //
       -> bool
   {
     static_assert(                                               //
@@ -466,7 +466,7 @@ class BTree
         if (grd.VerifyVersion(kInsDelMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
         if (node->template Update<Payload, T>(  //
-                pos, key, key_len, payload, pay_len, old_pay, old_len, merger)) {
+                pos, key, key_len, payload, pay_len, old, merger)) {
           if constexpr (IsVarLenData<Payload>()) {
             VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
           }
@@ -483,17 +483,15 @@ class BTree
    *
    * @param[in] key A target key.
    * @param[in] key_len The length of a target key.
-   * @param[out] old_pay A destination buffer for a deleted payload (if given).
-   * @param[out] old_len The length of a deleted payload (if given).
+   * @param[out] old A buffer for storing a deleted payload (ignored if nullptr).
    * @retval true if the key exists (i.e., succeeded).
    * @retval false otherwise.
    */
   auto
   Delete(  //
       const Key& key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      PayloadOut old_pay = nullptr,
-      size_t* old_len = nullptr)  //
+      [[maybe_unused]] const size_t key_len,
+      PayloadBuf* old = nullptr)  //
       -> bool
   {
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
@@ -507,7 +505,7 @@ class BTree
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
       } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        node->CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
+        node->CopyOldPayload(pos, old);
         const auto need_merge = node->Delete(pos);
         VerIncrement<kInsDelMask>(x_grd);
         if (need_merge) {
@@ -530,7 +528,8 @@ class BTree
    * @param entries All entries for bulkload.
    * @param thread_num The number of threads used for bulkload.
    * @note This function must be called for an empty tree without any concurrent
-   * operations.
+   * operations. For variable-length payloads, each entry must be a tuple of a
+   * key, a payload, the length of the key, and the length of the payload.
    */
   template <class Entry>
   void
@@ -538,6 +537,9 @@ class BTree
       const std::vector<Entry>& entries,
       const size_t thread_num = 1)
   {
+    static_assert(  //
+        !IsVarLenData<Payload>() || std::tuple_size_v<Entry> == 4,
+        "Bulkload entries for variable-length payloads must include their lengths.");
     assert(root_.load(kRelaxed)->Level() == 0 && root_.load(kRelaxed)->RecNum() == 0);
     if (entries.empty()) return;
 

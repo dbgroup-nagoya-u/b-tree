@@ -25,7 +25,6 @@
 #include <cstring>
 #include <optional>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 
 // external libraries
@@ -220,21 +219,18 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Copy the payload of a given position if requested.
    *
+   * @tparam Buf A payload buffer class (i.e., `BTreeVarLen::PayloadBuf`).
    * @param[in] pos A target record position.
-   * @param[out] out_pay A destination buffer (ignored if nullptr).
-   * @param[out] out_len The length of a copied payload (ignored if nullptr).
-   * @param[in] max_len The maximum length of payloads.
+   * @param[out] out A buffer for storing a payload (ignored if nullptr).
    */
+  template <class Buf>
   void
   CopyOldPayload(  //
       const int32_t pos,
-      void* out_pay,
-      size_t* out_len,
-      const uint32_t max_len) const noexcept
+      Buf* out) const noexcept
   {
-    if (!out_pay) return;
-    const auto len = ReadPayload(pos, out_pay, max_len);
-    if (out_len) *out_len = len;
+    if (!out) return;
+    out->len = ReadPayload(pos, &(out->data[0]), sizeof(out->data));
   }
 
   /**
@@ -361,19 +357,19 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *
    * @tparam Payload A payload class.
    * @tparam T A class of a given payload or delta.
+   * @tparam Buf A payload buffer class (i.e., `BTreeVarLen::PayloadBuf`).
    * @param[in] pos A position where a target record is.
    * @param[in] key A target key.
    * @param[in] key_len The length of a target key.
    * @param[in] payload A target payload or delta.
    * @param[in] pay_len The length of a target payload or delta.
-   * @param[out] old_pay A destination buffer for a previous payload (if given).
-   * @param[out] old_len The length of a previous payload (if given).
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
    * @param[in] merger A function for merging payloads.
    * @retval true if the payload is updated.
    * @retval false if this node should be split before updating.
    * @note This node is not modified if this function returns false.
    */
-  template <class Payload, class T>
+  template <class Payload, class T, class Buf>
   auto
   Update(  //
       const int32_t pos,
@@ -381,8 +377,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       [[maybe_unused]] const size_t key_len,
       const T& payload,
       const size_t pay_len,
-      void* old_pay,
-      size_t* old_len,
+      Buf* old,
       Merger<Payload, T> merger) noexcept  //
       -> bool
   {
@@ -393,23 +388,25 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
     if (merger) {
       alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_old[kMaxPaySize];
       alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_new[kMaxPaySize];
-      size_t cur_len;
-      auto* len_ptr = &cur_len;
-      if (!old_pay) {
-        old_pay = &tls_old[0];
-      } else if (old_len) {
-        len_ptr = old_len;
+      void* cur;
+      uint32_t cur_len;
+      uint32_t* len_ptr;
+      if (old) {
+        cur = &(old->data[0]);
+        len_ptr = &old->len;
+      } else {
+        cur = &tls_old[0];
+        len_ptr = &cur_len;
       }
-
-      *len_ptr = ReadPayload(pos, old_pay, kMaxPaySize);
-      len = merger(std::bit_cast<const WOPtr<Payload>*>(old_pay), *len_ptr,
+      *len_ptr = ReadPayload(pos, cur, kMaxPaySize);
+      len = merger(std::bit_cast<const WOPtr<Payload>*>(cur), *len_ptr,
                    static_cast<const WOPtr<T>*>(src), pay_len,
                    std::bit_cast<WOPtr<Payload>*>(&tls_new[0]));
       assert(len <= kMaxPaySize);
       src = &tls_new[0];
     } else {
       assert((std::is_same_v<T, Payload>));  // a delta requires a merger
-      CopyOldPayload(pos, old_pay, old_len, kMaxPaySize);
+      CopyOldPayload(pos, old);
     }
 
     if constexpr (IsVarLenData<Payload>()) {

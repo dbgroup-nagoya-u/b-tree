@@ -47,7 +47,6 @@ constexpr size_t kDefaultPageSize = (B_TREE_DEFAULT_PAGE_SIZE);
 constexpr size_t kMaxVarKeySize = (B_TREE_MAX_VARLEN_KEY_SIZE);
 
 /// @brief The maximum size of variable-length payloads.
-/// @note Output buffers for variable-length payloads must have this size.
 constexpr size_t kMaxVarPaySize = (B_TREE_MAX_VARLEN_PAYLOAD_SIZE);
 
 /// @brief The default time interval for garbage collection [ms].
