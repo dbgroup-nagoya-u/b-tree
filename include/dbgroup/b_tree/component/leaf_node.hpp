@@ -33,6 +33,7 @@
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
+#include "dbgroup/b_tree/component/metadata.hpp"
 #include "dbgroup/b_tree/component/node_header.hpp"
 
 namespace dbgroup::index::b_tree::component
@@ -61,6 +62,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   using Header::kLess;
   using Header::leftmost_;
   using Header::meta_arr_;
+  using Header::offset_;
   using Header::page_size_;
   using Header::rec_num_;
   using Header::sib_node_;
@@ -187,27 +189,40 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *##########################################################################*/
 
   /**
-   * @param pos A target record position.
-   * @return The payload in the target position.
+   * @brief Copy the payload of a given position.
+   *
+   * @param[in] pos A target record position.
+   * @param[out] out_pay A destination buffer of at least `max_len` bytes.
+   * @param[in] max_len The maximum length of payloads.
+   * @return The length of the copied payload.
+   * @note This function may read corrupted metadata due to OCC, so it checks
+   * the length before copying.
    */
-  template <class Payload>
-  [[nodiscard]]
   auto
-  GetPayload(                            //
-      const int32_t pos) const noexcept  //
-      -> Payload
+  ReadPayload(  //
+      const int32_t pos,
+      void* out_pay,
+      const uint32_t max_len) const noexcept  //
+      -> uint32_t
   {
-    Payload out_pay{};
-    this->CopyPayloadTo(pos, &out_pay, sizeof(Payload));
-    return out_pay;
+    const auto meta = meta_arr_[pos];
+    const auto pay_len = meta.GetPayLen();
+    const auto offset = meta.GetPayOff();
+    if (pay_len > max_len || offset + pay_len > page_size_) [[unlikely]] {
+      return 0;  // read corrupted data due to OCC
+    }
+    std::memcpy(out_pay, ShiftAddr(this, offset), pay_len);
+    return pay_len;
   }
 
   /**
    * @brief Copy a record if exist.
    *
    * @param[in] pos A position to be copied.
-   * @param[in,out] key A destination address for a key.
-   * @param[in,out] payload A destination address for a payload.
+   * @param[out] key A destination address for a key.
+   * @param[out] key_len The length of a copied key.
+   * @param[out] payload A destination address for a payload.
+   * @param[out] pay_len The length of a copied payload.
    * @retval true if a target record is active (not deleted).
    * @retval false otherwise.
    */
@@ -216,14 +231,18 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   CopyRecordTo(  //
       const int32_t pos,
       void* key,
-      void* payload) const noexcept  //
+      uint32_t& key_len,
+      void* payload,
+      uint32_t& pay_len) const noexcept  //
       -> bool
   {
     const auto meta = meta_arr_[pos];
     if (meta.deleted) return false;
 
-    std::memcpy(key, ShiftAddr(this, meta.offset), meta.key_len);
-    std::memcpy(payload, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
+    key_len = meta.key_len;
+    pay_len = meta.GetPayLen();
+    std::memcpy(key, ShiftAddr(this, meta.offset), key_len);
+    std::memcpy(payload, ShiftAddr(this, meta.GetPayOff()), pay_len);
     return true;
   }
 
@@ -286,80 +305,105 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @param pay_len The length of a target payload.
    * @retval true if a record is written.
    * @retval false if this node should be split before inserting a record.
+   * @note This node is not modified if this function returns false.
    */
   auto
   Insert(  //
       int32_t pos,
-      const bool found,
+      bool found,
       const Key& key,
       const size_t key_len,
       const void* payload,
       const size_t pay_len) noexcept  //
       -> bool
   {
-    const auto total_len = key_len + pay_len + kMetaSize;
-    if (found) {  // reuse the deleted record
-      auto& meta = meta_arr_[pos];
-      std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
-      meta.deleted = false;
-      usage_ += pos > 0 ? total_len : 0;
-      return true;
-    }
+    if (found && ReuseRecord(pos, key, key_len, payload, pay_len)) return true;
 
+    const auto total_len = key_len + pay_len + kMetaSize;
     if (!this->HasSpace(total_len)) return false;
     if (this->CleanUpIfNeeded(total_len)) {
-      pos = SearchRecord(key).second;  // deleted records have been removed
+      std::tie(found, pos) = SearchRecord(key);  // deleted records have been removed
+      if (found) {                               // the lowest record is retained even if deleted
+        [[maybe_unused]] const auto reused = ReuseRecord(pos, key, key_len, payload, pay_len);
+        assert(reused);
+        return true;
+      }
     }
+    assert(!found);  // reuse failure implies no contiguous space, i.e., clean-up
     this->InsertRecord(pos, key, key_len, payload, pay_len);
     return true;
   }
 
   /**
-   * @brief Update a record using a given kay/payload pair.
+   * @brief Update a fixed-length payload in place.
    *
    * @param pos A position where a target record is.
    * @param payload A target payload to be written.
    * @param merger A function for merging payloads.
-   * @return The payload before updating.
    */
   template <class Payload, class Delta>
-  auto
+  void
   Update(  //
       const int32_t pos,
       const Delta& payload,
-      Payload (*merger)(const Payload&, const Delta&)) noexcept  //
-      -> Payload
+      Payload (*merger)(const Payload&, const Delta&)) noexcept
   {
-    Payload out_pay{};
     auto* pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
-    std::memcpy(&out_pay, pay_addr, sizeof(Payload));
     if (merger) {
-      const auto& merged = merger(out_pay, payload);
+      Payload cur{};
+      std::memcpy(&cur, pay_addr, sizeof(Payload));
+      const auto& merged = merger(cur, payload);
       std::memcpy(pay_addr, &merged, sizeof(Payload));
     } else {
       std::memcpy(pay_addr, &payload, sizeof(Payload));
     }
-    return out_pay;
+  }
+
+  /**
+   * @brief Update a variable-length payload.
+   *
+   * @param pos A position where a target record is.
+   * @param key A target key.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval true if the payload is updated.
+   * @retval false if this node should be split before updating.
+   * @note This node is not modified if this function returns false.
+   */
+  auto
+  Update(  //
+      const int32_t pos,
+      const Key& key,
+      const size_t key_len,
+      const void* payload,
+      const size_t pay_len) noexcept  //
+      -> bool
+  {
+    auto& meta = meta_arr_[pos];
+    const auto old_meta = meta;
+    const auto old_usage = usage_;
+    MarkDeleted(pos);  // the record is dropped if this node is cleaned up
+    if (Insert(pos, true, key, key_len, payload, pay_len)) return true;
+
+    meta = old_meta;  // Insert does not modify this node if it fails
+    usage_ = old_usage;
+    return false;
   }
 
   /**
    * @brief Delete a record logically using a given position.
    *
-   * @param[in] pos A position where a target record is.
-   * @param[out] out_pay An instance for storing an output payload.
+   * @param pos A position where a target record is.
    * @retval true if this node should be merged.
    * @retval false otherwise.
    */
   auto
-  Delete(  //
-      const int32_t pos,
-      void* out_pay) noexcept  //
+  Delete(                          //
+      const int32_t pos) noexcept  //
       -> bool
   {
-    auto& meta = meta_arr_[pos];
-    std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
-    meta.deleted = true;
-    usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
+    MarkDeleted(pos);
     return this->NeedMerge();
   }
 
@@ -381,6 +425,65 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       const BulkIter& iter_end) noexcept
   {
     this->BulkloadImpl(iter, iter_end, page_size_ * 3 / 4);
+  }
+
+ private:
+  /*##########################################################################*
+   * Internal utilities
+   *##########################################################################*/
+
+  /**
+   * @brief Reuse a deleted record for writing a given payload.
+   *
+   * @param pos A position where a deleted record is.
+   * @param key A target key.
+   * @param key_len The length of a target key.
+   * @param payload A target payload to be written.
+   * @param pay_len The length of a target payload.
+   * @retval true if a payload is written.
+   * @retval false if this node does not have enough contiguous space.
+   */
+  auto
+  ReuseRecord(  //
+      const int32_t pos,
+      const Key& key,
+      const size_t key_len,
+      const void* payload,
+      const size_t pay_len) noexcept  //
+      -> bool
+  {
+    auto& meta = meta_arr_[pos];
+    const uint32_t old_len = meta.rec_len;
+    const uint32_t rec_len = key_len + pay_len;
+    if (pay_len <= meta.GetPayLen()) {  // overwrite in place
+      std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
+      meta = Metadata{meta.offset, key_len, rec_len};
+    } else if (kHeaderSize + kMetaSize * rec_num_ + rec_len <= offset_) {
+      offset_ -= rec_len;  // move the record to the free space
+      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
+      meta = Metadata{offset_, key_len, rec_len};
+    } else {
+      return false;
+    }
+
+    // the lowest record retains its usage even if deleted
+    usage_ = (pos > 0) ? usage_ + rec_len + kMetaSize : usage_ - old_len + rec_len;
+    return true;
+  }
+
+  /**
+   * @brief Set a deleted flag to a record and update the usage of this node.
+   *
+   * @param pos A position where a target record is.
+   */
+  void
+  MarkDeleted(  //
+      const int32_t pos) noexcept
+  {
+    auto& meta = meta_arr_[pos];
+    meta.deleted = true;
+    usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
   }
 };
 

@@ -486,7 +486,7 @@ class NodeHeader
   static constexpr bool kSplit = true;
 
   /// @brief The maximum size of keys.
-  static constexpr uint32_t kMaxKeySize = MaxSize<Key>();
+  static constexpr uint32_t kMaxKeySize = MaxKeySize<Key>();
 
   /*##########################################################################*
    * Internal utilities
@@ -675,7 +675,7 @@ class NodeHeader
 
       offset_ -= rec_len;
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset_ + key_len), &payload, pay_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), GetSrcAddr(payload), pay_len);
       meta_arr_[rec_num_++] = Metadata{offset_, key_len, rec_len};
       usage_ += total_len;
     }

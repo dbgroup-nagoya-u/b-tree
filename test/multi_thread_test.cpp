@@ -34,7 +34,9 @@ using TestTargets = ::testing::Types<  //
     IndexInfo<Index, UInt4, UInt8>,    // small keys
     IndexInfo<Index, Var, UInt8>,      // varlen keys
     IndexInfo<Index, UInt8, UInt4>,    // small payloads
-    IndexInfo<Index, UInt8, UInt16>    // long payloads
+    IndexInfo<Index, UInt8, UInt16>,   // long payloads
+    IndexInfo<Index, UInt8, VarPay>,   // varlen payloads
+    IndexInfo<Index, Var, VarPay>      // varlen keys/payloads
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 

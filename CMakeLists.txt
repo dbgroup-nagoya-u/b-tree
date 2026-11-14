@@ -40,9 +40,15 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   )
 
   set(
-    B_TREE_MAX_VARLEN_DATA_SIZE
+    B_TREE_MAX_VARLEN_KEY_SIZE
     "32" CACHE STRING
-    "The expected maximum size of a variable-length data."
+    "The expected maximum size of a variable-length key."
+  )
+
+  set(
+    B_TREE_MAX_VARLEN_PAYLOAD_SIZE
+    "32" CACHE STRING
+    "The expected maximum size of a variable-length payload."
   )
 
   #----------------------------------------------------------------------------#
@@ -81,7 +87,8 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
     B_TREE_DEFAULT_PAGE_SIZE=${B_TREE_DEFAULT_PAGE_SIZE}
     B_TREE_DEFAULT_GC_INTERVAL=${B_TREE_DEFAULT_GC_INTERVAL}
     B_TREE_DEFAULT_GC_THREADS=${B_TREE_DEFAULT_GC_THREADS}
-    B_TREE_MAX_VARLEN_DATA_SIZE=${B_TREE_MAX_VARLEN_DATA_SIZE}
+    B_TREE_MAX_VARLEN_KEY_SIZE=${B_TREE_MAX_VARLEN_KEY_SIZE}
+    B_TREE_MAX_VARLEN_PAYLOAD_SIZE=${B_TREE_MAX_VARLEN_PAYLOAD_SIZE}
   )
   target_include_directories(${PROJECT_NAME} INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

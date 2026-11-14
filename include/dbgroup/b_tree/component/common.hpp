@@ -49,15 +49,27 @@ constexpr uint32_t kHeaderSize = 32;
  *############################################################################*/
 
 /**
- * @tparam T A target class.
- * @return The maximum size for storing a given class.
+ * @tparam T A target key class.
+ * @return The maximum size for storing a given key class.
  */
 template <class T>
 constexpr auto
-MaxSize() noexcept  //
+MaxKeySize() noexcept  //
     -> uint32_t
 {
-  return IsVarLenData<T>() ? kMaxVarDataSize : sizeof(T);
+  return IsVarLenData<T>() ? kMaxVarKeySize : sizeof(T);
+}
+
+/**
+ * @tparam T A target payload class.
+ * @return The maximum size for storing a given payload class.
+ */
+template <class T>
+constexpr auto
+MaxPaySize() noexcept  //
+    -> uint32_t
+{
+  return IsVarLenData<T>() ? kMaxVarPaySize : sizeof(T);
 }
 
 }  // namespace dbgroup::index::b_tree::component
