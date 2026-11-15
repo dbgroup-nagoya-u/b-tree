@@ -340,8 +340,8 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
     const auto total_len = key_len + pay_len + kMetaSize;
     if (!this->HasSpace(total_len)) return false;
     if (this->CleanUpIfNeeded(total_len)) {
-      std::tie(found, pos) = SearchRecord(key);  // deleted records have been removed
-      if (found) {                               // the lowest record is retained even if deleted
+      this->LinearSearch(key, pos, found);  // deleted records have been removed
+      if (found) {                          // the lowest record is retained even if deleted
         [[maybe_unused]] const auto reused = ReuseRecord(pos, key, key_len, payload, pay_len);
         assert(reused);
         return true;

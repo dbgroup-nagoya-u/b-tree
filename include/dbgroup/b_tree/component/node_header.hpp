@@ -204,6 +204,60 @@ class NodeHeader
   }
 
   /*##########################################################################*
+   * Public APIs
+   *##########################################################################*/
+
+  /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   */
+  auto
+  LinearSearch(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found) const noexcept  //
+      -> bool
+  {
+    const int32_t rec_num = rec_num_;
+    if (pos >= rec_num) {
+      pos = rec_num - 1;
+    }
+
+    auto meta = meta_arr_[pos];
+    const auto& idx_key = GetKey(meta);
+    if (kLess(key, idx_key)) {
+      found = false;
+      while (pos > 0) {
+        meta = meta_arr_[--pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(key, idx_key)) {
+          found = !kLess(idx_key, key);
+          pos += static_cast<int32_t>(!found);
+          break;
+        }
+      }
+    } else if (kLess(idx_key, key)) {
+      found = false;
+      while (++pos < rec_num) {
+        meta = meta_arr_[pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(idx_key, key)) {
+          found = !kLess(key, idx_key);
+          break;
+        }
+      }
+    } else {
+      found = true;
+    }
+    return meta.deleted;
+  }
+
+  /*##########################################################################*
    * Public SMO APIs
    *##########################################################################*/
 
