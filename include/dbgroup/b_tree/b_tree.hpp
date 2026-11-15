@@ -360,21 +360,20 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        if (found && !deleted) {
-          if (node->template Update<Payload, Payload>(  //
-                  pos, key, key_len, payload, pay_len, old, merger)) {
-            if constexpr (IsVarLenData<Payload>()) {
-              VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
-            }
-            return true;
-          }
-        } else if (node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len)) {
-          VerIncrement<kInsDelMask>(x_grd);
-          return false;
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
         }
-        Split(stack, node, std::move(x_grd));
+        if (found && !deleted) {
+          node->template Update<Payload, Payload>(  //
+              pos, key, key_len, payload, pay_len, old, merger, six_grd);
+          if (!six_grd) return true;
+        } else {
+          node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len, six_grd);
+          if (!six_grd) return false;
+        }
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
@@ -408,16 +407,21 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         node->CopyOldPayload(pos, old);
         if (grd.VerifyVersion(kNoMask)) return false;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        if (node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len)) {
-          VerIncrement<kInsDelMask>(x_grd);
-          return true;
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (found && !deleted) {
+            node->CopyOldPayload(pos, old);
+            return false;
+          }
         }
-        Split(stack, node, std::move(x_grd));
+        node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len, six_grd);
+        if (!six_grd) return true;
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
@@ -461,18 +465,18 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        if (node->template Update<Payload, T>(  //
-                pos, key, key_len, payload, pay_len, old, merger)) {
-          if constexpr (IsVarLenData<Payload>()) {
-            VerIncrement<kInsDelMask>(x_grd);  // metadata may be modified
-          }
-          return true;
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (!found || deleted) return false;
         }
-        Split(stack, node, std::move(x_grd));
+        node->template Update<Payload, T>(  //
+            pos, key, key_len, payload, pay_len, old, merger, six_grd);
+        if (!six_grd) return true;
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
@@ -501,15 +505,18 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (!found || deleted) return false;
+        }
         node->CopyOldPayload(pos, old);
-        const auto need_merge = node->Delete(pos);
-        VerIncrement<kInsDelMask>(x_grd);
-        if (need_merge) {
-          TryMerge(stack, node, x_grd.DowngradeToSIX());
+        node->Delete(pos, six_grd);
+        if (six_grd) {
+          TryMerge(stack, node, std::move(six_grd));
         }
         return true;
       }
@@ -1272,17 +1279,14 @@ class BTree
    * @param l_child A split-left node.
    * @param l_grd The guard instance of a split-left node.
    */
-  template <class NodeT>
   void
   Split(  //
       std::vector<NodeHeader*> stack,
-      NodeT* l_child,
-      XGuard l_grd)
+      NodeHeader* l_child,
+      SIXGuard&& l_grd)
   {
-    auto* r_child = new (AllocPage()) NodeT{l_child};
-    VerIncrement<kSMOMask>(l_grd);
+    auto* r_child = new (AllocPage()) NodeHeader{l_child, l_grd};
     const auto& [key, key_len] = l_child->GetHighKey();
-    l_grd = XGuard{};
 
     const auto level = l_child->Level() + 1;
     while (true) {
@@ -1303,16 +1307,17 @@ class BTree
         continue;  // retry from the root creation with the empty stack
       }
       auto* node = static_cast<InnerNode*>(tmp_node);
-      const auto [found, pos] = node->SearchRecord(key);
-      assert(!found);
-      auto&& x_grd = grd.TryLockX(kInsDelMask);
-      if (!x_grd) continue;  // another thread may insert the key
-      if (node->InsertChild(pos, key, key_len, r_child)) {
-        VerIncrement<kInsDelMask>(x_grd);
-        break;
+      auto [found, pos] = node->SearchRecord(key);
+      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      if (!six_grd) continue;  // another thread has modified the structure
+      if (VerNE<kInsDelMask>(grd, six_grd)) {
+        node->LinearSearch(key, pos, found);
       }
+      assert(!found);
+      node->InsertChild(pos, key, key_len, r_child, six_grd);
+      if (!six_grd) break;
 
-      Split(stack, node, std::move(x_grd));
+      Split(stack, node, std::move(six_grd));
       stack.emplace_back(node);
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -1331,16 +1336,16 @@ class BTree
   TryMerge(  //
       std::vector<NodeHeader*>& stack,
       NodeHeader* l_child,
-      SIXGuard l_grd)
+      SIXGuard&& l_grd)
   {
     const auto level = l_child->Level() + 1;
     auto&& r_grd = l_child->GetMergeableSib();
     if (!r_grd) {  // remove a root node if possible
       auto* root = root_.load(kRelaxed);
-      if (root == l_child && root->Level() > 0 && static_cast<InnerNode*>(root)->IsRemovable()) {
+      if (root == l_child && root->IsRemovable()) {
         l_child = static_cast<InnerNode*>(root)->GetChild(0);  // a new root
         root_.store(l_child, kRelease);
-        root->Remove(std::move(l_grd));
+        root->Remove(l_grd);
         gc_->AddGarbage(root, page_size_);
       }
       return;
@@ -1351,23 +1356,22 @@ class BTree
       auto&& [tmp_node, grd] = SearchNode(stack, key, level);
       if (!tmp_node) break;  // the parent level has been removed
       auto* node = static_cast<InnerNode*>(tmp_node);
-      const auto [found, pos] = node->SearchRecord(key);
+      auto [found, pos] = node->SearchRecord(key);
       if (!found) {
         if (!grd.VerifyVersion(kInsDelMask)) continue;
         break;  // a downlink has not been inserted yet or is leftmost in a node
       }
-      auto&& x_grd = grd.TryLockX(kInsDelMask);
-      if (!x_grd) continue;  // another thread may modify a node
+      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      if (!six_grd) continue;  // another thread has modified the structure
+      if (VerNE<kInsDelMask>(grd, six_grd)) {
+        node->LinearSearch(key, pos, found);
+        assert(found && pos > 0);
+      }
 
-      const auto [r_child, need_merge] = node->DeleteChild(pos);
-      VerIncrement<kInsDelMask>(x_grd);
-      if (need_merge) {
-        auto&& six_grd = x_grd.DowngradeToSIX();
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
+      auto* r_child = node->DeleteChild(pos, six_grd);
+      l_child->Merge(l_grd, r_child, r_grd);
+      if (six_grd) {
         TryMerge(stack, node, std::move(six_grd));
-      } else {
-        x_grd = XGuard{};
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
       }
       gc_->AddGarbage(r_child, page_size_);
       break;
@@ -1429,23 +1433,16 @@ class BTree
     const auto& iter_end = std::next(iter, n);
     for (NodeHeader* prev_node = nullptr; iter < iter_end;) {
       const auto& [key, key_len] = ParseKey(*iter);
-      LeafNode* leaf{};
-      InnerNode* inner{};
-      NodeHeader* node{};
-      if (level == 0) {
-        node = leaf = new (AllocPage()) LeafNode{page_size_, align_val_};
-      } else {
-        node = inner = new (AllocPage()) InnerNode{page_size_, align_val_, level};
-      }
+      auto* node = new (AllocPage()) NodeHeader{page_size_, align_val_, level};
       nodes.emplace_back(key, node, key_len);
       if (prev_node) {
         prev_node->LinkSiblingNode(node, key, key_len);
       }
 
-      if (leaf) {
-        leaf->Bulkload(iter, iter_end);
+      if (level == 0) {
+        static_cast<LeafNode*>(node)->Bulkload(iter, iter_end);
       } else {
-        inner->Bulkload(iter, iter_end);
+        static_cast<InnerNode*>(node)->Bulkload(iter, iter_end);
       }
       prev_node = node;
     }
@@ -1494,7 +1491,7 @@ class BTree
   std::shared_ptr<GC> gc_{};
 
   /// @brief The root node of this tree.
-  std::atomic<NodeHeader*> root_{new (AllocPage()) LeafNode{page_size_, align_val_}};
+  std::atomic<NodeHeader*> root_{new (AllocPage()) NodeHeader{page_size_, align_val_, 0}};
 };
 
 }  // namespace dbgroup::index::b_tree

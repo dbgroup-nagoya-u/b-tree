@@ -67,28 +67,13 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   using Header::rec_num_;
   using Header::sib_node_;
   using Header::usage_;
+  using typename Header::SIXGuard;
+  using typename Header::XGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
-
-  /**
-   * @brief Construct an empty node.
-   *
-   * @param page_size The page size for each node.
-   * @param align_val The alignment size for each node.
-   * @param level The level where this node is.
-   */
-  constexpr InnerNode(  //
-      const uint32_t page_size,
-      const uint32_t align_val,
-      const uint32_t level) noexcept
-      : Header{page_size, align_val, level}
-  {
-    static_assert(sizeof(InnerNode) == sizeof(Header));
-    assert(level > 0);
-  }
 
   /**
    * @brief Construct a new root node.
@@ -125,18 +110,6 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
     std::memcpy(ShiftAddr(this, r_offset), &r_child, kPtrSize);
     std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
     meta_arr_[1] = Metadata{offset_, key_len, key_len + kPtrSize};
-  }
-
-  /**
-   * @brief Construct split nodes.
-   *
-   * @param[in,out] l_node A left (source) node.
-   * @note This is a split right node.
-   */
-  explicit InnerNode(  //
-      InnerNode* l_node)
-      : Header{l_node}
-  {
   }
 
   InnerNode(const InnerNode&) = delete;
@@ -210,18 +183,6 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
     return GetChild(pos);
   }
 
-  /**
-   * @retval true if this node is a redundant root node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]]
-  constexpr auto
-  IsRemovable() const noexcept  //
-      -> bool
-  {
-    return leftmost_ && !sib_node_ && rec_num_ == 1;
-  }
-
   /*##########################################################################*
    * Write APIs
    *##########################################################################*/
@@ -236,21 +197,20 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
    * @retval true if a record is written.
    * @retval false if this node should be split before inserting a record.
    */
-  auto
+  void
   InsertChild(  //
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const Header* child) noexcept  //
-      -> bool
+      const Header* child,
+      SIXGuard& six_grd) noexcept
   {
     const auto total_len = key_len + kPtrSize + kMetaSize;
-    if (!this->HasSpace(total_len)) return false;
+    if (!this->HasSpace(total_len)) return;
 
     // inner nodes do not have deleted records, so the position is not changed
-    this->CleanUpIfNeeded(total_len);
-    this->InsertRecord(pos, key, key_len, &child, kPtrSize);
-    return true;
+    this->CleanUpIfNeeded(total_len, six_grd);
+    this->InsertRecord(pos, key, key_len, &child, kPtrSize, six_grd);
   }
 
   /**
@@ -262,19 +222,24 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
    * @retval 2nd: false otherwise.
    */
   auto
-  DeleteChild(                     //
-      const int32_t pos) noexcept  //
-      -> std::pair<Header*, bool>
+  DeleteChild(  //
+      const int32_t pos,
+      SIXGuard& six_grd) noexcept  //
+      -> Header*
   {
     assert(pos > 0);
 
     auto* child = GetChild(pos);
     auto& meta = meta_arr_[pos];
     const auto rec_len = meta.rec_len;
+    auto&& x_grd = six_grd.UpgradeToX();
     std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1UL));
     --rec_num_;
     usage_ -= rec_len + kMetaSize;
-    return {child, this->NeedMerge()};
+    if (this->NeedMerge()) {
+      six_grd = x_grd.DowngradeToSIX();
+    }
+    return child;
   }
 
   /*##########################################################################*

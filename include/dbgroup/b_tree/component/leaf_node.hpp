@@ -69,37 +69,13 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   using Header::sib_node_;
   using Header::usage_;
   using typename Header::KeyWOPtr;
+  using typename Header::SIXGuard;
+  using typename Header::XGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
-
-  /**
-   * @brief Construct an empty node.
-   *
-   * @param page_size The page size for each node.
-   * @param align_val The alignment size for each node.
-   */
-  constexpr LeafNode(  //
-      const uint32_t page_size,
-      const uint32_t align_val) noexcept
-      : Header{page_size, align_val, 0}
-  {
-    static_assert(sizeof(LeafNode) == sizeof(Header));
-  }
-
-  /**
-   * @brief Construct split nodes.
-   *
-   * @param[in,out] l_node A left (source) node.
-   * @note This is a split right node.
-   */
-  explicit LeafNode(  //
-      LeafNode* l_node)
-      : Header{l_node}
-  {
-  }
 
   LeafNode(const LeafNode&) = delete;
   LeafNode(LeafNode&&) = delete;
@@ -325,31 +301,31 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @retval false if this node should be split before inserting a record.
    * @note This node is not modified if this function returns false.
    */
-  auto
+  void
   Insert(  //
       int32_t pos,
       bool found,
       const Key& key,
       const size_t key_len,
       const void* payload,
-      const size_t pay_len) noexcept  //
-      -> bool
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept
   {
-    if (found && ReuseRecord(pos, key, key_len, payload, pay_len)) return true;
+    if (found && ReuseRecord(pos, key, key_len, payload, pay_len, six_grd)) return;
 
     const auto total_len = key_len + pay_len + kMetaSize;
-    if (!this->HasSpace(total_len)) return false;
-    if (this->CleanUpIfNeeded(total_len)) {
+    if (!this->HasSpace(total_len)) return;
+    if (this->CleanUpIfNeeded(total_len, six_grd)) {
       this->LinearSearch(key, pos, found);  // deleted records have been removed
-      if (found) {                          // the lowest record is retained even if deleted
-        [[maybe_unused]] const auto reused = ReuseRecord(pos, key, key_len, payload, pay_len);
-        assert(reused);
-        return true;
+      if (found) {
+        // the lowest record is retained even if deleted
+        ReuseRecord(pos, key, key_len, payload, pay_len, six_grd);
+        assert(!six_grd);
+        return;
       }
     }
     assert(!found);  // reuse failure implies no contiguous space, i.e., clean-up
-    this->InsertRecord(pos, key, key_len, payload, pay_len);
-    return true;
+    this->InsertRecord(pos, key, key_len, payload, pay_len, six_grd);
   }
 
   /**
@@ -370,7 +346,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @note This node is not modified if this function returns false.
    */
   template <class Payload, class T, class Buf>
-  auto
+  void
   Update(  //
       const int32_t pos,
       [[maybe_unused]] const Key& key,
@@ -378,8 +354,8 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       const T& payload,
       const size_t pay_len,
       Buf* old,
-      Merger<Payload, T> merger) noexcept  //
-      -> bool
+      Merger<Payload, T> merger,
+      SIXGuard& six_grd) noexcept
   {
     constexpr uint32_t kMaxPaySize = MaxPaySize<Payload>();
 
@@ -410,11 +386,11 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
     }
 
     if constexpr (IsVarLenData<Payload>()) {
-      return Replace(pos, key, key_len, src, len);
+      Replace(pos, key, key_len, src, len, six_grd);
     } else {
       assert(len == sizeof(Payload));
+      auto&& x_grd = six_grd.UpgradeToX();
       std::memcpy(ShiftAddr(this, meta_arr_[pos].GetPayOff()), src, len);
-      return true;
     }
   }
 
@@ -425,13 +401,19 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @retval true if this node should be merged.
    * @retval false otherwise.
    */
-  constexpr auto
-  Delete(                          //
-      const int32_t pos) noexcept  //
-      -> bool
+  void
+  Delete(  //
+      const int32_t pos,
+      SIXGuard& six_grd) noexcept
   {
-    MarkDeleted(pos);
-    return this->NeedMerge();
+    auto& meta = meta_arr_[pos];
+    auto&& x_grd = six_grd.UpgradeToX();
+    meta.deleted = true;
+    usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
+    VerIncrement<kInsDelMask>(x_grd);
+    if (this->NeedMerge()) {
+      six_grd = x_grd.DowngradeToSIX();
+    }
   }
 
   /*##########################################################################*
@@ -471,24 +453,28 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @retval false if this node should be split before replacing.
    * @note This node is not modified if this function returns false.
    */
-  auto
+  void
   Replace(  //
-      const int32_t pos,
+      int32_t pos,
       const Key& key,
       const size_t key_len,
       const void* payload,
-      const size_t pay_len) noexcept  //
-      -> bool
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept
   {
-    auto& meta = meta_arr_[pos];
-    const auto old_meta = meta;
-    const auto old_usage = usage_;
-    MarkDeleted(pos);  // the record is dropped if this node is cleaned up
-    if (Insert(pos, true, key, key_len, payload, pay_len)) return true;
+    if (ReuseRecord(pos, key, key_len, payload, pay_len, six_grd)) return;
+    if (!this->HasSpace(key_len + pay_len + kMetaSize)) return;
 
-    meta = old_meta;  // Insert does not modify this node if it fails
-    usage_ = old_usage;
-    return false;
+    bool found;
+    this->CleanUp(six_grd);
+    this->LinearSearch(key, pos, found);  // deleted records have been removed
+    if (found) {
+      // the lowest record is retained even if deleted
+      ReuseRecord(pos, key, key_len, payload, pay_len, six_grd);
+    } else {
+      this->InsertRecord(pos, key, key_len, payload, pay_len, six_grd);
+    }
+    assert(!six_grd);
   }
 
   /**
@@ -508,16 +494,21 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       const Key& key,
       const size_t key_len,
       const void* payload,
-      const size_t pay_len) noexcept  //
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept  //
       -> bool
   {
     auto& meta = meta_arr_[pos];
+    const bool deleted = meta.deleted;
     const uint32_t old_len = meta.rec_len;
     const uint32_t rec_len = key_len + pay_len;
+    XGuard x_grd;
     if (pay_len <= meta.GetPayLen()) {  // overwrite in place
+      x_grd = six_grd.UpgradeToX();
       std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
       meta = Metadata{meta.offset, key_len, rec_len};
     } else if (kHeaderSize + kMetaSize * rec_num_ + rec_len <= offset_) {
+      x_grd = six_grd.UpgradeToX();
       offset_ -= rec_len;  // move the record to the free space
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
       std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
@@ -526,23 +517,14 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       return false;
     }
 
-    // the lowest record retains its usage even if deleted
-    usage_ = (pos > 0) ? usage_ + rec_len + kMetaSize : usage_ - old_len + rec_len;
+    usage_ += rec_len;
+    if (deleted && pos > 0) {
+      usage_ += kMetaSize;
+    } else {
+      usage_ -= old_len;
+    }
+    VerIncrement<kInsDelMask>(x_grd);
     return true;
-  }
-
-  /**
-   * @brief Set a deleted flag to a record and update the usage of this node.
-   *
-   * @param pos A position where a target record is.
-   */
-  constexpr void
-  MarkDeleted(  //
-      const int32_t pos) noexcept
-  {
-    auto& meta = meta_arr_[pos];
-    meta.deleted = true;
-    usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
   }
 };
 
