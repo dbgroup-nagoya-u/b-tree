@@ -362,11 +362,8 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* const node = static_cast<LeafNode*>(tmp_node);
-      auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
-        if (VerNE<kInsDelMask>(grd, six_grd)) {
-          deleted = node->LinearSearch(key, pos, found);
-        }
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)}; six_grd) {
         if (found && !deleted) {
           node->template Update<Payload, Payload>(  //
               pos, key, key_len, payload, pay_len, old, merger, six_grd);
@@ -409,18 +406,11 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* const node = static_cast<LeafNode*>(tmp_node);
-      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
         node->CopyOldPayload(pos, old);
         if (grd.VerifyVersion(kNoMask)) return false;
-      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
-        if (VerNE<kInsDelMask>(grd, six_grd)) {
-          deleted = node->LinearSearch(key, pos, found);
-          if (found && !deleted) {
-            node->CopyOldPayload(pos, old);
-            return false;
-          }
-        }
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)}; six_grd) {
         node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len, six_grd);
         if (!six_grd) return true;
         Split(stack, node, std::move(six_grd));
@@ -467,14 +457,10 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* const node = static_cast<LeafNode*>(tmp_node);
-      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
-        if (VerNE<kInsDelMask>(grd, six_grd)) {
-          deleted = node->LinearSearch(key, pos, found);
-          if (!found || deleted) return false;
-        }
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)}; six_grd) {
         node->template Update<Payload, T>(  //
             pos, key, key_len, payload, pay_len, old, merger, six_grd);
         if (!six_grd) return true;
@@ -507,14 +493,10 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* const node = static_cast<LeafNode*>(tmp_node);
-      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      const auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
-        if (VerNE<kInsDelMask>(grd, six_grd)) {
-          deleted = node->LinearSearch(key, pos, found);
-          if (!found || deleted) return false;
-        }
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)}; six_grd) {
         node->CopyOldPayload(pos, old);
         node->Delete(pos, six_grd);
         if (six_grd) {
@@ -1312,12 +1294,9 @@ class BTree
         continue;  // retry from the root creation with the empty stack
       }
       auto* const node = static_cast<InnerNode*>(tmp_node);
-      auto [found, pos] = node->SearchRecord(key);
-      auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)};
-      if (!six_grd) continue;  // another thread has modified the structure
-      if (VerNE<kInsDelMask>(grd, six_grd)) {
-        node->LinearSearch(key, pos, found);
-      }
+      const auto [found, pos] = node->SearchRecord(key);
+      auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)};
+      if (!six_grd) continue;  // another thread may modify the node
       assert(!found);
       node->InsertChild(pos, key, key_len, r_child, six_grd);
       if (!six_grd) break;
@@ -1361,18 +1340,13 @@ class BTree
       auto&& [tmp_node, grd] = SearchNode(stack, key, level);
       if (!tmp_node) break;  // the parent level has been removed
       auto* const node = static_cast<InnerNode*>(tmp_node);
-      auto [found, pos] = node->SearchRecord(key);
+      const auto [found, pos] = node->SearchRecord(key);
       if (!found) {
         if (!grd.VerifyVersion(kInsDelMask)) continue;
         break;  // a downlink has not been inserted yet or is leftmost in a node
       }
-      auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)};
-      if (!six_grd) continue;  // another thread has modified the structure
-      if (VerNE<kInsDelMask>(grd, six_grd)) {
-        node->LinearSearch(key, pos, found);
-        assert(found && pos > 0);
-      }
-
+      auto&& six_grd = SIXGuard{grd.TryLockX(kInsDelMask)};
+      if (!six_grd) continue;  // another thread may modify the node
       auto* const r_child = node->DeleteChild(pos, six_grd);
       l_child->Merge(l_grd, r_child, r_grd);
       if (six_grd) {
