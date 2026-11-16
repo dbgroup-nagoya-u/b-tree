@@ -47,6 +47,7 @@
 #include "dbgroup/b_tree/component/inner_node.hpp"
 #include "dbgroup/b_tree/component/leaf_node.hpp"
 #include "dbgroup/b_tree/component/node_header.hpp"
+#include "dbgroup/b_tree/component/pseudo_guards.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
 namespace dbgroup::index::b_tree
@@ -83,8 +84,9 @@ class BTree
 
   using GCGuard = dbgroup::thread::EpochGuard;
   using OptGuard = typename Lock::OptGuard;
-  using SIXGuard = typename Lock::SIXGuard;
-  using XGuard = typename Lock::XGuard;
+  // use X locks in place of SIX locks for comparing lock protocols
+  using SIXGuard = component::PseudoSIXGuard<Lock>;
+  using XGuard = component::PseudoXGuard<Lock>;
 
   using NodeHeader = component::NodeHeader<Key, Comp, Lock>;
   using InnerNode = component::InnerNode<Key, Comp, Lock>;
@@ -361,7 +363,7 @@ class BTree
       auto&& [tmp_node, grd] = SearchNode(stack, key);
       auto* const node = static_cast<LeafNode*>(tmp_node);
       auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+      if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
         if (VerNE<kInsDelMask>(grd, six_grd)) {
           deleted = node->LinearSearch(key, pos, found);
         }
@@ -411,7 +413,7 @@ class BTree
       if (found && !deleted) {
         node->CopyOldPayload(pos, old);
         if (grd.VerifyVersion(kNoMask)) return false;
-      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
         if (VerNE<kInsDelMask>(grd, six_grd)) {
           deleted = node->LinearSearch(key, pos, found);
           if (found && !deleted) {
@@ -468,7 +470,7 @@ class BTree
       auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
         if (VerNE<kInsDelMask>(grd, six_grd)) {
           deleted = node->LinearSearch(key, pos, found);
           if (!found || deleted) return false;
@@ -508,7 +510,7 @@ class BTree
       auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
         if (grd.VerifyVersion(kInsDelMask)) return false;
-      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+      } else if (auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)}; six_grd) {
         if (VerNE<kInsDelMask>(grd, six_grd)) {
           deleted = node->LinearSearch(key, pos, found);
           if (!found || deleted) return false;
@@ -1311,7 +1313,7 @@ class BTree
       }
       auto* const node = static_cast<InnerNode*>(tmp_node);
       auto [found, pos] = node->SearchRecord(key);
-      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)};
       if (!six_grd) continue;  // another thread has modified the structure
       if (VerNE<kInsDelMask>(grd, six_grd)) {
         node->LinearSearch(key, pos, found);
@@ -1364,7 +1366,7 @@ class BTree
         if (!grd.VerifyVersion(kInsDelMask)) continue;
         break;  // a downlink has not been inserted yet or is leftmost in a node
       }
-      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      auto&& six_grd = SIXGuard{grd.TryLockX(kSMOMask)};
       if (!six_grd) continue;  // another thread has modified the structure
       if (VerNE<kInsDelMask>(grd, six_grd)) {
         node->LinearSearch(key, pos, found);

@@ -39,6 +39,7 @@
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
 #include "dbgroup/b_tree/component/metadata.hpp"
+#include "dbgroup/b_tree/component/pseudo_guards.hpp"
 #include "dbgroup/b_tree/utility.hpp"
 
 // we intentionally use a zero-length array for record metadata
@@ -73,8 +74,9 @@ class NodeHeader
   /// @brief A type for allocating variable-length data.
   using KeyWOPtr = std::remove_pointer_t<Key>;
 
-  using SIXGuard = typename Lock::SIXGuard;
-  using XGuard = typename Lock::XGuard;
+  // use X locks in place of SIX locks for comparing lock protocols
+  using SIXGuard = PseudoSIXGuard<Lock>;
+  using XGuard = PseudoXGuard<Lock>;
 
  public:
   /*##########################################################################*
@@ -313,7 +315,7 @@ class NodeHeader
         const auto merged_usage = usage_ - hk_len_ + sib_node_->usage_;
         assert(merged_usage < 2 * page_size_);
         if (kHeaderSize + merged_usage >= page_size_ * 0.75) break;  // NOLINT
-        six_grd = grd.TryLockSIX();
+        six_grd = SIXGuard{grd.TryLockX()};
       } while (!six_grd);
     }
     return six_grd;
