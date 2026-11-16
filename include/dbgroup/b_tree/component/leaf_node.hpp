@@ -109,7 +109,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
 
     Key key;
     const auto meta = meta_arr_[0];
-    const auto* src_addr = ShiftAddr(this, meta.offset);
+    const auto* const src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       const auto key_len = meta.key_len;
       key = ::dbgroup::memory::Allocate<KeyWOPtr>(key_len);
@@ -201,7 +201,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   auto
   ReadPayload(  //
       const int32_t pos,
-      void* out_pay,
+      void* const out_pay,
       const uint32_t max_len) const noexcept  //
       -> uint32_t
   {
@@ -226,7 +226,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   void
   CopyOldPayload(  //
       const int32_t pos,
-      Buf* out) const noexcept
+      Buf* const out) const noexcept
   {
     if (!out) return;
     out->len = ReadPayload(pos, &(out->data[0]), sizeof(out->data));
@@ -247,9 +247,9 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   auto
   CopyRecordTo(  //
       const int32_t pos,
-      void* key,
+      void* const key,
       uint32_t& key_len,
-      void* payload,
+      void* const payload,
       uint32_t& pay_len) const noexcept  //
       -> bool
   {
@@ -331,7 +331,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       bool found,
       const Key& key,
       const size_t key_len,
-      const void* payload,
+      const void* const payload,
       const size_t pay_len,
       SIXGuard& six_grd) noexcept
   {
@@ -378,7 +378,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       [[maybe_unused]] const size_t key_len,
       const T& payload,
       const size_t pay_len,
-      Buf* old,
+      Buf* const old,
       Merger<Payload, T> merger,
       SIXGuard& six_grd) noexcept
   {
@@ -484,7 +484,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       int32_t pos,
       const Key& key,
       const size_t key_len,
-      const void* payload,
+      const void* const payload,
       const size_t pay_len,
       SIXGuard& six_grd) noexcept
   {
@@ -522,7 +522,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const void* payload,
+      const void* const payload,
       const size_t pay_len,
       SIXGuard& six_grd) noexcept  //
       -> bool

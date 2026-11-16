@@ -92,8 +92,8 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
       const uint32_t level,
       const Key& key,
       const uint32_t key_len,
-      const Header* l_child,
-      const Header* r_child) noexcept  //
+      const Header* const l_child,
+      const Header* const r_child) noexcept  //
       : Header{page_size, align_val, level}
   {
     assert(level > 0);
@@ -233,7 +233,7 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const Header* child,
+      const Header* const child,
       SIXGuard& six_grd) noexcept
   {
     const auto total_len = key_len + kPtrSize + kMetaSize;
@@ -260,7 +260,7 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   {
     assert(pos > 0);
 
-    auto* child = GetChild(pos);
+    auto* const child = GetChild(pos);
     auto& meta = meta_arr_[pos];
     const auto rec_len = meta.rec_len;
     auto&& x_grd = six_grd.UpgradeToX();

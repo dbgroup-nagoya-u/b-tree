@@ -115,7 +115,7 @@ class NodeHeader
    * copied back to it.
    */
   explicit NodeHeader(  //
-      NodeHeader* l_node,
+      NodeHeader* const l_node,
       SIXGuard& l_grd,
       Key& key,
       uint32_t& key_len)
@@ -126,7 +126,7 @@ class NodeHeader
       , leftmost_{false}
       , sib_node_{l_node->sib_node_}
   {
-    auto* tmp = AllocNode();
+    auto* const tmp = AllocNode();
     tmp->offset_ = page_size_ - kMaxKeySize;
 
     // copy split-left records to a temporary region
@@ -233,9 +233,9 @@ class NodeHeader
   {
     assert(hk_len_ > 0);
 
-    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
-      auto* key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
+      auto* const key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
       std::memcpy(key, src_addr, hk_len_);
       return {key, hk_len_};
     } else {
@@ -261,7 +261,7 @@ class NodeHeader
     if (hk_len_ == 0) return true;
 
     Key h_key;
-    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       h_key = std::bit_cast<Key>(&tls_key);
@@ -332,12 +332,12 @@ class NodeHeader
   void
   Merge(  //
       SIXGuard& six_grd,
-      NodeHeader* r_node,
+      NodeHeader* const r_node,
       SIXGuard& r_grd)
   {
     assert(level_ == r_node->level_);
 
-    auto* tmp = AllocNode();
+    auto* const tmp = AllocNode();
     tmp->offset_ = page_size_ - r_node->hk_len_;
 
     int32_t pos = 0;
@@ -367,7 +367,7 @@ class NodeHeader
   void
   Remove(  //
       SIXGuard& six_grd,
-      NodeHeader* next = nullptr)
+      NodeHeader* const next = nullptr)
   {
     auto&& x_grd = six_grd.UpgradeToX();
     removed_ = true;
@@ -388,7 +388,7 @@ class NodeHeader
    */
   void
   LinkSiblingNode(  //
-      NodeHeader* sib_node,
+      NodeHeader* const sib_node,
       const Key& key,
       const size_t key_len) noexcept
   {
@@ -409,7 +409,7 @@ class NodeHeader
       NodeHeader* l_node,
       NodeHeader* r_node) noexcept
   {
-    if (l_node == nullptr) return;
+    if (!l_node) return;
 
     while (true) {
       // link the border nodes
@@ -418,7 +418,7 @@ class NodeHeader
       l_node->sib_node_ = r_node;
       l_node->hk_len_ = key_len;
       l_node->usage_ += key_len;
-      auto* hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
+      auto* const hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
       std::memcpy(hk_addr, ShiftAddr(r_node, meta.offset), key_len);
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
@@ -470,7 +470,7 @@ class NodeHeader
        << "  leftmost : " << leftmost_ << "\n";
     if (hk_len_ > 0) {
       Key h_key;
-      const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+      const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
       if constexpr (IsVarLenData<Key>()) {
         alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
         h_key = std::bit_cast<Key>(&tls_key);
@@ -619,7 +619,7 @@ class NodeHeader
       -> Key
   {
     Key key;
-    const auto* src_addr = ShiftAddr(this, meta.offset);
+    const auto* const src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       key = std::bit_cast<Key>(&tls_key);
@@ -639,7 +639,7 @@ class NodeHeader
   void
   CopyPayloadTo(  //
       const int32_t pos,
-      void* out_pay,
+      void* const out_pay,
       const size_t pay_len = kPtrSize) const noexcept
   {
     const auto offset = meta_arr_[pos].GetPayOff();
@@ -702,7 +702,7 @@ class NodeHeader
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const void* payload,
+      const void* const payload,
       const size_t pay_len,
       SIXGuard& six_grd) noexcept
   {
@@ -772,7 +772,7 @@ class NodeHeader
   AllocNode()  //
       -> NodeHeader*
   {
-    auto* page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
+    auto* const page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
     return new (page) NodeHeader{page_size_, align_val_, level_};
   }
 
@@ -781,7 +781,7 @@ class NodeHeader
    */
   void
   FreeNode(  //
-      void* page)
+      void* const page)
   {
     ::operator delete(page, static_cast<std::align_val_t>(align_val_));
   }
@@ -796,7 +796,7 @@ class NodeHeader
   CleanUp(  //
       SIXGuard& six_grd)
   {
-    auto* tmp = AllocNode();
+    auto* const tmp = AllocNode();
     tmp->offset_ = page_size_ - hk_len_;
 
     int32_t pos = 0;
@@ -819,7 +819,7 @@ class NodeHeader
    */
   void
   CopyFrom(  //
-      const NodeHeader* src) noexcept
+      const NodeHeader* const src) noexcept
   {
     rec_num_ = src->rec_num_;
     offset_ = src->offset_;
@@ -837,7 +837,7 @@ class NodeHeader
    */
   void
   CopyHighKey(  //
-      const void* src,
+      const void* const src,
       const size_t key_len) noexcept
   {
     std::memcpy(ShiftAddr(this, page_size_ - key_len), src, key_len);
@@ -853,7 +853,7 @@ class NodeHeader
    */
   void
   CopyLowRecord(  //
-      const NodeHeader* src,
+      const NodeHeader* const src,
       int32_t& pos) noexcept
   {
     if (src->rec_num_ == 0) return;
@@ -877,7 +877,7 @@ class NodeHeader
   template <bool kSearchSplitPos = false>
   void
   CopyRecords(  //
-      const NodeHeader* src,
+      const NodeHeader* const src,
       int32_t& pos,
       const int32_t end_pos,
       [[maybe_unused]] const uint32_t sep_size = 0) noexcept
