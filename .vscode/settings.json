@@ -121,6 +121,8 @@
     "NEDO",
     "Neumann",
     "NOLINT",
+    "NOLINTBEGIN",
+    "NOLINTEND",
     "nullptr",
     "OLFIT",
     "pthread",

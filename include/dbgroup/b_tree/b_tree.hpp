@@ -610,6 +610,7 @@ class BTree
    * @retval 1st: The actual usage of this index.
    * @retval 2nd: The allocated memory amount for this index.
    */
+  [[nodiscard]]
   auto
   MemoryUsage() const  //
       -> std::pair<size_t, size_t>
@@ -629,6 +630,7 @@ class BTree
    * @retval 1st: The actual usage of this index.
    * @retval 2nd: The allocated memory amount for this index.
    */
+  [[nodiscard]]
   auto
   MemoryUsageDetailed() const  //
       -> std::vector<std::pair<size_t, size_t>>
@@ -1283,7 +1285,7 @@ class BTree
   Split(  //
       std::vector<NodeHeader*> stack,
       NodeHeader* const l_child,
-      SIXGuard&& l_grd)
+      SIXGuard l_grd)
   {
     Key key;
     uint32_t key_len;
@@ -1337,7 +1339,7 @@ class BTree
   TryMerge(  //
       std::vector<NodeHeader*>& stack,
       NodeHeader* l_child,
-      SIXGuard&& l_grd)
+      SIXGuard l_grd)
   {
     const auto level = l_child->Level() + 1;
     auto&& r_grd = l_child->GetMergeableSib();
@@ -1450,6 +1452,33 @@ class BTree
     return nodes;
   }
 
+  /**
+   * @brief Verify that each node can store records of the maximum size.
+   *
+   * @throw std::runtime_error if the page size is not a power of two in [512,
+   * 65536] or too small for the maximum record size.
+   * @note The maximum record size must be at most a third of the usable space
+   * in a node, which guarantees that a split leaves at least one record in
+   * each node.
+   */
+  void
+  VerifyPageSize() const
+  {
+    constexpr uint32_t kMaxKeySize = component::MaxKeySize<Key>();
+    constexpr uint32_t kMaxRecSize =  // a child pointer is the payload of inner nodes
+        kMaxKeySize + (kMaxPaySize > component::kPtrSize ? kMaxPaySize : component::kPtrSize)
+        + component::kMetaSize;
+    const uint32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
+                                    + (page_size_ - component::kHeaderSize) * 0.75
+                                    + kMaxRecSize * 0.5 + kMaxKeySize;  // NOLINTEND
+    if (max_split_size > page_size_ || kMaxRecSize > (page_size_ - component::kHeaderSize) / 3) {
+      throw std::runtime_error{"The page size is too small to store records."};
+    }
+    if (page_size_ < k512 || k64Ki < page_size_ || std::popcount(page_size_) > 1) {
+      throw std::runtime_error{"The page size must be 512, 1024, 2048, ..., or 65536."};
+    }
+  }
+
   /*##########################################################################*
    * Static assertions
    *##########################################################################*/
@@ -1461,22 +1490,6 @@ class BTree
   static_assert(  //
       IsTriviallyCopyable<Payload>(),
       "A payload type must be trivially copyable (i.e., copyable with std::memcpy).");
-
-  void
-  VerifyPageSize()
-  {
-    constexpr uint32_t kMaxKeySize = component::MaxKeySize<Key>();
-    const uint32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
-                                    + (page_size_ - component::kHeaderSize) * 0.75
-                                    + (kMaxKeySize + kMaxPaySize + kWordSize) * 0.5
-                                    + kMaxKeySize;  // NOLINTEND
-    if (max_split_size > page_size_) {
-      throw std::runtime_error{"The page size is too small to store records."};
-    }
-    if (page_size_ < k512 || k64Ki < page_size_ || std::popcount(page_size_) > 1) {
-      throw std::runtime_error{"The page size must be 512, 1024, 2048, ..., or 65536."};
-    }
-  }
 
   /*##########################################################################*
    * Internal member variables
