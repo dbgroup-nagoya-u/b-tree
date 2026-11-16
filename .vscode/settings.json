@@ -125,6 +125,7 @@
     "NOLINTEND",
     "nullptr",
     "OLFIT",
+    "OMCS",
     "pthread",
     "Scheibner",
     "seqlock",

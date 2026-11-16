@@ -22,7 +22,7 @@
 
 // our libraries
 #include <dbgroup/index/fix_len_wrapper.hpp>
-#include <dbgroup/lock/optimistic_lock.hpp>
+#include <dbgroup/lock/omcs_lock.hpp>
 #include <dbgroup/lock/utility.hpp>
 #include <dbgroup/memory/epoch_based_gc.hpp>
 
@@ -47,7 +47,7 @@ template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           class GC = ::dbgroup::memory::EpochBasedGC<>,
-          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock,
+          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OMCSLock,
           class Delta = Payload>
 class BTreeFixLen : public FixLenWrapper<BTree<Key, Payload, Comp, GC, Lock, Delta>>
 {

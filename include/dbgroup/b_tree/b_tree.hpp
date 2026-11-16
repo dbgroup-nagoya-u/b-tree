@@ -34,9 +34,7 @@
 // our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
-#include <dbgroup/lock/mcs_lock.hpp>
-#include <dbgroup/lock/optimistic_lock.hpp>
-#include <dbgroup/lock/pessimistic_lock.hpp>
+#include <dbgroup/lock/omcs_lock.hpp>
 #include <dbgroup/lock/utility.hpp>
 #include <dbgroup/memory/epoch_based_gc.hpp>
 #include <dbgroup/memory/utility.hpp>
@@ -69,7 +67,7 @@ template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           class GC = ::dbgroup::memory::EpochBasedGC<>,
-          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock,
+          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OMCSLock,
           class Delta = Payload>
 class BTree
 {
