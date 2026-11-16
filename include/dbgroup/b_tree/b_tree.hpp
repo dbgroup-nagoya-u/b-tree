@@ -1285,8 +1285,9 @@ class BTree
       NodeHeader* l_child,
       SIXGuard&& l_grd)
   {
-    auto* r_child = new (AllocPage()) NodeHeader{l_child, l_grd};
-    const auto& [key, key_len] = l_child->GetHighKey();
+    Key key;
+    uint32_t key_len;
+    auto* r_child = new (AllocPage()) NodeHeader{l_child, l_grd, key, key_len};
 
     const auto level = l_child->Level() + 1;
     while (true) {

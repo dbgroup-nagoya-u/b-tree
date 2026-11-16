@@ -26,6 +26,7 @@
 #include <new>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -107,7 +108,9 @@ class NodeHeader
    */
   explicit NodeHeader(  //
       NodeHeader* l_node,
-      SIXGuard& l_grd)
+      SIXGuard& l_grd,
+      Key& key,
+      uint32_t& key_len)
       : page_size_{l_node->page_size_}
       , align_val_{l_node->align_val_}
       , offset_{static_cast<uint32_t>(page_size_ - l_node->hk_len_)}
@@ -128,6 +131,7 @@ class NodeHeader
     tmp->template CopyRecords<kSplit>(l_node, pos, l_node->rec_num_, sep_size);
     const auto sep_meta = l_node->meta_arr_[pos];
     tmp->CopyHighKey(ShiftAddr(l_node, sep_meta.offset), sep_meta.key_len);
+    std::tie(key, key_len) = tmp->GetHighKey();  // keep the separator key
 
     // copy split-right records to this node
     CopyHighKey(ShiftAddr(l_node, offset_), l_node->hk_len_);
@@ -269,60 +273,6 @@ class NodeHeader
       -> Lock::OptGuard
   {
     return lock_.GetVersion();
-  }
-
-  /*##########################################################################*
-   * Public APIs
-   *##########################################################################*/
-
-  /**
-   * @brief Get the position of a search key using linear search.
-   *
-   * @param[in] key A search key.
-   * @param[in,out] pos The position of a target record.
-   * @param[out] found true if a target record is found.
-   * @retval true if the found record has been deleted.
-   * @retval false otherwise.
-   */
-  auto
-  LinearSearch(  //
-      const Key& key,
-      int32_t& pos,
-      bool& found) const noexcept  //
-      -> bool
-  {
-    const int32_t rec_num = rec_num_;
-    if (pos >= rec_num) {
-      pos = rec_num - 1;
-    }
-
-    auto meta = meta_arr_[pos];
-    const auto& idx_key = GetKey(meta);
-    if (kLess(key, idx_key)) {
-      found = false;
-      while (pos > 0) {
-        meta = meta_arr_[--pos];
-        const auto& idx_key = GetKey(meta);
-        if (!kLess(key, idx_key)) {
-          found = !kLess(idx_key, key);
-          pos += static_cast<int32_t>(!found);
-          break;
-        }
-      }
-    } else if (kLess(idx_key, key)) {
-      found = false;
-      while (++pos < rec_num) {
-        meta = meta_arr_[pos];
-        const auto& idx_key = GetKey(meta);
-        if (!kLess(idx_key, key)) {
-          found = !kLess(key, idx_key);
-          break;
-        }
-      }
-    } else {
-      found = true;
-    }
-    return meta.deleted;
   }
 
   /*##########################################################################*
@@ -596,6 +546,54 @@ class NodeHeader
       }
     }
     return {found, pos};
+  }
+
+  /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @param[in] begin_pos The begin position of the search space.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   */
+  auto
+  LinearSearchImpl(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found,
+      const int32_t begin_pos) const noexcept  //
+      -> bool
+  {
+    auto meta = meta_arr_[pos];
+    const auto& idx_key = GetKey(meta);
+    if (kLess(key, idx_key)) {
+      found = false;
+      while (pos > begin_pos) {
+        meta = meta_arr_[--pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(key, idx_key)) {
+          found = !kLess(idx_key, key);
+          pos += static_cast<int32_t>(!found);
+          break;
+        }
+      }
+    } else if (kLess(idx_key, key)) {
+      found = false;
+      const int32_t rec_num = rec_num_;
+      while (++pos < rec_num) {
+        meta = meta_arr_[pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(idx_key, key)) {
+          found = !kLess(key, idx_key);
+          break;
+        }
+      }
+    } else {
+      found = true;
+    }
+    return meta.deleted;
   }
 
   /**

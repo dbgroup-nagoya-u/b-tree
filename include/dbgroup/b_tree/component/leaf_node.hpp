@@ -140,6 +140,29 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   */
+  auto
+  LinearSearch(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found) const noexcept  //
+      -> bool
+  {
+    const int32_t rec_num = rec_num_;
+    if (pos >= rec_num) {
+      pos = rec_num - 1;
+    }
+    return this->LinearSearchImpl(key, pos, found, 0);
+  }
+
+  /**
    * @brief Get the position of a search key using binary search.
    *
    * @param key A search key.

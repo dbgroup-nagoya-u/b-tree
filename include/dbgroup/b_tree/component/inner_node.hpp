@@ -167,6 +167,34 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   */
+  auto
+  LinearSearch(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found) const noexcept  //
+      -> bool
+  {
+    const int32_t rec_num = rec_num_;
+    if (pos >= rec_num) {
+      if (rec_num == 1) {
+        pos = 1;
+        found = false;
+        return false;
+      }
+      pos = rec_num - 1;
+    }
+    return this->LinearSearchImpl(key, pos, found, 1);
+  }
+
+  /**
    * @brief Search a child node with a given key using binary search.
    *
    * @param key A search key.
@@ -236,6 +264,7 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
     std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1UL));
     --rec_num_;
     usage_ -= rec_len + kMetaSize;
+    VerIncrement<kInsDelMask>(x_grd);
     if (this->NeedMerge()) {
       six_grd = x_grd.DowngradeToSIX();
     }
