@@ -25,7 +25,7 @@
 #include <cstring>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
@@ -67,28 +67,13 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   using Header::rec_num_;
   using Header::sib_node_;
   using Header::usage_;
+  using typename Header::SIXGuard;
+  using typename Header::XGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
-
-  /**
-   * @brief Construct an empty node.
-   *
-   * @param page_size The page size for each node.
-   * @param align_val The alignment size for each node.
-   * @param level The level where this node is.
-   */
-  constexpr InnerNode(  //
-      const uint32_t page_size,
-      const uint32_t align_val,
-      const uint32_t level) noexcept
-      : Header{page_size, align_val, level}
-  {
-    static_assert(sizeof(InnerNode) == sizeof(Header));
-    assert(level > 0);
-  }
 
   /**
    * @brief Construct a new root node.
@@ -107,8 +92,8 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
       const uint32_t level,
       const Key& key,
       const uint32_t key_len,
-      const Header* l_child,
-      const Header* r_child) noexcept  //
+      const Header* const l_child,
+      const Header* const r_child) noexcept  //
       : Header{page_size, align_val, level}
   {
     assert(level > 0);
@@ -125,18 +110,6 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
     std::memcpy(ShiftAddr(this, r_offset), &r_child, kPtrSize);
     std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
     meta_arr_[1] = Metadata{offset_, key_len, key_len + kPtrSize};
-  }
-
-  /**
-   * @brief Construct split nodes.
-   *
-   * @param[in,out] l_node A left (source) node.
-   * @note This is a split right node.
-   */
-  explicit InnerNode(  //
-      InnerNode* l_node)
-      : Header{l_node}
-  {
   }
 
   InnerNode(const InnerNode&) = delete;
@@ -194,6 +167,35 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   * @note The first record is skipped as in `SearchRecord`.
+   */
+  auto
+  LinearSearch(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found) const noexcept  //
+      -> bool
+  {
+    const int32_t rec_num = rec_num_;
+    if (pos >= rec_num) {
+      if (rec_num == 1) {
+        pos = 1;
+        found = false;
+        return false;
+      }
+      pos = rec_num - 1;
+    }
+    return this->LinearSearchImpl(key, pos, found, 1);
+  }
+
+  /**
    * @brief Search a child node with a given key using binary search.
    *
    * @param key A search key.
@@ -210,18 +212,6 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
     return GetChild(pos);
   }
 
-  /**
-   * @retval true if this node is a redundant root node.
-   * @retval false otherwise.
-   */
-  [[nodiscard]]
-  constexpr auto
-  IsRemovable() const noexcept  //
-      -> bool
-  {
-    return leftmost_ && !sib_node_ && rec_num_ == 1;
-  }
-
   /*##########################################################################*
    * Write APIs
    *##########################################################################*/
@@ -229,52 +219,59 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Insert a given down link.
    *
-   * @param pos A position where a new record is inserted.
-   * @param key A separator key to be written.
-   * @param key_len The length of a separator key.
-   * @param child A child node to be written.
-   * @retval true if a record is written.
-   * @retval false if this node should be split before inserting a record.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] key A separator key to be written.
+   * @param[in] key_len The length of a separator key.
+   * @param[in] child A child node to be written.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a record is written and retained if this node should be split before
+   * inserting a record.
+   * @note This node is not modified if `six_grd` is retained.
    */
-  auto
+  void
   InsertChild(  //
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const Header* child) noexcept  //
-      -> bool
+      const Header* const child,
+      SIXGuard& six_grd) noexcept
   {
     const auto total_len = key_len + kPtrSize + kMetaSize;
-    if (!this->HasSpace(total_len)) return false;
+    if (!this->HasSpace(total_len)) return;
 
     // inner nodes do not have deleted records, so the position is not changed
-    this->CleanUpIfNeeded(total_len);
-    this->InsertRecord(pos, key, key_len, &child, kPtrSize);
-    return true;
+    this->CleanUpIfNeeded(total_len, six_grd);
+    this->InsertRecord(pos, key, key_len, &child, kPtrSize, six_grd);
   }
 
   /**
    * @brief Delete a down link physically using a given position.
    *
-   * @param pos A position where a target record is.
-   * @retval 1st: The deleted child node.
-   * @retval 2nd: true if this node should be merged.
-   * @retval 2nd: false otherwise.
+   * @param[in] pos A position where a target record is.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is retained if
+   * this node should be merged and released otherwise.
+   * @return The deleted child node.
    */
   auto
-  DeleteChild(                     //
-      const int32_t pos) noexcept  //
-      -> std::pair<Header*, bool>
+  DeleteChild(  //
+      const int32_t pos,
+      SIXGuard& six_grd) noexcept  //
+      -> Header*
   {
     assert(pos > 0);
 
-    auto* child = GetChild(pos);
+    auto* const child = GetChild(pos);
     auto& meta = meta_arr_[pos];
     const auto rec_len = meta.rec_len;
+    auto&& x_grd = six_grd.UpgradeToX();
     std::memmove(&meta, ShiftAddr(&meta, kMetaSize), kMetaSize * (rec_num_ - pos - 1UL));
     --rec_num_;
     usage_ -= rec_len + kMetaSize;
-    return {child, this->NeedMerge()};
+    VerIncrement<kInsDelMask>(x_grd);
+    if (this->NeedMerge()) {
+      six_grd = x_grd.DowngradeToSIX();
+    }
+    return child;
   }
 
   /*##########################################################################*
@@ -285,8 +282,8 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
    * @brief Bulkload down links into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
    */
   template <class BulkIter>
   void

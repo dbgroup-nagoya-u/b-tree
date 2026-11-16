@@ -18,6 +18,7 @@
 #define B_TREE_DBGROUP_B_TREE_COMPONENT_LEAF_NODE_HPP_
 
 // C++ standard libraries
+#include <bit>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -26,13 +27,14 @@
 #include <tuple>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
 #include <dbgroup/memory/utility.hpp>
 
 // local sources
 #include "dbgroup/b_tree/component/common.hpp"
+#include "dbgroup/b_tree/component/metadata.hpp"
 #include "dbgroup/b_tree/component/node_header.hpp"
 
 namespace dbgroup::index::b_tree::component
@@ -61,42 +63,19 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   using Header::kLess;
   using Header::leftmost_;
   using Header::meta_arr_;
+  using Header::offset_;
   using Header::page_size_;
   using Header::rec_num_;
   using Header::sib_node_;
   using Header::usage_;
   using typename Header::KeyWOPtr;
+  using typename Header::SIXGuard;
+  using typename Header::XGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
-
-  /**
-   * @brief Construct an empty node.
-   *
-   * @param page_size The page size for each node.
-   * @param align_val The alignment size for each node.
-   */
-  constexpr LeafNode(  //
-      const uint32_t page_size,
-      const uint32_t align_val) noexcept
-      : Header{page_size, align_val, 0}
-  {
-    static_assert(sizeof(LeafNode) == sizeof(Header));
-  }
-
-  /**
-   * @brief Construct split nodes.
-   *
-   * @param[in,out] l_node A left (source) node.
-   * @note This is a split right node.
-   */
-  explicit LeafNode(  //
-      LeafNode* l_node)
-      : Header{l_node}
-  {
-  }
 
   LeafNode(const LeafNode&) = delete;
   LeafNode(LeafNode&&) = delete;
@@ -130,7 +109,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
 
     Key key;
     const auto meta = meta_arr_[0];
-    const auto* src_addr = ShiftAddr(this, meta.offset);
+    const auto* const src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       const auto key_len = meta.key_len;
       key = ::dbgroup::memory::Allocate<KeyWOPtr>(key_len);
@@ -161,6 +140,29 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   }
 
   /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   */
+  auto
+  LinearSearch(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found) const noexcept  //
+      -> bool
+  {
+    const int32_t rec_num = rec_num_;
+    if (pos >= rec_num) {
+      pos = rec_num - 1;
+    }
+    return this->LinearSearchImpl(key, pos, found, 0);
+  }
+
+  /**
    * @brief Get the position of a search key using binary search.
    *
    * @param key A search key.
@@ -187,27 +189,57 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *##########################################################################*/
 
   /**
-   * @param pos A target record position.
-   * @return The payload in the target position.
+   * @brief Copy the payload of a given position.
+   *
+   * @param[in] pos A target record position.
+   * @param[out] out_pay A destination buffer of at least `max_len` bytes.
+   * @param[in] max_len The maximum length of payloads.
+   * @return The length of the copied payload.
+   * @note This function may read corrupted metadata due to OCC, so it checks
+   * the length before copying.
    */
-  template <class Payload>
-  [[nodiscard]]
   auto
-  GetPayload(                            //
-      const int32_t pos) const noexcept  //
-      -> Payload
+  ReadPayload(  //
+      const int32_t pos,
+      void* const out_pay,
+      const uint32_t max_len) const noexcept  //
+      -> uint32_t
   {
-    Payload out_pay{};
-    this->CopyPayloadTo(pos, &out_pay, sizeof(Payload));
-    return out_pay;
+    const auto meta = meta_arr_[pos];
+    const auto pay_len = meta.GetPayLen();
+    const auto offset = meta.GetPayOff();
+    if (pay_len > max_len || offset + pay_len > page_size_) [[unlikely]] {
+      return 0;  // read corrupted data due to OCC
+    }
+    std::memcpy(out_pay, ShiftAddr(this, offset), pay_len);
+    return pay_len;
+  }
+
+  /**
+   * @brief Copy the payload of a given position if requested.
+   *
+   * @tparam Buf A payload buffer class (i.e., `BTree::PayloadBuf`).
+   * @param[in] pos A target record position.
+   * @param[out] out A buffer for storing a payload (ignored if nullptr).
+   */
+  template <class Buf>
+  void
+  CopyOldPayload(  //
+      const int32_t pos,
+      Buf* const out) const noexcept
+  {
+    if (!out) return;
+    out->len = ReadPayload(pos, &(out->data[0]), sizeof(out->data));
   }
 
   /**
    * @brief Copy a record if exist.
    *
    * @param[in] pos A position to be copied.
-   * @param[in,out] key A destination address for a key.
-   * @param[in,out] payload A destination address for a payload.
+   * @param[out] key A destination address for a key.
+   * @param[out] key_len The length of a copied key.
+   * @param[out] payload A destination address for a payload.
+   * @param[out] pay_len The length of a copied payload.
    * @retval true if a target record is active (not deleted).
    * @retval false otherwise.
    */
@@ -215,15 +247,19 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   auto
   CopyRecordTo(  //
       const int32_t pos,
-      void* key,
-      void* payload) const noexcept  //
+      void* const key,
+      uint32_t& key_len,
+      void* const payload,
+      uint32_t& pay_len) const noexcept  //
       -> bool
   {
     const auto meta = meta_arr_[pos];
     if (meta.deleted) return false;
 
-    std::memcpy(key, ShiftAddr(this, meta.offset), meta.key_len);
-    std::memcpy(payload, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
+    key_len = meta.key_len;
+    pay_len = meta.GetPayLen();
+    std::memcpy(key, ShiftAddr(this, meta.offset), key_len);
+    std::memcpy(payload, ShiftAddr(this, meta.GetPayOff()), pay_len);
     return true;
   }
 
@@ -276,91 +312,133 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *##########################################################################*/
 
   /**
-   * @brief Insert a given kay/payload pair.
+   * @brief Insert a given key/payload pair.
    *
-   * @param pos A position where a new record is inserted.
-   * @param found A flag for indicating the same (deleted) key is found.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
-   * @retval true if a record is written.
-   * @retval false if this node should be split before inserting a record.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] found A flag for indicating the same (deleted) key is found.
+   * @param[in] key A target key to be written.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a record is written and retained if this node should be split before
+   * inserting a record.
+   * @note This node is not modified if `six_grd` is retained.
    */
-  auto
+  void
   Insert(  //
       int32_t pos,
-      const bool found,
+      bool found,
       const Key& key,
       const size_t key_len,
-      const void* payload,
-      const size_t pay_len) noexcept  //
-      -> bool
+      const void* const payload,
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept
   {
-    const auto total_len = key_len + pay_len + kMetaSize;
-    if (found) {  // reuse the deleted record
-      auto& meta = meta_arr_[pos];
-      std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
-      meta.deleted = false;
-      usage_ += pos > 0 ? total_len : 0;
-      return true;
-    }
+    if (found && ReuseRecord(pos, key, key_len, payload, pay_len, six_grd)) return;
 
-    if (!this->HasSpace(total_len)) return false;
-    if (this->CleanUpIfNeeded(total_len)) {
-      pos = SearchRecord(key).second;  // deleted records have been removed
+    const auto total_len = key_len + pay_len + kMetaSize;
+    if (!this->HasSpace(total_len)) return;
+    if (this->CleanUpIfNeeded(total_len, six_grd)) {
+      this->LinearSearch(key, pos, found);  // deleted records have been removed
+      if (found) {
+        // the lowest record is retained even if deleted
+        ReuseRecord(pos, key, key_len, payload, pay_len, six_grd);
+        assert(!six_grd);
+        return;
+      }
     }
-    this->InsertRecord(pos, key, key_len, payload, pay_len);
-    return true;
+    assert(!found);  // reuse failure implies no contiguous space, i.e., clean-up
+    this->InsertRecord(pos, key, key_len, payload, pay_len, six_grd);
   }
 
   /**
-   * @brief Update a record using a given kay/payload pair.
+   * @brief Update the payload of a given position.
    *
-   * @param pos A position where a target record is.
-   * @param payload A target payload to be written.
-   * @param merger A function for merging payloads.
-   * @return The payload before updating.
+   * @tparam Payload A payload class.
+   * @tparam T A class of a given payload or delta.
+   * @tparam Buf A payload buffer class (i.e., `BTree::PayloadBuf`).
+   * @param[in] pos A position where a target record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload or delta.
+   * @param[in] pay_len The length of a target payload or delta.
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
+   * @param[in] merger A function for merging payloads.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if the payload is updated and retained if this node should be split before
+   * updating.
+   * @note This node is not modified if `six_grd` is retained.
    */
-  template <class Payload, class Delta>
-  auto
+  template <class Payload, class T, class Buf>
+  void
   Update(  //
       const int32_t pos,
-      const Delta& payload,
-      Payload (*merger)(const Payload&, const Delta&)) noexcept  //
-      -> Payload
+      [[maybe_unused]] const Key& key,
+      [[maybe_unused]] const size_t key_len,
+      const T& payload,
+      const size_t pay_len,
+      Buf* const old,
+      Merger<Payload, T> merger,
+      SIXGuard& six_grd) noexcept
   {
-    Payload out_pay{};
-    auto* pay_addr = ShiftAddr(this, meta_arr_[pos].GetPayOff());
-    std::memcpy(&out_pay, pay_addr, sizeof(Payload));
+    constexpr uint32_t kMaxPaySize = MaxPaySize<Payload>();
+
+    const void* src = GetSrcAddr(payload);
+    size_t len = pay_len;
     if (merger) {
-      const auto& merged = merger(out_pay, payload);
-      std::memcpy(pay_addr, &merged, sizeof(Payload));
+      alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_old[kMaxPaySize];
+      alignas(alignof(WOPtr<Payload>)) thread_local std::byte tls_new[kMaxPaySize];
+      void* cur;
+      uint32_t cur_len;
+      uint32_t* len_ptr;
+      if (old) {
+        cur = &(old->data[0]);
+        len_ptr = &old->len;
+      } else {
+        cur = &tls_old[0];
+        len_ptr = &cur_len;
+      }
+      *len_ptr = ReadPayload(pos, cur, kMaxPaySize);
+      len = merger(std::bit_cast<const WOPtr<Payload>*>(cur), *len_ptr,
+                   static_cast<const WOPtr<T>*>(src), pay_len,
+                   std::bit_cast<WOPtr<Payload>*>(&tls_new[0]));
+      assert(len <= kMaxPaySize);
+      src = &tls_new[0];
     } else {
-      std::memcpy(pay_addr, &payload, sizeof(Payload));
+      assert((std::is_same_v<T, Payload>));  // a delta requires a merger
+      CopyOldPayload(pos, old);
     }
-    return out_pay;
+
+    if constexpr (IsVarLenData<Payload>()) {
+      Replace(pos, key, key_len, src, len, six_grd);
+    } else {
+      assert(len == sizeof(Payload));
+      auto&& x_grd = six_grd.UpgradeToX();
+      std::memcpy(ShiftAddr(this, meta_arr_[pos].GetPayOff()), src, len);
+    }
   }
 
   /**
    * @brief Delete a record logically using a given position.
    *
    * @param[in] pos A position where a target record is.
-   * @param[out] out_pay An instance for storing an output payload.
-   * @retval true if this node should be merged.
-   * @retval false otherwise.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is retained if
+   * this node should be merged and released otherwise.
    */
-  auto
+  void
   Delete(  //
       const int32_t pos,
-      void* out_pay) noexcept  //
-      -> bool
+      SIXGuard& six_grd) noexcept
   {
     auto& meta = meta_arr_[pos];
-    std::memcpy(out_pay, ShiftAddr(this, meta.GetPayOff()), meta.GetPayLen());
+    auto&& x_grd = six_grd.UpgradeToX();
     meta.deleted = true;
     usage_ -= pos > 0 ? meta.rec_len + kMetaSize : 0;
-    return this->NeedMerge();
+    VerIncrement<kInsDelMask>(x_grd);
+    if (this->NeedMerge()) {
+      six_grd = x_grd.DowngradeToSIX();
+    }
   }
 
   /*##########################################################################*
@@ -371,8 +449,8 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @brief Bulkload records into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
    */
   template <class BulkIter>
   void
@@ -381,6 +459,101 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
       const BulkIter& iter_end) noexcept
   {
     this->BulkloadImpl(iter, iter_end, page_size_ * 3 / 4);
+  }
+
+ private:
+  /*##########################################################################*
+   * Internal utilities
+   *##########################################################################*/
+
+  /**
+   * @brief Replace a payload with another one that may have a different length.
+   *
+   * @param[in] pos A position where a target record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if the payload is replaced and retained if this node should be split before
+   * replacing.
+   * @note This node is not modified if `six_grd` is retained.
+   */
+  void
+  Replace(  //
+      int32_t pos,
+      const Key& key,
+      const size_t key_len,
+      const void* const payload,
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept
+  {
+    if (ReuseRecord(pos, key, key_len, payload, pay_len, six_grd)) return;
+    if (!this->HasSpace(key_len + pay_len + kMetaSize)) return;
+
+    bool found;
+    this->CleanUp(six_grd);
+    this->LinearSearch(key, pos, found);  // deleted records have been removed
+    if (found) {
+      // the lowest record is retained even if deleted
+      ReuseRecord(pos, key, key_len, payload, pay_len, six_grd);
+    } else {
+      this->InsertRecord(pos, key, key_len, payload, pay_len, six_grd);
+    }
+    assert(!six_grd);
+  }
+
+  /**
+   * @brief Reuse a deleted record for writing a given payload.
+   *
+   * @param[in] pos A position where a deleted record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a payload is written.
+   * @retval true if a payload is written.
+   * @retval false if this node does not have enough contiguous space.
+   * @note This node is not modified if this function returns false.
+   */
+  auto
+  ReuseRecord(  //
+      const int32_t pos,
+      const Key& key,
+      const size_t key_len,
+      const void* const payload,
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept  //
+      -> bool
+  {
+    auto& meta = meta_arr_[pos];
+    const bool deleted = meta.deleted;
+    const uint32_t old_len = meta.rec_len;
+    const uint32_t rec_len = key_len + pay_len;
+    XGuard x_grd;
+    if (pay_len <= meta.GetPayLen()) {  // overwrite in place
+      x_grd = six_grd.UpgradeToX();
+      std::memcpy(ShiftAddr(this, meta.GetPayOff()), payload, pay_len);
+      meta = Metadata{meta.offset, key_len, rec_len};
+    } else if (kHeaderSize + kMetaSize * rec_num_ + rec_len <= offset_) {
+      x_grd = six_grd.UpgradeToX();
+      offset_ -= rec_len;  // move the record to the free space
+      std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
+      meta = Metadata{offset_, key_len, rec_len};
+    } else {
+      return false;
+    }
+
+    usage_ += rec_len;
+    if (deleted && pos > 0) {
+      usage_ += kMetaSize;
+    } else {
+      usage_ -= old_len;
+    }
+    VerIncrement<kInsDelMask>(x_grd);
+    return true;
   }
 };
 

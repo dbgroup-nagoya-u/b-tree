@@ -9,3 +9,17 @@ ConstructorInitializerAllOnOneLineOrOnePerLine: true
 PackConstructorInitializers: Never
 DerivePointerAlignment: false
 PointerAlignment: Left
+IncludeBlocks: Regroup
+IncludeCategories:
+  # C++ standard libraries (e.g., <atomic>)
+  - Regex: '^<[[:alnum:]_]+>$'
+    Priority: 1
+  # our libraries (e.g., <dbgroup/constants.hpp>)
+  - Regex: '^<dbgroup/'
+    Priority: 3
+  # external libraries (e.g., <gtest/gtest.h>)
+  - Regex: '^<'
+    Priority: 2
+  # local sources (e.g., "dbgroup/b_tree/utility.hpp")
+  - Regex: '^"'
+    Priority: 4

@@ -8,7 +8,7 @@ endif()
 # project information
 project(
   b_tree
-  VERSION "0.2.0"
+  VERSION "0.3.0"
   DESCRIPTION "An open-source B+tree library."
   LANGUAGES "CXX"
 )
@@ -40,9 +40,15 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   )
 
   set(
-    B_TREE_MAX_VARLEN_DATA_SIZE
+    B_TREE_MAX_VARLEN_KEY_SIZE
     "32" CACHE STRING
-    "The expected maximum size of a variable-length data."
+    "The expected maximum size of a variable-length key."
+  )
+
+  set(
+    B_TREE_MAX_VARLEN_PAYLOAD_SIZE
+    "32" CACHE STRING
+    "The expected maximum size of a variable-length payload."
   )
 
   #----------------------------------------------------------------------------#
@@ -56,7 +62,7 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
   FetchContent_Declare(
     cpp-utility
     GIT_REPOSITORY "https://github.com/dbgroup-nagoya-u/cpp-utility"
-    GIT_TAG "32551c6d394e986508c4f4594d2c8cd3bd947132" # v0.19.0
+    GIT_TAG "49f777d44e7908aa1ccb7d6e0e227063aa154cde" # v0.20.0
   )
   FetchContent_MakeAvailable(cpp-utility)
 
@@ -81,7 +87,8 @@ if(NOT TARGET dbgroup::${PROJECT_NAME})
     B_TREE_DEFAULT_PAGE_SIZE=${B_TREE_DEFAULT_PAGE_SIZE}
     B_TREE_DEFAULT_GC_INTERVAL=${B_TREE_DEFAULT_GC_INTERVAL}
     B_TREE_DEFAULT_GC_THREADS=${B_TREE_DEFAULT_GC_THREADS}
-    B_TREE_MAX_VARLEN_DATA_SIZE=${B_TREE_MAX_VARLEN_DATA_SIZE}
+    B_TREE_MAX_VARLEN_KEY_SIZE=${B_TREE_MAX_VARLEN_KEY_SIZE}
+    B_TREE_MAX_VARLEN_PAYLOAD_SIZE=${B_TREE_MAX_VARLEN_PAYLOAD_SIZE}
   )
   target_include_directories(${PROJECT_NAME} INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"

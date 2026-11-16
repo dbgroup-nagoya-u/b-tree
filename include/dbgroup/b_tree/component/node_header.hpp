@@ -26,10 +26,11 @@
 #include <new>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
@@ -64,16 +65,95 @@ template <class Key,  //
           ::dbgroup::lock::OptimisticallyLockable Lock>
 class NodeHeader
 {
+ protected:
   /*##########################################################################*
    * Type aliases
    *##########################################################################*/
 
+  /// @brief A type for allocating variable-length data.
+  using KeyWOPtr = std::remove_pointer_t<Key>;
+
   using SIXGuard = typename Lock::SIXGuard;
+  using XGuard = typename Lock::XGuard;
 
  public:
   /*##########################################################################*
    * Public constructors and assignment operators
    *##########################################################################*/
+
+  /**
+   * @brief Construct an empty node.
+   *
+   * @param page_size The page size for each node.
+   * @param align_val The alignment size for each node.
+   * @param level The level where this node is.
+   */
+  constexpr NodeHeader(  //
+      const uint32_t page_size,
+      const uint32_t align_val,
+      const uint32_t level) noexcept
+      : page_size_{page_size}
+      , align_val_{align_val}
+      , offset_{page_size}
+      , level_{static_cast<uint8_t>(level)}
+  {
+    static_assert(                          //
+        sizeof(NodeHeader) <= kHeaderSize,  //
+        "Header regions must be in 32 bytes.");
+  }
+
+  /**
+   * @brief Construct split nodes.
+   *
+   * @param[in] l_node A left (source) node.
+   * @param[in,out] l_grd The SIX-lock guard of the left node, which is released
+   * after splitting.
+   * @param[out] key A separator key between the split nodes.
+   * @param[out] key_len The length of the separator key.
+   * @note This is a split right node.
+   * @note The left node is X-locked only while the split-left records are
+   * copied back to it.
+   */
+  explicit NodeHeader(  //
+      NodeHeader* const l_node,
+      SIXGuard& l_grd,
+      Key& key,
+      uint32_t& key_len)
+      : page_size_{l_node->page_size_}
+      , align_val_{l_node->align_val_}
+      , offset_{static_cast<uint32_t>(page_size_ - l_node->hk_len_)}
+      , level_{l_node->level_}
+      , leftmost_{false}
+      , sib_node_{l_node->sib_node_}
+  {
+    auto* const tmp = AllocNode();
+    tmp->offset_ = page_size_ - kMaxKeySize;
+
+    // copy split-left records to a temporary region
+    const double sep_ratio = l_node->leftmost_ && sib_node_     ? 0.25  // NOLINTBEGIN
+                             : !l_node->leftmost_ && !sib_node_ ? 0.75
+                                                                : 0.5;  // NOLINTEND
+    const uint32_t sep_size = (l_node->usage_ - l_node->hk_len_) * sep_ratio;
+    int32_t pos = 0;
+    tmp->CopyLowRecord(l_node, pos);
+    tmp->template CopyRecords<kSplit>(l_node, pos, l_node->rec_num_, sep_size);
+    const auto sep_meta = l_node->meta_arr_[pos];
+    tmp->CopyHighKey(ShiftAddr(l_node, sep_meta.offset), sep_meta.key_len);
+    std::tie(key, key_len) = tmp->GetHighKey();  // keep the separator key
+
+    // copy split-right records to this node
+    CopyHighKey(ShiftAddr(l_node, offset_), l_node->hk_len_);
+    CopyRecords(l_node, pos, l_node->rec_num_);
+
+    // copy the split-left records to the left node
+    auto&& x_grd = l_grd.UpgradeToX();
+    l_node->CopyFrom(tmp);
+    l_node->sib_node_ = this;
+    VerIncrement<kSMOMask>(x_grd);
+    x_grd = {};
+
+    FreeNode(tmp);
+  }
 
   NodeHeader(const NodeHeader&) = delete;
   NodeHeader(NodeHeader&&) = delete;
@@ -153,9 +233,9 @@ class NodeHeader
   {
     assert(hk_len_ > 0);
 
-    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
-      auto* key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
+      auto* const key = ::dbgroup::memory::Allocate<KeyWOPtr>(hk_len_);
       std::memcpy(key, src_addr, hk_len_);
       return {key, hk_len_};
     } else {
@@ -181,7 +261,7 @@ class NodeHeader
     if (hk_len_ == 0) return true;
 
     Key h_key;
-    const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+    const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       h_key = std::bit_cast<Key>(&tls_key);
@@ -208,6 +288,18 @@ class NodeHeader
    *##########################################################################*/
 
   /**
+   * @retval true if this node is a redundant root node.
+   * @retval false otherwise.
+   */
+  [[nodiscard]]
+  constexpr auto
+  IsRemovable() const noexcept  //
+      -> bool
+  {
+    return level_ > 0 && leftmost_ && !sib_node_ && rec_num_ == 1;
+  }
+
+  /**
    * @return The SIX guard of a right sibling node.
    */
   auto
@@ -230,20 +322,22 @@ class NodeHeader
   /**
    * @brief Merge a given node into this node.
    *
-   * @param grd The SIX-lock guard of this node.
-   * @param r_node A right-merged (to be removed) node.
-   * @param r_grd The SIX-lock guard of a right node.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after merging.
+   * @param[in] r_node A right-merged (to be removed) node.
+   * @param[in,out] r_grd The SIX-lock guard of a right node, which is released
+   * after merging.
    * @note A given node must be in the same level as this node.
    */
   void
   Merge(  //
-      SIXGuard grd,
-      NodeHeader* r_node,
-      SIXGuard r_grd)
+      SIXGuard& six_grd,
+      NodeHeader* const r_node,
+      SIXGuard& r_grd)
   {
     assert(level_ == r_node->level_);
 
-    auto* tmp = AllocNode();
+    auto* const tmp = AllocNode();
     tmp->offset_ = page_size_ - r_node->hk_len_;
 
     int32_t pos = 0;
@@ -253,12 +347,12 @@ class NodeHeader
     pos = 0;
     tmp->CopyRecords(r_node, pos, r_node->rec_num_);
     {
-      auto&& x_grd = grd.UpgradeToX();
+      auto&& x_grd = six_grd.UpgradeToX();
       CopyFrom(tmp);
       sib_node_ = r_node->sib_node_;
+      r_node->Remove(r_grd, this);
       VerIncrement<kSMOMask>(x_grd);
     }
-    r_node->Remove(std::move(r_grd), this);
 
     FreeNode(tmp);
   }
@@ -266,15 +360,16 @@ class NodeHeader
   /**
    * @brief Set a remove flag to this node.
    *
-   * @param grd The SIX-lock guard of this node.
-   * @param next A side link for traversing to the next target node.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after setting the flag.
+   * @param[in] next A side link for traversing to the next target node.
    */
   void
   Remove(  //
-      SIXGuard grd,
-      NodeHeader* next = nullptr)
+      SIXGuard& six_grd,
+      NodeHeader* const next = nullptr)
   {
-    auto&& x_grd = grd.UpgradeToX();
+    auto&& x_grd = six_grd.UpgradeToX();
     removed_ = true;
     sib_node_ = next;
     VerIncrement<kSMOMask>(x_grd);
@@ -293,7 +388,7 @@ class NodeHeader
    */
   void
   LinkSiblingNode(  //
-      NodeHeader* sib_node,
+      NodeHeader* const sib_node,
       const Key& key,
       const size_t key_len) noexcept
   {
@@ -314,7 +409,7 @@ class NodeHeader
       NodeHeader* l_node,
       NodeHeader* r_node) noexcept
   {
-    if (l_node == nullptr) return;
+    if (!l_node) return;
 
     while (true) {
       // link the border nodes
@@ -323,7 +418,7 @@ class NodeHeader
       l_node->sib_node_ = r_node;
       l_node->hk_len_ = key_len;
       l_node->usage_ += key_len;
-      auto* hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
+      auto* const hk_addr = ShiftAddr(l_node, l_node->page_size_ - key_len);
       std::memcpy(hk_addr, ShiftAddr(r_node, meta.offset), key_len);
       if (l_node->level_ == 0) return;  // all the border nodes are linked
 
@@ -375,7 +470,7 @@ class NodeHeader
        << "  leftmost : " << leftmost_ << "\n";
     if (hk_len_ > 0) {
       Key h_key;
-      const auto* src_addr = ShiftAddr(this, page_size_ - hk_len_);
+      const auto* const src_addr = ShiftAddr(this, page_size_ - hk_len_);
       if constexpr (IsVarLenData<Key>()) {
         alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
         h_key = std::bit_cast<Key>(&tls_key);
@@ -395,70 +490,6 @@ class NodeHeader
 
  protected:
   /*##########################################################################*
-   * Protected constructors
-   *##########################################################################*/
-
-  /**
-   * @brief Construct an empty node.
-   *
-   * @param page_size The page size for each node.
-   * @param align_val The alignment size for each node.
-   * @param level The level where this node is.
-   */
-  constexpr NodeHeader(  //
-      const uint32_t page_size,
-      const uint32_t align_val,
-      const uint32_t level) noexcept
-      : page_size_{page_size}
-      , align_val_{align_val}
-      , level_{static_cast<uint8_t>(level)}
-  {
-    static_assert(                          //
-        sizeof(NodeHeader) <= kHeaderSize,  //
-        "Header regions must be in 32 bytes.");
-  }
-
-  /**
-   * @brief Construct split nodes.
-   *
-   * @param[in,out] l_node A left (source) node.
-   * @note This is a split right node.
-   */
-  explicit NodeHeader(  //
-      NodeHeader* l_node)
-      : page_size_{l_node->page_size_}
-      , align_val_{l_node->align_val_}
-      , offset_{static_cast<uint32_t>(page_size_ - l_node->hk_len_)}
-      , level_{l_node->level_}
-      , leftmost_{false}
-      , sib_node_{l_node->sib_node_}
-  {
-    auto* tmp = AllocNode();
-    tmp->offset_ = page_size_ - kMaxKeySize;
-
-    // copy split-left records to a temporary region
-    const double sep_ratio = l_node->leftmost_ && sib_node_     ? 0.25  // NOLINTBEGIN
-                             : !l_node->leftmost_ && !sib_node_ ? 0.75
-                                                                : 0.5;  // NOLINTEND
-    const uint32_t sep_size = (l_node->usage_ - l_node->hk_len_) * sep_ratio;
-    int32_t pos = 0;
-    tmp->CopyLowRecord(l_node, pos);
-    tmp->template CopyRecords<kSplit>(l_node, pos, l_node->rec_num_, sep_size);
-    const auto sep_meta = l_node->meta_arr_[pos];
-    tmp->CopyHighKey(ShiftAddr(l_node, sep_meta.offset), sep_meta.key_len);
-
-    // copy split-right records to this node
-    CopyHighKey(ShiftAddr(l_node, offset_), l_node->hk_len_);
-    CopyRecords(l_node, pos, l_node->rec_num_);
-
-    // copy the split-left records to the left node
-    l_node->CopyFrom(tmp);
-    l_node->sib_node_ = this;
-
-    FreeNode(tmp);
-  }
-
-  /*##########################################################################*
    * Protected destructors
    *##########################################################################*/
 
@@ -467,13 +498,6 @@ class NodeHeader
    *
    */
   ~NodeHeader() = default;
-
-  /*##########################################################################*
-   * Internal types
-   *##########################################################################*/
-
-  /// @brief A type for allocating variable-length data.
-  using KeyWOPtr = std::remove_pointer_t<Key>;
 
   /*##########################################################################*
    * Internal constants
@@ -486,7 +510,7 @@ class NodeHeader
   static constexpr bool kSplit = true;
 
   /// @brief The maximum size of keys.
-  static constexpr uint32_t kMaxKeySize = MaxSize<Key>();
+  static constexpr uint32_t kMaxKeySize = MaxKeySize<Key>();
 
   /*##########################################################################*
    * Internal utilities
@@ -536,6 +560,55 @@ class NodeHeader
   }
 
   /**
+   * @brief Get the position of a search key using linear search.
+   *
+   * @param[in] key A search key.
+   * @param[in,out] pos The position of a target record.
+   * @param[out] found true if a target record is found.
+   * @param[in] begin_pos The begin position of the search space.
+   * @retval true if the found record has been deleted.
+   * @retval false otherwise.
+   * @note A given position must be in [`begin_pos`, `rec_num_`).
+   */
+  auto
+  LinearSearchImpl(  //
+      const Key& key,
+      int32_t& pos,
+      bool& found,
+      const int32_t begin_pos) const noexcept  //
+      -> bool
+  {
+    auto meta = meta_arr_[pos];
+    const auto& idx_key = GetKey(meta);
+    if (kLess(key, idx_key)) {
+      found = false;
+      while (pos > begin_pos) {
+        meta = meta_arr_[--pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(key, idx_key)) {
+          found = !kLess(idx_key, key);
+          pos += static_cast<int32_t>(!found);
+          break;
+        }
+      }
+    } else if (kLess(idx_key, key)) {
+      found = false;
+      const int32_t rec_num = rec_num_;
+      while (++pos < rec_num) {
+        meta = meta_arr_[pos];
+        const auto& idx_key = GetKey(meta);
+        if (!kLess(idx_key, key)) {
+          found = !kLess(key, idx_key);
+          break;
+        }
+      }
+    } else {
+      found = true;
+    }
+    return meta.deleted;
+  }
+
+  /**
    * @param meta Record metadata.
    * @return The key in the target record.
    */
@@ -546,7 +619,7 @@ class NodeHeader
       -> Key
   {
     Key key;
-    const auto* src_addr = ShiftAddr(this, meta.offset);
+    const auto* const src_addr = ShiftAddr(this, meta.offset);
     if constexpr (IsVarLenData<Key>()) {
       alignas(alignof(KeyWOPtr)) thread_local std::byte tls_key[kMaxKeySize];
       key = std::bit_cast<Key>(&tls_key);
@@ -566,7 +639,7 @@ class NodeHeader
   void
   CopyPayloadTo(  //
       const int32_t pos,
-      void* out_pay,
+      void* const out_pay,
       const size_t pay_len = kPtrSize) const noexcept
   {
     const auto offset = meta_arr_[pos].GetPayOff();
@@ -593,30 +666,35 @@ class NodeHeader
   /**
    * @brief Clean up this node if its free space is fragmented.
    *
-   * @param total_len The length of a new record including its metadata.
+   * @param[in] total_len The length of a new record including its metadata.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is
+   * temporarily upgraded to an X lock if this node is cleaned up.
    * @retval true if this node has been cleaned up.
    * @retval false otherwise.
    * @note The positions of records are changed if this node includes deleted
    * records.
    */
   auto
-  CleanUpIfNeeded(             //
-      const size_t total_len)  //
+  CleanUpIfNeeded(  //
+      const size_t total_len,
+      SIXGuard& six_grd)  //
       -> bool
   {
     if (kHeaderSize + kMetaSize * rec_num_ + total_len <= offset_) return false;
-    CleanUp();
+    CleanUp(six_grd);
     return true;
   }
 
   /**
-   * @brief Insert a given kay/payload pair into a given position.
+   * @brief Insert a given key/payload pair into a given position.
    *
-   * @param pos A position where a new record is inserted.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] key A target key to be written.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after inserting.
    * @note This node must have enough contiguous free space.
    */
   void
@@ -624,12 +702,15 @@ class NodeHeader
       const int32_t pos,
       const Key& key,
       const size_t key_len,
-      const void* payload,
-      const size_t pay_len) noexcept
+      const void* const payload,
+      const size_t pay_len,
+      SIXGuard& six_grd) noexcept
   {
     const auto rec_len = key_len + pay_len;
     const auto mov_size = kMetaSize * (rec_num_ - pos);
     auto& meta = meta_arr_[pos];
+
+    auto&& x_grd = six_grd.UpgradeToX();
     offset_ -= rec_len;
     std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
     std::memcpy(ShiftAddr(this, offset_ + key_len), payload, pay_len);
@@ -637,6 +718,7 @@ class NodeHeader
     meta = Metadata{offset_, key_len, rec_len};
     ++rec_num_;
     usage_ += rec_len + kMetaSize;
+    VerIncrement<kInsDelMask>(x_grd);
   }
 
   /**
@@ -655,9 +737,9 @@ class NodeHeader
    * @brief Bulkload records into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
-   * @param max_usage The maximum usage of this node.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
+   * @param[in] max_usage The maximum usage of this node.
    */
   template <class BulkIter>
   void
@@ -675,7 +757,7 @@ class NodeHeader
 
       offset_ -= rec_len;
       std::memcpy(ShiftAddr(this, offset_), GetSrcAddr(key), key_len);
-      std::memcpy(ShiftAddr(this, offset_ + key_len), &payload, pay_len);
+      std::memcpy(ShiftAddr(this, offset_ + key_len), GetSrcAddr(payload), pay_len);
       meta_arr_[rec_num_++] = Metadata{offset_, key_len, rec_len};
       usage_ += total_len;
     }
@@ -683,14 +765,14 @@ class NodeHeader
   }
 
   /**
-   * @return A temporary node
+   * @return A temporary node.
    */
   [[nodiscard]]
   auto
   AllocNode()  //
       -> NodeHeader*
   {
-    auto* page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
+    auto* const page = ::operator new(page_size_, static_cast<std::align_val_t>(align_val_));
     return new (page) NodeHeader{page_size_, align_val_, level_};
   }
 
@@ -699,7 +781,7 @@ class NodeHeader
    */
   void
   FreeNode(  //
-      void* page)
+      void* const page)
   {
     ::operator delete(page, static_cast<std::align_val_t>(align_val_));
   }
@@ -707,29 +789,37 @@ class NodeHeader
   /**
    * @brief Clean up this node.
    *
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is
+   * temporarily upgraded to an X lock while copying back records.
    */
   void
-  CleanUp()
+  CleanUp(  //
+      SIXGuard& six_grd)
   {
-    auto* tmp = AllocNode();
+    auto* const tmp = AllocNode();
     tmp->offset_ = page_size_ - hk_len_;
 
     int32_t pos = 0;
     tmp->CopyHighKey(ShiftAddr(this, tmp->offset_), hk_len_);
     tmp->CopyLowRecord(this, pos);
     tmp->CopyRecords(this, pos, rec_num_);
+
+    auto&& x_grd = six_grd.UpgradeToX();
     CopyFrom(tmp);
+    VerIncrement<kInsDelMask>(x_grd);
+    six_grd = x_grd.DowngradeToSIX();
 
     FreeNode(tmp);
   }
 
   /**
-   * @brief Copy records and their relevant data from a TL temporary node.
+   * @brief Copy records and their relevant data from a temporary node.
    *
+   * @param[in] src A temporary node.
    */
   void
   CopyFrom(  //
-      const NodeHeader* src) noexcept
+      const NodeHeader* const src) noexcept
   {
     rec_num_ = src->rec_num_;
     offset_ = src->offset_;
@@ -747,7 +837,7 @@ class NodeHeader
    */
   void
   CopyHighKey(  //
-      const void* src,
+      const void* const src,
       const size_t key_len) noexcept
   {
     std::memcpy(ShiftAddr(this, page_size_ - key_len), src, key_len);
@@ -763,7 +853,7 @@ class NodeHeader
    */
   void
   CopyLowRecord(  //
-      const NodeHeader* src,
+      const NodeHeader* const src,
       int32_t& pos) noexcept
   {
     if (src->rec_num_ == 0) return;
@@ -787,7 +877,7 @@ class NodeHeader
   template <bool kSearchSplitPos = false>
   void
   CopyRecords(  //
-      const NodeHeader* src,
+      const NodeHeader* const src,
       int32_t& pos,
       const int32_t end_pos,
       [[maybe_unused]] const uint32_t sep_size = 0) noexcept

@@ -43,8 +43,11 @@ constexpr uint32_t kSMOMask = 0xFFF0'0000U;
 /// @brief The default page size of each node.
 constexpr size_t kDefaultPageSize = (B_TREE_DEFAULT_PAGE_SIZE);
 
-/// @brief The maximum size of variable-length data.
-constexpr size_t kMaxVarDataSize = (B_TREE_MAX_VARLEN_DATA_SIZE);
+/// @brief The maximum size of variable-length keys.
+constexpr size_t kMaxVarKeySize = (B_TREE_MAX_VARLEN_KEY_SIZE);
+
+/// @brief The maximum size of variable-length payloads.
+constexpr size_t kMaxVarPaySize = (B_TREE_MAX_VARLEN_PAYLOAD_SIZE);
 
 /// @brief The default time interval for garbage collection [ms].
 constexpr size_t kDefaultGCTime = (B_TREE_DEFAULT_GC_INTERVAL);

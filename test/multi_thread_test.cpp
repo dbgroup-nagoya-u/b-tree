@@ -17,8 +17,11 @@
 // the corresponding header
 #include "dbgroup/b_tree/b_tree.hpp"
 
-// external libraries
+// our libraries
 #include <dbgroup/index_fixtures/index_fixture_multi_thread.hpp>
+
+// local sources
+#include "dbgroup/b_tree/b_tree_fix_len.hpp"
 
 namespace dbgroup::index::test
 {
@@ -29,12 +32,19 @@ namespace dbgroup::index::test
 template <class K, class V, class C, class... Others>
 using Index = b_tree::BTree<K, V, C, Others...>;
 
-using TestTargets = ::testing::Types<  //
-    IndexInfo<Index, UInt8, UInt8>,    // fixed-length keys
-    IndexInfo<Index, UInt4, UInt8>,    // small keys
-    IndexInfo<Index, Var, UInt8>,      // varlen keys
-    IndexInfo<Index, UInt8, UInt4>,    // small payloads
-    IndexInfo<Index, UInt8, UInt16>    // long payloads
+template <class K, class V, class C, class... Others>
+using FixLenIndex = b_tree::BTreeFixLen<K, V, C, Others...>;
+
+using TestTargets = ::testing::Types<      //
+    IndexInfo<Index, UInt8, UInt8>,        // fixed-length keys
+    IndexInfo<Index, UInt4, UInt8>,        // small keys
+    IndexInfo<Index, Var, UInt8>,          // varlen keys
+    IndexInfo<Index, UInt8, UInt4>,        // small payloads
+    IndexInfo<Index, UInt8, UInt16>,       // long payloads
+    IndexInfo<Index, UInt8, VarPay>,       // varlen payloads
+    IndexInfo<Index, Var, VarPay>,         // varlen keys/payloads
+    IndexInfo<FixLenIndex, UInt8, UInt8>,  // fixed-length wrapper
+    IndexInfo<FixLenIndex, Var, UInt8>     // fixed-length wrapper with varlen keys
     >;
 TYPED_TEST_SUITE(IndexMultiThreadFixture, TestTargets);
 

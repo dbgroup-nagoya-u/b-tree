@@ -31,12 +31,10 @@
 #include <utility>
 #include <vector>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
-#include <dbgroup/lock/mcs_lock.hpp>
-#include <dbgroup/lock/optimistic_lock.hpp>
-#include <dbgroup/lock/pessimistic_lock.hpp>
+#include <dbgroup/lock/omcs_lock.hpp>
 #include <dbgroup/lock/utility.hpp>
 #include <dbgroup/memory/epoch_based_gc.hpp>
 #include <dbgroup/memory/utility.hpp>
@@ -54,6 +52,10 @@ namespace dbgroup::index::b_tree
 /**
  * @brief A class for representing B+trees based on single-level SMOs.
  *
+ * This class provides the standard APIs, which accept both fixed-length and
+ * variable-length payloads and output payloads via `PayloadBuf`. See
+ * `BTreeFixLen` for fixed-length payloads with APIs returning `std::optional`.
+ *
  * @tparam Key A class of stored keys.
  * @tparam Payload A class of stored payloads.
  * @tparam Comp A comparator class for keys.
@@ -65,7 +67,7 @@ template <class Key,
           class Payload,
           class Comp = std::less<Key>,
           class GC = ::dbgroup::memory::EpochBasedGC<>,
-          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OptimisticLock,
+          ::dbgroup::lock::OptimisticallyLockable Lock = ::dbgroup::lock::OMCSLock,
           class Delta = Payload>
 class BTree
 {
@@ -74,6 +76,7 @@ class BTree
    *##########################################################################*/
 
   using KeyWOPtr = std::remove_pointer_t<Key>;
+  using PayWOPtr = WOPtr<Payload>;
   using ScanKey = std::optional<std::tuple<Key, size_t, bool>>;
 
   using GCGuard = dbgroup::thread::EpochGuard;
@@ -97,6 +100,15 @@ class BTree
    * Public type declarations
    *##########################################################################*/
 
+  /// @brief A class of keys.
+  using KeyType = Key;
+
+  /// @brief A class of payloads.
+  using PayloadType = Payload;
+
+  /// @brief A buffer for receiving payloads from this index.
+  using PayloadBuf = ::dbgroup::index::PayloadBuf<Payload, kMaxVarPaySize>;
+
   /**
    * @brief A class for iterating through scan results.
    *
@@ -114,15 +126,15 @@ class BTree
    * @brief Construct a new tree.
    *
    * @param page_size The page size for each node.
-   * @param gc_interval_micro GC internal [us] (default: 10ms).
-   * @param gc_thread_num the number of GC threads (default: 1).
+   * @param gc_interval_ms The interval of garbage collection in milliseconds.
+   * @param gc_thread_num The number of worker threads for garbage collection.
    */
   explicit BTree(  //
       const size_t page_size = kDefaultPageSize,
-      const size_t gc_interval_micro = kDefaultGCTime,
+      const size_t gc_interval_ms = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
       : page_size_{static_cast<uint32_t>(page_size)}
-      , gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
+      , gc_{std::make_shared<GC>(gc_interval_ms, gc_thread_num)}
   {
     VerifyPageSize();
   }
@@ -158,7 +170,7 @@ class BTree
    */
   ~BTree()
   {
-    TraverseAllNodes([&](NodeHeader* node) { FreePage(node); });
+    TraverseAllNodes([&](NodeHeader* const node) { FreePage(node); });
   }
 
   /*##########################################################################*
@@ -168,32 +180,34 @@ class BTree
   /**
    * @brief Read the payload corresponding to a given key if it exists.
    *
-   * @param key A search key.
-   * @param key_len The length of a target key.
-   * @retval The corresponding payload of a given key if exist.
-   * @retval std::nullopt otherwise.
+   * @param[in] key A search key.
+   * @param[in] key_len The length of a target key.
+   * @param[out] out A buffer for storing a read payload (ignored if nullptr).
+   * @retval true if the key exists.
+   * @retval false otherwise.
+   * @note If this function returns false, the contents of `out` are
+   * unspecified.
    */
   auto
   Read(  //
       const Key& key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
-      -> std::optional<Payload>
+      [[maybe_unused]] const size_t key_len,
+      PayloadBuf* const out)  //
+      -> bool
   {
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
-    std::optional<Payload> out_pay{};
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
-      auto* node = static_cast<LeafNode*>(tmp_node);
+      auto* const node = static_cast<LeafNode*>(tmp_node);
       const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if (found && !deleted) {
-        out_pay = node->template GetPayload<Payload>(pos);
-      } else {
-        out_pay = std::nullopt;
+      const auto exist = found && !deleted;
+      if (exist) {
+        node->CopyOldPayload(pos, out);
       }
-      if (grd.VerifyVersion(kNoMask)) return out_pay;
+      if (grd.VerifyVersion(kNoMask)) return exist;
       stack.emplace_back(node);
     }
   }
@@ -216,7 +230,7 @@ class BTree
 
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
-    auto* tmp_page = AllocPage();
+    auto* const tmp_page = AllocPage();
     if (begin_key) {
       const auto& [key, _, closed] = *begin_key;
       while (true) {
@@ -259,7 +273,7 @@ class BTree
 
     std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack{};
     stack.reserve(kInitialHeight);
-    auto* tmp_page = AllocPage();
+    auto* const tmp_page = AllocPage();
     if (end_key) {
       const auto& [key, _, closed] = *end_key;
       while (true) {
@@ -295,191 +309,217 @@ class BTree
    * @brief Write (i.e., put) a given key/payload pair.
    *
    * @param key A target key.
-   * @param payload A target payload.
    * @param key_len The length of a target key.
+   * @param payload A target payload.
+   * @param pay_len The length of a target payload.
    * @param merger A function for merging payloads.
    * @note This function is the alias of `Upsert`.
    */
   void
   Write(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload&, const Payload&) = nullptr)
+      const size_t pay_len,
+      Merger<Payload, Payload> merger = nullptr)
   {
-    Upsert(key, payload, key_len, merger);
+    Upsert(key, key_len, payload, pay_len, nullptr, merger);
   }
 
   /**
    * @brief Upsert (update or insert) a given key/payload pair.
    *
-   * @param key A target key.
-   * @param payload A target payload.
-   * @param key_len The length of a target key.
-   * @param merger A function for merging payloads.
-   * @retval The previous payload if exist (i.e., the function acts as update).
-   * @retval std::nullopt otherwise.
-   * @note If a given verifier finds inconsistent record modifications, this
-   * function does nothing and returns std::nullopt.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload.
+   * @param[in] pay_len The length of a target payload.
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
+   * @param[in] merger A function for merging payloads.
+   * @retval true if an existing record is updated.
+   * @retval false if a new record is inserted.
+   * @note `merger` may be called multiple times due to retries, so it must not
+   * have side effects.
    */
   auto
   Upsert(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload&, const Payload&) = nullptr)  //
-      -> std::optional<Payload>
+      const size_t pay_len,
+      PayloadBuf* const old = nullptr,
+      Merger<Payload, Payload> merger = nullptr)  //
+      -> bool
   {
+    assert(pay_len <= kMaxPaySize);
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
-    std::optional<Payload> out_pay{};
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
-      auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
-      if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
+      auto* const node = static_cast<LeafNode*>(tmp_node);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
+      if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+        }
         if (found && !deleted) {
-          out_pay = node->Update(pos, payload, merger);
-          break;
+          node->template Update<Payload, Payload>(  //
+              pos, key, key_len, payload, pay_len, old, merger, six_grd);
+          if (!six_grd) return true;
+        } else {
+          node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len, six_grd);
+          if (!six_grd) return false;
         }
-        if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
-          VerIncrement<kInsDelMask>(x_grd);
-          break;
-        }
-        Split(stack, node, std::move(x_grd));
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
-    return out_pay;
   }
 
   /**
    * @brief Insert a given key/payload pair.
    *
-   * @param key A target key.
-   * @param payload A target payload.
-   * @param key_len The length of a target key.
-   * @retval The current payload if exist (i.e., failed).
-   * @retval std::nullopt otherwise (i.e., succeeded).
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload.
+   * @param[in] pay_len The length of a target payload.
+   * @param[out] old A buffer for storing an existing payload (ignored if nullptr).
+   * @retval true if a new record is inserted.
+   * @retval false if the key exists.
    */
   auto
   Insert(  //
       const Key& key,
+      const size_t key_len,
       const Payload& payload,
-      const size_t key_len = sizeof(Key))  //
-      -> std::optional<Payload>
+      const size_t pay_len,
+      PayloadBuf* const old = nullptr)  //
+      -> bool
   {
+    assert(pay_len <= kMaxPaySize);
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
-    std::optional<Payload> out_pay{};
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
-      auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto* const node = static_cast<LeafNode*>(tmp_node);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (found && !deleted) {
-        out_pay = node->template GetPayload<Payload>(pos);
-        if (grd.VerifyVersion(kNoMask)) break;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        if (node->Insert(pos, found, key, key_len, &payload, kPayLen)) {
-          VerIncrement<kInsDelMask>(x_grd);
-          out_pay = std::nullopt;
-          break;
+        node->CopyOldPayload(pos, old);
+        if (grd.VerifyVersion(kNoMask)) return false;
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (found && !deleted) {
+            node->CopyOldPayload(pos, old);
+            return false;
+          }
         }
-        Split(stack, node, std::move(x_grd));
+        node->Insert(pos, found, key, key_len, GetSrcAddr(payload), pay_len, six_grd);
+        if (!six_grd) return true;
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
-    return out_pay;
   }
 
   /**
-   * @brief Update a record using a given kay/payload pair.
+   * @brief Update a record using a given key/payload pair.
    *
    * @tparam T A delta-payload class (`Payload` or `Delta`).
-   * @param key A target key.
-   * @param payload A target payload.
-   * @param key_len The length of a target key.
-   * @param merger A function for merging payloads.
-   * @param pay_len The length of a target payload.
-   * @retval The previous payload if exist (i.e., succeeded).
-   * @retval std::nullopt otherwise (i.e., failed).
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload or delta.
+   * @param[in] pay_len The length of a target payload or delta.
+   * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
+   * @param[in] merger A function for merging payloads.
+   * @retval true if the key exists (i.e., succeeded).
+   * @retval false otherwise.
+   * @note A delta (i.e., `T` is not `Payload`) requires `merger`. `merger` may
+   * be called multiple times due to retries, so it must not have side effects.
    */
   template <class T = Payload>
   auto
   Update(  //
       const Key& key,
+      const size_t key_len,
       const std::type_identity_t<T>& payload,
-      [[maybe_unused]] const size_t key_len = sizeof(Key),
-      Payload (*merger)(const Payload&, const T&) = nullptr,
-      [[maybe_unused]] const size_t pay_len = sizeof(T))  //
-      -> std::optional<Payload>
+      const size_t pay_len,
+      PayloadBuf* const old = nullptr,
+      Merger<Payload, T> merger = nullptr)  //
+      -> bool
   {
     static_assert(                                               //
         std::is_same_v<T, Payload> || std::is_same_v<T, Delta>,  //
         "The update API requires the pre-defined Payload or Delta types.");
+    assert(pay_len <= component::MaxPaySize<T>());
 
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
-    std::optional<Payload> out_pay{};
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
-      auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto* const node = static_cast<LeafNode*>(tmp_node);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (grd.VerifyVersion(kInsDelMask)) break;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        out_pay = node->Update(pos, payload, merger);
-        break;
+        if (grd.VerifyVersion(kInsDelMask)) return false;
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (!found || deleted) return false;
+        }
+        node->template Update<Payload, T>(  //
+            pos, key, key_len, payload, pay_len, old, merger, six_grd);
+        if (!six_grd) return true;
+        Split(stack, node, std::move(six_grd));
       }
       stack.emplace_back(node);
     }
-    return out_pay;
   }
 
   /**
-   * @brief Delete a record using a given kay.
+   * @brief Delete a record using a given key.
    *
-   * @param key A target key.
-   * @param key_len The length of a target key.
-   * @retval The deleted payload if exist (i.e., succeeded).
-   * @retval std::nullopt otherwise (i.e., failed).
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[out] old A buffer for storing a deleted payload (ignored if nullptr).
+   * @retval true if the key exists (i.e., succeeded).
+   * @retval false otherwise.
    */
   auto
   Delete(  //
       const Key& key,
-      [[maybe_unused]] const size_t key_len = sizeof(Key))  //
-      -> std::optional<Payload>
+      [[maybe_unused]] const size_t key_len,
+      PayloadBuf* const old = nullptr)  //
+      -> bool
   {
     [[maybe_unused]] const auto& gc_grd = gc_->CreateEpochGuard();
 
-    std::optional<Payload> out_pay{};
     std::vector<NodeHeader*> stack{};
     stack.reserve(kInitialHeight);
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key);
-      auto* node = static_cast<LeafNode*>(tmp_node);
-      const auto [found, deleted, pos] = node->CheckUniqueness(key);
+      auto* const node = static_cast<LeafNode*>(tmp_node);
+      auto [found, deleted, pos] = node->CheckUniqueness(key);
       if (!found || deleted) {
-        if (grd.VerifyVersion(kInsDelMask)) break;
-      } else if (auto&& x_grd = grd.TryLockX(kInsDelMask); x_grd) {
-        Payload tmp_pay{};
-        const auto need_merge = node->Delete(pos, &tmp_pay);
-        out_pay = tmp_pay;
-        VerIncrement<kInsDelMask>(x_grd);
-        if (need_merge) {
-          TryMerge(stack, node, x_grd.DowngradeToSIX());
+        if (grd.VerifyVersion(kInsDelMask)) return false;
+      } else if (auto&& six_grd = grd.TryLockSIX(kSMOMask); six_grd) {
+        if (VerNE<kInsDelMask>(grd, six_grd)) {
+          deleted = node->LinearSearch(key, pos, found);
+          if (!found || deleted) return false;
         }
-        break;
+        node->CopyOldPayload(pos, old);
+        node->Delete(pos, six_grd);
+        if (six_grd) {
+          TryMerge(stack, node, std::move(six_grd));
+        }
+        return true;
       }
       stack.emplace_back(node);
     }
-    return out_pay;
   }
 
   /*##########################################################################*
@@ -487,13 +527,14 @@ class BTree
    *##########################################################################*/
 
   /**
-   * @brief Bulkload specified kay/payload pairs.
+   * @brief Bulkload specified key/payload pairs.
    *
-   * @tparam Entry A container for a key/payload pair.
+   * @tparam Entry A container of a key/payload pair.
    * @param entries All entries for bulkload.
    * @param thread_num The number of threads used for bulkload.
    * @note This function must be called for an empty tree without any concurrent
-   * operations.
+   * operations. For variable-length payloads, each entry must be a tuple of a
+   * key, a payload, the length of the key, and the length of the payload.
    */
   template <class Entry>
   void
@@ -501,6 +542,9 @@ class BTree
       const std::vector<Entry>& entries,
       const size_t thread_num = 1)
   {
+    static_assert(  //
+        !IsVarLenData<Payload>() || std::tuple_size_v<Entry> == 4,
+        "Bulkload entries for variable-length payloads must include their lengths.");
     assert(root_.load(kRelaxed)->Level() == 0 && root_.load(kRelaxed)->RecNum() == 0);
     if (entries.empty()) return;
 
@@ -552,11 +596,11 @@ class BTree
     while (nodes.size() > 1) {
       nodes = ConstructSingleLevel<NodeEntry>(nodes.cbegin(), nodes.size(), level++);
     }
-    auto* new_root = std::get<1>(nodes.front());
+    auto* const new_root = std::get<1>(nodes.front());
     NodeHeader::RemoveLeftmostKeys(new_root);
 
     // set a new root
-    auto* old_root = root_.exchange(new_root, kRelease);
+    auto* const old_root = root_.exchange(new_root, kRelease);
     gc_->AddGarbage(old_root, page_size_);
   }
 
@@ -564,6 +608,7 @@ class BTree
    * @retval 1st: The actual usage of this index.
    * @retval 2nd: The allocated memory amount for this index.
    */
+  [[nodiscard]]
   auto
   MemoryUsage() const  //
       -> std::pair<size_t, size_t>
@@ -583,13 +628,14 @@ class BTree
    * @retval 1st: The actual usage of this index.
    * @retval 2nd: The allocated memory amount for this index.
    */
+  [[nodiscard]]
   auto
   MemoryUsageDetailed() const  //
       -> std::vector<std::pair<size_t, size_t>>
   {
     std::vector<std::pair<size_t, size_t>> usage{};
     usage.reserve(kInitialHeight);
-    TraverseAllNodes([&](NodeHeader* node) {
+    TraverseAllNodes([&](NodeHeader* const node) {
       const auto level = node->Level();
       while (usage.size() <= level) [[unlikely]] {
         usage.emplace_back();
@@ -622,13 +668,13 @@ class BTree
      * @param index A source index structure.
      * @param node The current scanning node.
      * @param begin_pos The begin position for scanning.
-     * @param end_key  The end key given from a user.
-     * @param gc_grd  The guard instance for preventing GC from reclaiming nodes.
+     * @param end_key The end key given from a user.
+     * @param gc_grd The guard instance for preventing GC from reclaiming nodes.
      * @param stack A stack of traversed nodes.
      */
     Iterator(  //
-        BTree* index,
-        LeafNode* node,
+        BTree* const index,
+        LeafNode* const node,
         const int32_t begin_pos,
         const ScanKey& end_key,
         GCGuard gc_grd,
@@ -650,13 +696,15 @@ class BTree
         , pos_{obj.pos_}
         , end_pos_{obj.end_pos_}
         , is_end_{obj.is_end_}
-        , payload_{obj.payload_}
+        , key_len_{obj.key_len_}
+        , pay_len_{obj.pay_len_}
         , index_{obj.index_}
         , end_key_{obj.end_key_}
         , gc_grd_{std::move(obj.gc_grd_)}
         , stack_{std::move(obj.stack_)}
     {
       std::memcpy(key_, obj.key_, kMaxKeySize);
+      std::memcpy(payload_, obj.payload_, kMaxPaySize);
     }
 
     auto
@@ -668,12 +716,14 @@ class BTree
       pos_ = rhs.pos_;
       end_pos_ = rhs.end_pos_;
       is_end_ = rhs.is_end_;
-      payload_ = rhs.payload_;
+      key_len_ = rhs.key_len_;
+      pay_len_ = rhs.pay_len_;
       index_ = rhs.index_;
       end_key_ = rhs.end_key_;
       gc_grd_ = std::move(rhs.gc_grd_);
       stack_ = std::move(rhs.stack_);
       std::memcpy(key_, rhs.key_, kMaxKeySize);
+      std::memcpy(payload_, rhs.payload_, kMaxPaySize);
       return *this;
     }
 
@@ -716,7 +766,7 @@ class BTree
     operator*() const noexcept  //
         -> std::pair<Key, Payload>
     {
-      return {GetKey(), payload_};
+      return {GetKey(), GetPayload()};
     }
 
     /**
@@ -746,7 +796,7 @@ class BTree
     GetKey() const noexcept  //
         -> Key
     {
-      auto* addr = std::bit_cast<void*>(&key_[0]);
+      auto* const addr = std::bit_cast<void*>(&key_[0]);
       if constexpr (IsVarLenData<Key>()) {
         return std::bit_cast<Key>(addr);
       } else {
@@ -756,13 +806,43 @@ class BTree
 
     /**
      * @return A payload indicated by the iterator.
+     * @note For variable-length payloads, this function returns the pointer to
+     * an internal buffer, which is invalidated by forwarding or destructing
+     * this iterator.
      */
     [[nodiscard]]
     constexpr auto
     GetPayload() const noexcept  //
         -> Payload
     {
-      return payload_;
+      auto* const addr = std::bit_cast<void*>(&payload_[0]);
+      if constexpr (IsVarLenData<Payload>()) {
+        return std::bit_cast<Payload>(addr);
+      } else {
+        return *std::bit_cast<Payload*>(addr);
+      }
+    }
+
+    /**
+     * @return The length of a key indicated by the iterator.
+     */
+    [[nodiscard]]
+    constexpr auto
+    GetKeyLength() const noexcept  //
+        -> size_t
+    {
+      return key_len_;
+    }
+
+    /**
+     * @return The length of a payload indicated by the iterator.
+     */
+    [[nodiscard]]
+    constexpr auto
+    GetPayloadLength() const noexcept  //
+        -> size_t
+    {
+      return pay_len_;
     }
 
    private:
@@ -771,7 +851,10 @@ class BTree
      *########################################################################*/
 
     /// @brief The maximum size of keys.
-    static constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
+    static constexpr uint32_t kMaxKeySize = component::MaxKeySize<Key>();
+
+    /// @brief The maximum size of payloads.
+    static constexpr uint32_t kMaxPaySize = component::MaxPaySize<Payload>();
 
     /*########################################################################*
      * Internal utilities
@@ -787,13 +870,13 @@ class BTree
       while (true) {
         if constexpr (kForward) {
           if (pos_ < end_pos_) {
-            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
+            if (node_->CopyRecordTo(pos_, key_, key_len_, payload_, pay_len_)) return;
             ++pos_;
             continue;
           }
         } else {
           if (pos_ >= end_pos_) {
-            if (node_->CopyRecordTo(pos_, key_, &payload_)) return;
+            if (node_->CopyRecordTo(pos_, key_, key_len_, payload_, pay_len_)) return;
             --pos_;
             continue;
           }
@@ -834,7 +917,13 @@ class BTree
     alignas(alignof(KeyWOPtr)) std::byte key_[kMaxKeySize]{};
 
     /// @brief The payload of the current record.
-    Payload payload_{};
+    alignas(alignof(PayWOPtr)) std::byte payload_[kMaxPaySize]{};
+
+    /// @brief The length of the current key.
+    uint32_t key_len_{};
+
+    /// @brief The length of the current payload.
+    uint32_t pay_len_{};
 
     /// @brief A source index structure.
     const BTree* index_{};
@@ -846,7 +935,7 @@ class BTree
     GCGuard gc_grd_{};
 
     /// @brief A stack of traversed nodes.
-    /// @note This filed is only used for backward scan.
+    /// @note This field is only used for backward scan.
     std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack_{};
   };
 
@@ -858,11 +947,11 @@ class BTree
   /// @brief The initial capacity of a node stack.
   static constexpr uint32_t kInitialHeight = 8;
 
-  /// @brief The size of payloads.
-  static constexpr uint32_t kPayLen = sizeof(Payload);
+  /// @brief The maximum size of payloads.
+  static constexpr uint32_t kMaxPaySize = component::MaxPaySize<Payload>();
 
   /// @brief The expected size of records.
-  static constexpr uint32_t kRecLen = (sizeof(Key) + kPayLen + kWordSize);
+  static constexpr uint32_t kRecLen = (sizeof(Key) + kMaxPaySize + kWordSize);
 
   /*##########################################################################*
    * Internal utility functions
@@ -888,7 +977,7 @@ class BTree
    */
   void
   FreePage(  //
-      void* page) const
+      void* const page) const
   {
     ::operator delete(page, static_cast<std::align_val_t>(align_val_));
   }
@@ -914,7 +1003,7 @@ class BTree
   {
     uint32_t i = 0;
     while (true) {
-      auto* sib_node = node->GetSibNode();
+      auto* const sib_node = node->GetSibNode();
       const auto removed = node->Removed();
       const auto included = node->Include(key, reverse);
       if (!grd.VerifyVersion(kSMOMask)) continue;
@@ -989,7 +1078,7 @@ class BTree
     NodeHeader* child{};
     while (true) {
       if (stack.empty()) {
-        auto* root = root_.load(kAcquire);
+        auto* const root = root_.load(kAcquire);
         stack.emplace_back(root, 0, root->GetGuard());
       }
 
@@ -999,7 +1088,7 @@ class BTree
           if (!SearchHorizontally(node, grd, key, open)) goto out;
           if (node->Level() == 0) return;
 
-          auto* inner = static_cast<InnerNode*>(node);
+          auto* const inner = static_cast<InnerNode*>(node);
           pos = inner->SearchRecord(key).second - 1;
           child = inner->GetChild(pos--);
           if (grd.VerifyVersion(kInsDelMask)) break;
@@ -1048,7 +1137,7 @@ class BTree
   {
     while (true) {
       if (stack.empty()) {
-        auto* root = root_.load(kAcquire);
+        auto* const root = root_.load(kAcquire);
         stack.emplace_back(root, 0, root->GetGuard());
       }
 
@@ -1058,7 +1147,7 @@ class BTree
         auto& [node, pos, grd] = stack.back();
         while (true) {
           const auto removed = node->Removed();
-          auto* sib = node->GetSibNode();
+          auto* const sib = node->GetSibNode();
           if (!grd.VerifyVersion(kSMOMask)) continue;
 
           if (!removed && !sib) {
@@ -1130,7 +1219,7 @@ class BTree
     while (!stack.empty()) {
       auto& [node, pos, grd] = stack.back();
       if (pos >= 0) {
-        auto* child = static_cast<InnerNode*>(node)->GetChild(pos--);
+        auto* const child = static_cast<InnerNode*>(node)->GetChild(pos--);
         if (grd.VerifyVersion(kInsDelMask)) {
           stack.emplace_back(child, 0, child->GetGuard());
         }
@@ -1169,7 +1258,7 @@ class BTree
     while (!stack.empty()) {
       auto& [node, pos] = stack.back();
       if (node->Level() > 0 && pos < node->RecNum()) {
-        auto* child = static_cast<InnerNode*>(node)->GetChild(pos++);
+        auto* const child = static_cast<InnerNode*>(node)->GetChild(pos++);
         stack.emplace_back(child, 0);
         continue;
       }
@@ -1188,26 +1277,24 @@ class BTree
    *
    * @param stack A stack of traversed nodes.
    * @param l_child A split-left node.
-   * @param l_grd The guard instance of a split-left node.
+   * @param l_grd The SIX guard instance of a split-left node.
    */
-  template <class NodeT>
   void
   Split(  //
       std::vector<NodeHeader*> stack,
-      NodeT* l_child,
-      XGuard l_grd)
+      NodeHeader* const l_child,
+      SIXGuard l_grd)
   {
-    auto* r_child = new (AllocPage()) NodeT{l_child};
-    VerIncrement<kSMOMask>(l_grd);
-    const auto& [key, key_len] = l_child->GetHighKey();
-    l_grd = XGuard{};
+    Key key;
+    uint32_t key_len;
+    auto* const r_child = new (AllocPage()) NodeHeader{l_child, l_grd, key, key_len};
 
     const auto level = l_child->Level() + 1;
     while (true) {
       if (stack.empty()) {  // create a new root
         auto* old_root = root_.load(kRelaxed);
         if (old_root == l_child) {
-          auto* root = new (AllocPage())
+          auto* const root = new (AllocPage())
               InnerNode{page_size_, align_val_, level, key, key_len, l_child, r_child};
           if (root_.compare_exchange_strong(old_root, root, kRelease, kRelaxed)) break;
           FreePage(root);
@@ -1220,17 +1307,18 @@ class BTree
         std::this_thread::yield();
         continue;  // retry from the root creation with the empty stack
       }
-      auto* node = static_cast<InnerNode*>(tmp_node);
-      const auto [found, pos] = node->SearchRecord(key);
-      assert(!found);
-      auto&& x_grd = grd.TryLockX(kInsDelMask);
-      if (!x_grd) continue;  // another thread may insert the key
-      if (node->InsertChild(pos, key, key_len, r_child)) {
-        VerIncrement<kInsDelMask>(x_grd);
-        break;
+      auto* const node = static_cast<InnerNode*>(tmp_node);
+      auto [found, pos] = node->SearchRecord(key);
+      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      if (!six_grd) continue;  // another thread has modified the structure
+      if (VerNE<kInsDelMask>(grd, six_grd)) {
+        node->LinearSearch(key, pos, found);
       }
+      assert(!found);
+      node->InsertChild(pos, key, key_len, r_child, six_grd);
+      if (!six_grd) break;
 
-      Split(stack, node, std::move(x_grd));
+      Split(stack, node, std::move(six_grd));
       stack.emplace_back(node);
     }
     if constexpr (IsVarLenData<Key>()) {
@@ -1241,9 +1329,9 @@ class BTree
   /**
    * @brief Try to remove a down link and merge a given node.
    *
-   * @param stack A stack of traversed nodes.
-   * @param l_child A left child (to be merged) node.
-   * @param l_grd The SIX guard instance of a given child node.
+   * @param[in,out] stack A stack of traversed nodes.
+   * @param[in] l_child A left child (to be merged) node.
+   * @param[in] l_grd The SIX guard instance of a given child node.
    */
   void
   TryMerge(  //
@@ -1254,11 +1342,11 @@ class BTree
     const auto level = l_child->Level() + 1;
     auto&& r_grd = l_child->GetMergeableSib();
     if (!r_grd) {  // remove a root node if possible
-      auto* root = root_.load(kRelaxed);
-      if (root == l_child && root->Level() > 0 && static_cast<InnerNode*>(root)->IsRemovable()) {
+      auto* const root = root_.load(kRelaxed);
+      if (root == l_child && root->IsRemovable()) {
         l_child = static_cast<InnerNode*>(root)->GetChild(0);  // a new root
         root_.store(l_child, kRelease);
-        root->Remove(std::move(l_grd));
+        root->Remove(l_grd);
         gc_->AddGarbage(root, page_size_);
       }
       return;
@@ -1268,24 +1356,23 @@ class BTree
     while (true) {
       auto&& [tmp_node, grd] = SearchNode(stack, key, level);
       if (!tmp_node) break;  // the parent level has been removed
-      auto* node = static_cast<InnerNode*>(tmp_node);
-      const auto [found, pos] = node->SearchRecord(key);
+      auto* const node = static_cast<InnerNode*>(tmp_node);
+      auto [found, pos] = node->SearchRecord(key);
       if (!found) {
         if (!grd.VerifyVersion(kInsDelMask)) continue;
         break;  // a downlink has not been inserted yet or is leftmost in a node
       }
-      auto&& x_grd = grd.TryLockX(kInsDelMask);
-      if (!x_grd) continue;  // another thread may modify a node
+      auto&& six_grd = grd.TryLockSIX(kSMOMask);
+      if (!six_grd) continue;  // another thread has modified the structure
+      if (VerNE<kInsDelMask>(grd, six_grd)) {
+        node->LinearSearch(key, pos, found);
+        assert(found && pos > 0);
+      }
 
-      const auto [r_child, need_merge] = node->DeleteChild(pos);
-      VerIncrement<kInsDelMask>(x_grd);
-      if (need_merge) {
-        auto&& six_grd = x_grd.DowngradeToSIX();
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
+      auto* const r_child = node->DeleteChild(pos, six_grd);
+      l_child->Merge(l_grd, r_child, r_grd);
+      if (six_grd) {
         TryMerge(stack, node, std::move(six_grd));
-      } else {
-        x_grd = XGuard{};
-        l_child->Merge(std::move(l_grd), r_child, std::move(r_grd));
       }
       gc_->AddGarbage(r_child, page_size_);
       break;
@@ -1300,7 +1387,7 @@ class BTree
    *##########################################################################*/
 
   /**
-   * @brief Bulkload specified kay/payload pairs with a single thread.
+   * @brief Bulkload specified key/payload pairs with a single thread.
    *
    * @tparam Entry A container of a key/payload pair.
    * @param iter The begin position of target records.
@@ -1347,27 +1434,47 @@ class BTree
     const auto& iter_end = std::next(iter, n);
     for (NodeHeader* prev_node = nullptr; iter < iter_end;) {
       const auto& [key, key_len] = ParseKey(*iter);
-      LeafNode* leaf{};
-      InnerNode* inner{};
-      NodeHeader* node{};
-      if (level == 0) {
-        node = leaf = new (AllocPage()) LeafNode{page_size_, align_val_};
-      } else {
-        node = inner = new (AllocPage()) InnerNode{page_size_, align_val_, level};
-      }
+      auto* const node = new (AllocPage()) NodeHeader{page_size_, align_val_, level};
       nodes.emplace_back(key, node, key_len);
       if (prev_node) {
         prev_node->LinkSiblingNode(node, key, key_len);
       }
 
-      if (leaf) {
-        leaf->Bulkload(iter, iter_end);
+      if (level == 0) {
+        static_cast<LeafNode*>(node)->Bulkload(iter, iter_end);
       } else {
-        inner->Bulkload(iter, iter_end);
+        static_cast<InnerNode*>(node)->Bulkload(iter, iter_end);
       }
       prev_node = node;
     }
     return nodes;
+  }
+
+  /**
+   * @brief Verify that each node can store records of the maximum size.
+   *
+   * @throw std::runtime_error if the page size is not a power of two in [512,
+   * 65536] or too small for the maximum record size.
+   * @note The maximum record size must be at most a third of the usable space
+   * in a node, which guarantees that a split leaves at least one record in
+   * each node.
+   */
+  void
+  VerifyPageSize() const
+  {
+    constexpr uint32_t kMaxKeySize = component::MaxKeySize<Key>();
+    constexpr uint32_t kMaxRecSize =  // a child pointer is the payload of inner nodes
+        kMaxKeySize + (kMaxPaySize > component::kPtrSize ? kMaxPaySize : component::kPtrSize)
+        + component::kMetaSize;
+    const uint32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
+                                    + (page_size_ - component::kHeaderSize) * 0.75
+                                    + kMaxRecSize * 0.5 + kMaxKeySize;  // NOLINTEND
+    if (max_split_size > page_size_ || kMaxRecSize > (page_size_ - component::kHeaderSize) / 3) {
+      throw std::runtime_error{"The page size is too small to store records."};
+    }
+    if (page_size_ < k512 || k64Ki < page_size_ || std::popcount(page_size_) > 1) {
+      throw std::runtime_error{"The page size must be 512, 1024, 2048, ..., or 65536."};
+    }
   }
 
   /*##########################################################################*
@@ -1381,22 +1488,6 @@ class BTree
   static_assert(  //
       IsTriviallyCopyable<Payload>(),
       "A payload type must be trivially copyable (i.e., copyable with std::memcpy).");
-
-  void
-  VerifyPageSize()
-  {
-    constexpr uint32_t kMaxKeySize = component::MaxSize<Key>();
-    const uint32_t max_split_size = component::kHeaderSize  // NOLINTBEGIN
-                                    + (page_size_ - component::kHeaderSize) * 0.75
-                                    + (kMaxKeySize + kPayLen + kWordSize) * 0.5
-                                    + kMaxKeySize;  // NOLINTEND
-    if (max_split_size > page_size_) {
-      throw std::runtime_error{"The page size is too small to store records."};
-    }
-    if (page_size_ < k512 || k64Ki < page_size_ || std::popcount(page_size_) > 1) {
-      throw std::runtime_error{"The page size must be 512, 1024, 2048, ..., or 65536."};
-    }
-  }
 
   /*##########################################################################*
    * Internal member variables
@@ -1412,7 +1503,7 @@ class BTree
   std::shared_ptr<GC> gc_{};
 
   /// @brief The root node of this tree.
-  std::atomic<NodeHeader*> root_{new (AllocPage()) LeafNode{page_size_, align_val_}};
+  std::atomic<NodeHeader*> root_{new (AllocPage()) NodeHeader{page_size_, align_val_, 0}};
 };
 
 }  // namespace dbgroup::index::b_tree

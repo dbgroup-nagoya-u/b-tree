@@ -30,7 +30,8 @@ sudo apt update && sudo apt install -y \
 - `B_TREE_DEFAULT_PAGE_SIZE`: A default page size in bytes (default `1024`).
 - `B_TREE_DEFAULT_GC_INTERVAL`: A default interval for GC in milliseconds (default `100`).
 - `B_TREE_DEFAULT_GC_THREADS`: The default number of GC threads (default `1`).
-- `B_TREE_MAX_VARLEN_DATA_SIZE`: The expected maximum size of a variable-length data (default `32`).
+- `B_TREE_MAX_VARLEN_KEY_SIZE`: The expected maximum size of a variable-length key (default `32`).
+- `B_TREE_MAX_VARLEN_PAYLOAD_SIZE`: The expected maximum size of a variable-length payload (default `32`).
 
 #### Build Options for Unit Testing
 
