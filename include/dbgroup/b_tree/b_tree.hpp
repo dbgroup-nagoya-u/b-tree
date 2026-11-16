@@ -31,7 +31,7 @@
 #include <utility>
 #include <vector>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/mcs_lock.hpp>
@@ -128,15 +128,15 @@ class BTree
    * @brief Construct a new tree.
    *
    * @param page_size The page size for each node.
-   * @param gc_interval_micro GC internal [us] (default: 10ms).
-   * @param gc_thread_num the number of GC threads (default: 1).
+   * @param gc_interval_ms The interval of garbage collection in milliseconds.
+   * @param gc_thread_num The number of worker threads for garbage collection.
    */
   explicit BTree(  //
       const size_t page_size = kDefaultPageSize,
-      const size_t gc_interval_micro = kDefaultGCTime,
+      const size_t gc_interval_ms = kDefaultGCTime,
       const size_t gc_thread_num = kDefaultGCThreadNum)
       : page_size_{static_cast<uint32_t>(page_size)}
-      , gc_{std::make_shared<GC>(gc_interval_micro, gc_thread_num)}
+      , gc_{std::make_shared<GC>(gc_interval_ms, gc_thread_num)}
   {
     VerifyPageSize();
   }
@@ -428,7 +428,7 @@ class BTree
   }
 
   /**
-   * @brief Update a record using a given kay/payload pair.
+   * @brief Update a record using a given key/payload pair.
    *
    * @tparam T A delta-payload class (`Payload` or `Delta`).
    * @param[in] key A target key.
@@ -483,7 +483,7 @@ class BTree
   }
 
   /**
-   * @brief Delete a record using a given kay.
+   * @brief Delete a record using a given key.
    *
    * @param[in] key A target key.
    * @param[in] key_len The length of a target key.
@@ -529,9 +529,9 @@ class BTree
    *##########################################################################*/
 
   /**
-   * @brief Bulkload specified kay/payload pairs.
+   * @brief Bulkload specified key/payload pairs.
    *
-   * @tparam Entry A container for a key/payload pair.
+   * @tparam Entry A container of a key/payload pair.
    * @param entries All entries for bulkload.
    * @param thread_num The number of threads used for bulkload.
    * @note This function must be called for an empty tree without any concurrent
@@ -668,8 +668,8 @@ class BTree
      * @param index A source index structure.
      * @param node The current scanning node.
      * @param begin_pos The begin position for scanning.
-     * @param end_key  The end key given from a user.
-     * @param gc_grd  The guard instance for preventing GC from reclaiming nodes.
+     * @param end_key The end key given from a user.
+     * @param gc_grd The guard instance for preventing GC from reclaiming nodes.
      * @param stack A stack of traversed nodes.
      */
     Iterator(  //
@@ -935,7 +935,7 @@ class BTree
     GCGuard gc_grd_{};
 
     /// @brief A stack of traversed nodes.
-    /// @note This filed is only used for backward scan.
+    /// @note This field is only used for backward scan.
     std::vector<std::tuple<NodeHeader*, int32_t, OptGuard>> stack_{};
   };
 
@@ -1277,7 +1277,7 @@ class BTree
    *
    * @param stack A stack of traversed nodes.
    * @param l_child A split-left node.
-   * @param l_grd The guard instance of a split-left node.
+   * @param l_grd The SIX guard instance of a split-left node.
    */
   void
   Split(  //
@@ -1329,9 +1329,9 @@ class BTree
   /**
    * @brief Try to remove a down link and merge a given node.
    *
-   * @param stack A stack of traversed nodes.
-   * @param l_child A left child (to be merged) node.
-   * @param l_grd The SIX guard instance of a given child node.
+   * @param[in,out] stack A stack of traversed nodes.
+   * @param[in] l_child A left child (to be merged) node.
+   * @param[in] l_grd The SIX guard instance of a given child node.
    */
   void
   TryMerge(  //
@@ -1387,7 +1387,7 @@ class BTree
    *##########################################################################*/
 
   /**
-   * @brief Bulkload specified kay/payload pairs with a single thread.
+   * @brief Bulkload specified key/payload pairs with a single thread.
    *
    * @tparam Entry A container of a key/payload pair.
    * @param iter The begin position of target records.

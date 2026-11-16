@@ -20,7 +20,7 @@
 // C++ standard libraries
 #include <functional>
 
-// external libraries
+// our libraries
 #include <dbgroup/index/fix_len_wrapper.hpp>
 #include <dbgroup/lock/optimistic_lock.hpp>
 #include <dbgroup/lock/utility.hpp>

@@ -21,7 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 
 // local sources
@@ -45,7 +45,7 @@ struct Metadata {
   constexpr Metadata() noexcept = default;
 
   /**
-   * @brief Construct a new insert/update-delta metadata object.
+   * @brief Construct a new metadata object.
    *
    * @param offset The offset of a record position.
    * @param key_len The length of a key.
@@ -62,7 +62,7 @@ struct Metadata {
   }
 
   /**
-   * @brief Construct a new insert/update-delta metadata object.
+   * @brief Construct a new metadata object with a deleted flag.
    *
    * @param deleted A flag for indicating whether a record is deleted.
    * @param offset The offset of a record position.

@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <cstring>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/memory/utility.hpp>

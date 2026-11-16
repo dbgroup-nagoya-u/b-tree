@@ -30,7 +30,7 @@
 #include <type_traits>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
@@ -70,7 +70,9 @@ class NodeHeader
    * Type aliases
    *##########################################################################*/
 
+  /// @brief A type for allocating variable-length data.
   using KeyWOPtr = std::remove_pointer_t<Key>;
+
   using SIXGuard = typename Lock::SIXGuard;
   using XGuard = typename Lock::XGuard;
 
@@ -103,8 +105,14 @@ class NodeHeader
   /**
    * @brief Construct split nodes.
    *
-   * @param[in,out] l_node A left (source) node.
+   * @param[in] l_node A left (source) node.
+   * @param[in,out] l_grd The SIX-lock guard of the left node, which is released
+   * after splitting.
+   * @param[out] key A separator key between the split nodes.
+   * @param[out] key_len The length of the separator key.
    * @note This is a split right node.
+   * @note The left node is X-locked only while the split-left records are
+   * copied back to it.
    */
   explicit NodeHeader(  //
       NodeHeader* l_node,
@@ -314,9 +322,11 @@ class NodeHeader
   /**
    * @brief Merge a given node into this node.
    *
-   * @param six_grd The SIX-lock guard of this node.
-   * @param r_node A right-merged (to be removed) node.
-   * @param r_grd The SIX-lock guard of a right node.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after merging.
+   * @param[in] r_node A right-merged (to be removed) node.
+   * @param[in,out] r_grd The SIX-lock guard of a right node, which is released
+   * after merging.
    * @note A given node must be in the same level as this node.
    */
   void
@@ -350,8 +360,9 @@ class NodeHeader
   /**
    * @brief Set a remove flag to this node.
    *
-   * @param six_grd The SIX-lock guard of this node.
-   * @param next A side link for traversing to the next target node.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after setting the flag.
+   * @param[in] next A side link for traversing to the next target node.
    */
   void
   Remove(  //
@@ -557,6 +568,7 @@ class NodeHeader
    * @param[in] begin_pos The begin position of the search space.
    * @retval true if the found record has been deleted.
    * @retval false otherwise.
+   * @note A given position must be in [`begin_pos`, `rec_num_`).
    */
   auto
   LinearSearchImpl(  //
@@ -654,7 +666,9 @@ class NodeHeader
   /**
    * @brief Clean up this node if its free space is fragmented.
    *
-   * @param total_len The length of a new record including its metadata.
+   * @param[in] total_len The length of a new record including its metadata.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is
+   * temporarily upgraded to an X lock if this node is cleaned up.
    * @retval true if this node has been cleaned up.
    * @retval false otherwise.
    * @note The positions of records are changed if this node includes deleted
@@ -672,13 +686,15 @@ class NodeHeader
   }
 
   /**
-   * @brief Insert a given kay/payload pair into a given position.
+   * @brief Insert a given key/payload pair into a given position.
    *
-   * @param pos A position where a new record is inserted.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] key A target key to be written.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * after inserting.
    * @note This node must have enough contiguous free space.
    */
   void
@@ -721,9 +737,9 @@ class NodeHeader
    * @brief Bulkload records into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
-   * @param max_usage The maximum usage of this node.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
+   * @param[in] max_usage The maximum usage of this node.
    */
   template <class BulkIter>
   void
@@ -749,7 +765,7 @@ class NodeHeader
   }
 
   /**
-   * @return A temporary node
+   * @return A temporary node.
    */
   [[nodiscard]]
   auto
@@ -773,6 +789,8 @@ class NodeHeader
   /**
    * @brief Clean up this node.
    *
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is
+   * temporarily upgraded to an X lock while copying back records.
    */
   void
   CleanUp(  //
@@ -795,8 +813,9 @@ class NodeHeader
   }
 
   /**
-   * @brief Copy records and their relevant data from a TL temporary node.
+   * @brief Copy records and their relevant data from a temporary node.
    *
+   * @param[in] src A temporary node.
    */
   void
   CopyFrom(  //

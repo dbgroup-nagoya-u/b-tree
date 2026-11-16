@@ -25,7 +25,7 @@
 #include <cstring>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/constants.hpp>
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
@@ -174,6 +174,7 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
    * @param[out] found true if a target record is found.
    * @retval true if the found record has been deleted.
    * @retval false otherwise.
+   * @note The first record is skipped as in `SearchRecord`.
    */
   auto
   LinearSearch(  //
@@ -218,12 +219,14 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Insert a given down link.
    *
-   * @param pos A position where a new record is inserted.
-   * @param key A separator key to be written.
-   * @param key_len The length of a separator key.
-   * @param child A child node to be written.
-   * @retval true if a record is written.
-   * @retval false if this node should be split before inserting a record.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] key A separator key to be written.
+   * @param[in] key_len The length of a separator key.
+   * @param[in] child A child node to be written.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a record is written and retained if this node should be split before
+   * inserting a record.
+   * @note This node is not modified if `six_grd` is retained.
    */
   void
   InsertChild(  //
@@ -244,10 +247,10 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Delete a down link physically using a given position.
    *
-   * @param pos A position where a target record is.
-   * @retval 1st: The deleted child node.
-   * @retval 2nd: true if this node should be merged.
-   * @retval 2nd: false otherwise.
+   * @param[in] pos A position where a target record is.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is retained if
+   * this node should be merged and released otherwise.
+   * @return The deleted child node.
    */
   auto
   DeleteChild(  //
@@ -279,8 +282,8 @@ class InnerNode : public NodeHeader<Key, Comp, Lock>
    * @brief Bulkload down links into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
    */
   template <class BulkIter>
   void

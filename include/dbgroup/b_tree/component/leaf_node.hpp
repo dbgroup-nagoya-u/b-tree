@@ -27,7 +27,7 @@
 #include <tuple>
 #include <utility>
 
-// external libraries
+// our libraries
 #include <dbgroup/index/utility.hpp>
 #include <dbgroup/lock/utility.hpp>
 #include <dbgroup/memory/utility.hpp>
@@ -218,7 +218,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Copy the payload of a given position if requested.
    *
-   * @tparam Buf A payload buffer class (i.e., `BTreeVarLen::PayloadBuf`).
+   * @tparam Buf A payload buffer class (i.e., `BTree::PayloadBuf`).
    * @param[in] pos A target record position.
    * @param[out] out A buffer for storing a payload (ignored if nullptr).
    */
@@ -312,17 +312,18 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *##########################################################################*/
 
   /**
-   * @brief Insert a given kay/payload pair.
+   * @brief Insert a given key/payload pair.
    *
-   * @param pos A position where a new record is inserted.
-   * @param found A flag for indicating the same (deleted) key is found.
-   * @param key A target key to be written.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
-   * @retval true if a record is written.
-   * @retval false if this node should be split before inserting a record.
-   * @note This node is not modified if this function returns false.
+   * @param[in] pos A position where a new record is inserted.
+   * @param[in] found A flag for indicating the same (deleted) key is found.
+   * @param[in] key A target key to be written.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a record is written and retained if this node should be split before
+   * inserting a record.
+   * @note This node is not modified if `six_grd` is retained.
    */
   void
   Insert(  //
@@ -356,7 +357,7 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    *
    * @tparam Payload A payload class.
    * @tparam T A class of a given payload or delta.
-   * @tparam Buf A payload buffer class (i.e., `BTreeVarLen::PayloadBuf`).
+   * @tparam Buf A payload buffer class (i.e., `BTree::PayloadBuf`).
    * @param[in] pos A position where a target record is.
    * @param[in] key A target key.
    * @param[in] key_len The length of a target key.
@@ -364,9 +365,10 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @param[in] pay_len The length of a target payload or delta.
    * @param[out] old A buffer for storing a previous payload (ignored if nullptr).
    * @param[in] merger A function for merging payloads.
-   * @retval true if the payload is updated.
-   * @retval false if this node should be split before updating.
-   * @note This node is not modified if this function returns false.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if the payload is updated and retained if this node should be split before
+   * updating.
+   * @note This node is not modified if `six_grd` is retained.
    */
   template <class Payload, class T, class Buf>
   void
@@ -420,9 +422,9 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Delete a record logically using a given position.
    *
-   * @param pos A position where a target record is.
-   * @retval true if this node should be merged.
-   * @retval false otherwise.
+   * @param[in] pos A position where a target record is.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is retained if
+   * this node should be merged and released otherwise.
    */
   void
   Delete(  //
@@ -447,8 +449,8 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
    * @brief Bulkload records into this node.
    *
    * @tparam BulkIter An iterator class of entries.
-   * @param iter The begin position of target records.
-   * @param iter_end The end position of target records.
+   * @param[in,out] iter The begin position of target records.
+   * @param[in] iter_end The end position of target records.
    */
   template <class BulkIter>
   void
@@ -467,14 +469,15 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Replace a payload with another one that may have a different length.
    *
-   * @param pos A position where a target record is.
-   * @param key A target key.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
-   * @retval true if the payload is replaced.
-   * @retval false if this node should be split before replacing.
-   * @note This node is not modified if this function returns false.
+   * @param[in] pos A position where a target record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if the payload is replaced and retained if this node should be split before
+   * replacing.
+   * @note This node is not modified if `six_grd` is retained.
    */
   void
   Replace(  //
@@ -503,13 +506,16 @@ class LeafNode : public NodeHeader<Key, Comp, Lock>
   /**
    * @brief Reuse a deleted record for writing a given payload.
    *
-   * @param pos A position where a deleted record is.
-   * @param key A target key.
-   * @param key_len The length of a target key.
-   * @param payload A target payload to be written.
-   * @param pay_len The length of a target payload.
+   * @param[in] pos A position where a deleted record is.
+   * @param[in] key A target key.
+   * @param[in] key_len The length of a target key.
+   * @param[in] payload A target payload to be written.
+   * @param[in] pay_len The length of a target payload.
+   * @param[in,out] six_grd The SIX-lock guard of this node, which is released
+   * if a payload is written.
    * @retval true if a payload is written.
    * @retval false if this node does not have enough contiguous space.
+   * @note This node is not modified if this function returns false.
    */
   auto
   ReuseRecord(  //
