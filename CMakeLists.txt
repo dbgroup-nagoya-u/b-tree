@@ -8,7 +8,7 @@ endif()
 # project information
 project(
   b_tree
-  VERSION "0.2.0"
+  VERSION "0.3.0"
   DESCRIPTION "An open-source B+tree library."
   LANGUAGES "CXX"
 )
